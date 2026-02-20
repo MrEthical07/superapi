@@ -1,0 +1,22 @@
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - revive
+    - gosec
+    - bodyclose
+    - unparam
+    - unused
+
+issues:
+  exclude-use-default: false
+
+linters-settings:
+  gosec:
+    severity: medium
+    confidence: medium

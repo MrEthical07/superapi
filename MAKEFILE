@@ -1,0 +1,18 @@
+GO ?= go
+
+.PHONY: fmt vet test tidy run
+
+fmt:
+	$(GO) fmt ./...
+
+vet:
+	$(GO) vet ./...
+
+test:
+	$(GO) test ./... -race
+
+tidy:
+	$(GO) mod tidy
+
+run:
+	$(GO) run .
