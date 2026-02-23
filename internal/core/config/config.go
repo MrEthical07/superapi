@@ -12,6 +12,15 @@ type Config struct {
 	Env         string
 	ServiceName string
 	HTTP        HTTPConfig
+	Log         LogConfig
+}
+
+// LogConfig holds structured logging configuration.
+type LogConfig struct {
+	// Level is the minimum log level: debug, info, warn, error, fatal.
+	Level string
+	// Format is the output format: "json" (default) or "text" (dev console).
+	Format string
 }
 
 type HTTPConfig struct {
@@ -36,6 +45,10 @@ func Load() (*Config, error) {
 			IdleTimeout:       getDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
 			ShutdownTimeout:   getDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
 			MaxHeaderBytes:    getInt("HTTP_MAX_HEADER_BYTES", 1<<20), // 1 MiB
+		},
+		Log: LogConfig{
+			Level:  getenv("LOG_LEVEL", "info"),
+			Format: getenv("LOG_FORMAT", "json"),
 		},
 	}
 
@@ -64,6 +77,21 @@ func (c *Config) Lint() error {
 	if c.HTTP.MaxHeaderBytes < 4096 {
 		return fmt.Errorf("http max header bytes too low: %d", c.HTTP.MaxHeaderBytes)
 	}
+
+	switch c.Log.Level {
+	case "debug", "info", "warn", "warning", "error", "fatal", "":
+		// valid
+	default:
+		return fmt.Errorf("invalid log level: %q (valid: debug, info, warn, error, fatal)", c.Log.Level)
+	}
+
+	switch c.Log.Format {
+	case "json", "text", "":
+		// valid
+	default:
+		return fmt.Errorf("invalid log format: %q (valid: json, text)", c.Log.Format)
+	}
+
 	return nil
 }
 

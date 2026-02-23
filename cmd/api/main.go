@@ -8,6 +8,7 @@ import (
 
 	"github.com/MrEthical07/superapi/internal/core/app"
 	"github.com/MrEthical07/superapi/internal/core/config"
+	"github.com/MrEthical07/superapi/internal/core/logx"
 	"github.com/MrEthical07/superapi/internal/modules"
 )
 
@@ -21,15 +22,23 @@ func main() {
 		log.Fatalf("config lint failed: %v", err)
 	}
 
-	a, err := app.New(cfg, modules.All())
+	logger, err := logx.New(logx.Config{
+		Level:  cfg.Log.Level,
+		Format: cfg.Log.Format,
+	})
 	if err != nil {
-		log.Fatalf("app init failed: %v", err)
+		log.Fatalf("logger init failed: %v", err)
+	}
+
+	a, err := app.New(cfg, logger, modules.All())
+	if err != nil {
+		logger.Fatal().Err(err).Msg("app init failed")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if err := a.Run(ctx); err != nil {
-		log.Fatalf("app run failed: %v", err)
+		logger.Fatal().Err(err).Msg("app run failed")
 	}
 }

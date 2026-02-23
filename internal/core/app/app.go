@@ -3,12 +3,12 @@ package app
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
+	"github.com/MrEthical07/superapi/internal/core/logx"
 )
 
 type Module interface {
@@ -18,21 +18,25 @@ type Module interface {
 
 type App struct {
 	cfg     *config.Config
+	log     *logx.Logger
 	server  *http.Server
 	modules []Module
 	router  *httpx.Mux
 }
 
-func New(cfg *config.Config, modules []Module) (*App, error) {
+func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	if cfg == nil {
 		return nil, errors.New("nil config")
+	}
+	if log == nil {
+		return nil, errors.New("nil logger")
 	}
 
 	router := httpx.NewMux()
 
 	// Global middleware chain: keep this minimal and production-safe.
 	var handler http.Handler = router
-	handler = httpx.Recoverer(handler)
+	handler = httpx.Recoverer(log)(handler)
 	handler = httpx.RequestID(handler)
 
 	srv := &http.Server{
@@ -47,6 +51,7 @@ func New(cfg *config.Config, modules []Module) (*App, error) {
 
 	a := &App{
 		cfg:     cfg,
+		log:     log,
 		server:  srv,
 		modules: modules,
 		router:  router,
@@ -68,7 +73,11 @@ func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 
 	go func() {
-		log.Printf("starting http server addr=%s service=%s env=%s", a.cfg.HTTP.Addr, a.cfg.ServiceName, a.cfg.Env)
+		a.log.Info().
+			Str("addr", a.cfg.HTTP.Addr).
+			Str("service", a.cfg.ServiceName).
+			Str("env", a.cfg.Env).
+			Msg("starting http server")
 		err := a.server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
@@ -82,10 +91,12 @@ func (a *App) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.HTTP.ShutdownTimeout)
 		defer cancel()
 
-		log.Printf("shutdown initiated")
+		a.log.Info().Msg("shutdown initiated")
 		if err := a.server.Shutdown(shutdownCtx); err != nil {
+			a.log.Error().Err(err).Msg("shutdown error")
 			return err
 		}
+		a.log.Info().Msg("shutdown complete")
 		// Give server goroutine a chance to exit cleanly.
 		select {
 		case err := <-errCh:
