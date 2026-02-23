@@ -31,6 +31,15 @@ type HTTPConfig struct {
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
 	MaxHeaderBytes    int
+	Middleware        HTTPMiddlewareConfig
+}
+
+type HTTPMiddlewareConfig struct {
+	RequestIDEnabled       bool
+	RecovererEnabled       bool
+	MaxBodyBytes           int64
+	SecurityHeadersEnabled bool
+	RequestTimeout         time.Duration
 }
 
 func Load() (*Config, error) {
@@ -45,6 +54,13 @@ func Load() (*Config, error) {
 			IdleTimeout:       getDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
 			ShutdownTimeout:   getDuration("HTTP_SHUTDOWN_TIMEOUT", 10*time.Second),
 			MaxHeaderBytes:    getInt("HTTP_MAX_HEADER_BYTES", 1<<20), // 1 MiB
+			Middleware: HTTPMiddlewareConfig{
+				RequestIDEnabled:       getBool("HTTP_MIDDLEWARE_REQUEST_ID_ENABLED", true),
+				RecovererEnabled:       getBool("HTTP_MIDDLEWARE_RECOVERER_ENABLED", true),
+				MaxBodyBytes:           getInt64("HTTP_MIDDLEWARE_MAX_BODY_BYTES", 0),
+				SecurityHeadersEnabled: getBool("HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED", false),
+				RequestTimeout:         getDuration("HTTP_MIDDLEWARE_REQUEST_TIMEOUT", 0),
+			},
 		},
 		Log: LogConfig{
 			Level:  getenv("LOG_LEVEL", "info"),
@@ -76,6 +92,42 @@ func (c *Config) Lint() error {
 	}
 	if c.HTTP.MaxHeaderBytes < 4096 {
 		return fmt.Errorf("http max header bytes too low: %d", c.HTTP.MaxHeaderBytes)
+	}
+	if c.HTTP.Middleware.MaxBodyBytes < 0 {
+		return fmt.Errorf("http middleware max body bytes must be >= 0")
+	}
+	if c.HTTP.Middleware.RequestTimeout < 0 {
+		return fmt.Errorf("http middleware request timeout must be >= 0")
+	}
+
+	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_REQUEST_ID_ENABLED"); ok {
+		if _, err := strconv.ParseBool(v); err != nil {
+			return fmt.Errorf("invalid HTTP_MIDDLEWARE_REQUEST_ID_ENABLED: %q", v)
+		}
+	}
+	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_RECOVERER_ENABLED"); ok {
+		if _, err := strconv.ParseBool(v); err != nil {
+			return fmt.Errorf("invalid HTTP_MIDDLEWARE_RECOVERER_ENABLED: %q", v)
+		}
+	}
+	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED"); ok {
+		if _, err := strconv.ParseBool(v); err != nil {
+			return fmt.Errorf("invalid HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED: %q", v)
+		}
+	}
+	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_MAX_BODY_BYTES"); ok {
+		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+			return fmt.Errorf("invalid HTTP_MIDDLEWARE_MAX_BODY_BYTES: %q", v)
+		}
+	}
+	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_REQUEST_TIMEOUT"); ok {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid HTTP_MIDDLEWARE_REQUEST_TIMEOUT: %q", v)
+		}
+		if d < 0 {
+			return fmt.Errorf("http middleware request timeout must be >= 0")
+		}
 	}
 
 	switch c.Log.Level {
@@ -113,6 +165,30 @@ func getInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func getInt64(key string, fallback int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func getBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
+	}
+	return b
 }
 
 func getDuration(key string, fallback time.Duration) time.Duration {
