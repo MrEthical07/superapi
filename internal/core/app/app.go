@@ -34,10 +34,7 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 
 	router := httpx.NewMux()
 
-	// Global middleware chain: keep this minimal and production-safe.
-	var handler http.Handler = router
-	handler = httpx.Recoverer(log)(handler)
-	handler = httpx.RequestID(handler)
+	var handler http.Handler = httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTP.Addr,
