@@ -24,3 +24,15 @@ Global (server-level) middleware is configured via environment variables:
 Notes:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` must be `>= 0`.
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be a valid duration and `>= 0`.
+
+## Typed endpoint example
+
+The API includes `POST /system/parse-duration` using the typed JSON adapter.
+
+Example:
+
+```bash
+curl -i -X POST http://localhost:8080/system/parse-duration \
+	-H "Content-Type: application/json" \
+	-d '{"duration":"1500ms"}'
+```
