@@ -1,5 +1,3 @@
-Nice checkpoint. You’ve already built a **serious foundation**.
-
 ## What’s done so far
 
 * Bootstrap + repo hygiene
@@ -64,9 +62,9 @@ Here’s the sequence I’d recommend **before** policy system:
 
 ## Phase A — Finish data layer baseline
 
-1. **Task 06:** migrations + sqlc baseline ✅ (next)
-2. **Task 07:** transaction helper + module data access conventions
-3. **Task 08:** migration runner command (`cmd/migrate`) + Makefile/script targets hardening
+1. **Task 06:** migrations + sqlc baseline ✅ (next) --> DONE
+2. **Task 07:** transaction helper + module data access conventions --> DONE
+3. **Task 08:** migration runner command (`cmd/migrate`) + Makefile/script targets hardening --> DONE
 
 ## Phase B — Build one real module end-to-end
 
@@ -153,32 +151,3 @@ This becomes your **reference implementation** for future modules.
 * [ ] benchmark tests for hot path (router + adapter + middleware chain)
 
 ---
-
-# If your goal is “usable template ASAP”
-
-Then the **minimum viable production template** before policy system is:
-
-1. ✅ Current foundation
-2. **Task 06** migrations + sqlc
-3. tx helper + migration runner
-4. one real module (`users` or `tenants`)
-5. metrics + request logging
-
-After that, you can already build SaaS APIs quickly.
-
----
-
-# If your goal is “template differentiated by security”
-
-Then after the above, go straight into:
-
-* policy engine
-* auth + RBAC
-* rate limiting
-* cache policy
-
-That’s where your `goAuth` philosophy will really shine.
-
----
-
-If you want, I can also give you a **full roadmap as task IDs (Task 06–Task 20)** in the same agent-friendly style (just titles + order, no full prompts yet), so you can track progress like a project plan.

@@ -12,6 +12,7 @@ const (
 	CodeUnauthorized      Code = "unauthorized"
 	CodeForbidden         Code = "forbidden"
 	CodeTooManyRequests   Code = "too_many_requests"
+	CodeConflict          Code = "conflict"
 	CodeDependencyFailure Code = "dependency_unavailable"
 )
 

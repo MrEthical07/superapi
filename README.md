@@ -137,3 +137,13 @@ Integration point:
 Operational note:
 
 - Migrations are intentionally not auto-run during API startup; apply them explicitly in deploy workflows.
+
+## Tenants reference module
+
+The first DB-backed reference module is available at:
+
+- `POST /api/v1/tenants`
+- `GET /api/v1/tenants/{id}`
+- `GET /api/v1/tenants?limit=50`
+
+It demonstrates the module pattern with typed handlers, service/repo separation, sqlc queries, and transactional create flow.

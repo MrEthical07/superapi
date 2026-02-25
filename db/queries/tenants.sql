@@ -1,0 +1,15 @@
+-- name: CreateTenant :one
+INSERT INTO tenants (id, slug, name, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, slug, name, status, created_at, updated_at;
+
+-- name: GetTenantByID :one
+SELECT id, slug, name, status, created_at, updated_at
+FROM tenants
+WHERE id = $1;
+
+-- name: ListTenants :many
+SELECT id, slug, name, status, created_at, updated_at
+FROM tenants
+ORDER BY created_at ASC, id ASC
+LIMIT $1;

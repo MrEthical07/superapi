@@ -13,3 +13,12 @@ type SystemSetting struct {
 	Value     []byte             `json:"value"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
+
+type Tenant struct {
+	ID        string             `json:"id"`
+	Slug      string             `json:"slug"`
+	Name      string             `json:"name"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
