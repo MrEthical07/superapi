@@ -13,6 +13,8 @@ type Config struct {
 	ServiceName string
 	HTTP        HTTPConfig
 	Log         LogConfig
+	Postgres    PostgresConfig
+	Redis       RedisConfig
 }
 
 // LogConfig holds structured logging configuration.
@@ -42,6 +44,31 @@ type HTTPMiddlewareConfig struct {
 	RequestTimeout         time.Duration
 }
 
+type PostgresConfig struct {
+	Enabled            bool
+	URL                string
+	MaxConns           int32
+	MinConns           int32
+	ConnMaxLifetime    time.Duration
+	ConnMaxIdleTime    time.Duration
+	StartupPingTimeout time.Duration
+	HealthCheckTimeout time.Duration
+}
+
+type RedisConfig struct {
+	Enabled            bool
+	Addr               string
+	Password           string
+	DB                 int
+	DialTimeout        time.Duration
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	PoolSize           int
+	MinIdleConns       int
+	StartupPingTimeout time.Duration
+	HealthCheckTimeout time.Duration
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		Env:         getenv("APP_ENV", "dev"),
@@ -65,6 +92,29 @@ func Load() (*Config, error) {
 		Log: LogConfig{
 			Level:  getenv("LOG_LEVEL", "info"),
 			Format: getenv("LOG_FORMAT", "json"),
+		},
+		Postgres: PostgresConfig{
+			Enabled:            getBool("POSTGRES_ENABLED", false),
+			URL:                getenv("POSTGRES_URL", ""),
+			MaxConns:           int32(getInt("POSTGRES_MAX_CONNS", 10)),
+			MinConns:           int32(getInt("POSTGRES_MIN_CONNS", 0)),
+			ConnMaxLifetime:    getDuration("POSTGRES_CONN_MAX_LIFETIME", 30*time.Minute),
+			ConnMaxIdleTime:    getDuration("POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
+			StartupPingTimeout: getDuration("POSTGRES_STARTUP_PING_TIMEOUT", 3*time.Second),
+			HealthCheckTimeout: getDuration("POSTGRES_HEALTH_CHECK_TIMEOUT", 1*time.Second),
+		},
+		Redis: RedisConfig{
+			Enabled:            getBool("REDIS_ENABLED", false),
+			Addr:               getenv("REDIS_ADDR", "127.0.0.1:6379"),
+			Password:           getenv("REDIS_PASSWORD", ""),
+			DB:                 getInt("REDIS_DB", 0),
+			DialTimeout:        getDuration("REDIS_DIAL_TIMEOUT", 2*time.Second),
+			ReadTimeout:        getDuration("REDIS_READ_TIMEOUT", 2*time.Second),
+			WriteTimeout:       getDuration("REDIS_WRITE_TIMEOUT", 2*time.Second),
+			PoolSize:           getInt("REDIS_POOL_SIZE", 10),
+			MinIdleConns:       getInt("REDIS_MIN_IDLE_CONNS", 0),
+			StartupPingTimeout: getDuration("REDIS_STARTUP_PING_TIMEOUT", 3*time.Second),
+			HealthCheckTimeout: getDuration("REDIS_HEALTH_CHECK_TIMEOUT", 1*time.Second),
 		},
 	}
 
@@ -100,6 +150,62 @@ func (c *Config) Lint() error {
 		return fmt.Errorf("http middleware request timeout must be >= 0")
 	}
 
+	if c.Postgres.Enabled && c.Postgres.URL == "" {
+		return fmt.Errorf("postgres url cannot be empty when enabled")
+	}
+	if c.Postgres.MaxConns <= 0 {
+		return fmt.Errorf("postgres max conns must be > 0")
+	}
+	if c.Postgres.MinConns < 0 {
+		return fmt.Errorf("postgres min conns must be >= 0")
+	}
+	if c.Postgres.MinConns > c.Postgres.MaxConns {
+		return fmt.Errorf("postgres min conns cannot exceed max conns")
+	}
+	if c.Postgres.ConnMaxLifetime < 0 {
+		return fmt.Errorf("postgres conn max lifetime must be >= 0")
+	}
+	if c.Postgres.ConnMaxIdleTime < 0 {
+		return fmt.Errorf("postgres conn max idle time must be >= 0")
+	}
+	if c.Postgres.StartupPingTimeout <= 0 {
+		return fmt.Errorf("postgres startup ping timeout must be > 0")
+	}
+	if c.Postgres.HealthCheckTimeout <= 0 {
+		return fmt.Errorf("postgres health check timeout must be > 0")
+	}
+
+	if c.Redis.Enabled && c.Redis.Addr == "" {
+		return fmt.Errorf("redis addr cannot be empty when enabled")
+	}
+	if c.Redis.DB < 0 {
+		return fmt.Errorf("redis db must be >= 0")
+	}
+	if c.Redis.PoolSize <= 0 {
+		return fmt.Errorf("redis pool size must be > 0")
+	}
+	if c.Redis.MinIdleConns < 0 {
+		return fmt.Errorf("redis min idle conns must be >= 0")
+	}
+	if c.Redis.MinIdleConns > c.Redis.PoolSize {
+		return fmt.Errorf("redis min idle conns cannot exceed pool size")
+	}
+	if c.Redis.DialTimeout <= 0 {
+		return fmt.Errorf("redis dial timeout must be > 0")
+	}
+	if c.Redis.ReadTimeout <= 0 {
+		return fmt.Errorf("redis read timeout must be > 0")
+	}
+	if c.Redis.WriteTimeout <= 0 {
+		return fmt.Errorf("redis write timeout must be > 0")
+	}
+	if c.Redis.StartupPingTimeout <= 0 {
+		return fmt.Errorf("redis startup ping timeout must be > 0")
+	}
+	if c.Redis.HealthCheckTimeout <= 0 {
+		return fmt.Errorf("redis health check timeout must be > 0")
+	}
+
 	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_REQUEST_ID_ENABLED"); ok {
 		if _, err := strconv.ParseBool(v); err != nil {
 			return fmt.Errorf("invalid HTTP_MIDDLEWARE_REQUEST_ID_ENABLED: %q", v)
@@ -128,6 +234,56 @@ func (c *Config) Lint() error {
 		if d < 0 {
 			return fmt.Errorf("http middleware request timeout must be >= 0")
 		}
+	}
+
+	if err := lintBoolEnv("POSTGRES_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("POSTGRES_MAX_CONNS"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("POSTGRES_MIN_CONNS"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("POSTGRES_CONN_MAX_LIFETIME"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("POSTGRES_CONN_MAX_IDLE_TIME"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("POSTGRES_STARTUP_PING_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("POSTGRES_HEALTH_CHECK_TIMEOUT"); err != nil {
+		return err
+	}
+
+	if err := lintBoolEnv("REDIS_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("REDIS_DB"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("REDIS_POOL_SIZE"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("REDIS_MIN_IDLE_CONNS"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("REDIS_DIAL_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("REDIS_READ_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("REDIS_WRITE_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("REDIS_STARTUP_PING_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("REDIS_HEALTH_CHECK_TIMEOUT"); err != nil {
+		return err
 	}
 
 	switch c.Log.Level {
@@ -201,4 +357,37 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func lintBoolEnv(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := strconv.ParseBool(v); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func lintIntEnv(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := strconv.Atoi(v); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func lintDurationEnv(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := time.ParseDuration(v); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
 }

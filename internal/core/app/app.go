@@ -22,6 +22,7 @@ type App struct {
 	server  *http.Server
 	modules []Module
 	router  *httpx.Mux
+	deps    *Dependencies
 }
 
 func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
@@ -33,6 +34,10 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	}
 
 	router := httpx.NewMux()
+	deps, err := initDependencies(context.Background(), cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	var handler http.Handler = httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log)
 
@@ -52,13 +57,18 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 		server:  srv,
 		modules: modules,
 		router:  router,
+		deps:    deps,
 	}
 
 	for _, m := range modules {
 		if m == nil {
 			continue
 		}
+		if binder, ok := m.(DependencyBinder); ok {
+			binder.BindDependencies(a.deps)
+		}
 		if err := m.Register(a.router); err != nil {
+			a.closeDependencies()
 			return nil, err
 		}
 	}
@@ -67,6 +77,8 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 }
 
 func (a *App) Run(ctx context.Context) error {
+	defer a.closeDependencies()
+
 	errCh := make(chan error, 1)
 
 	go func() {

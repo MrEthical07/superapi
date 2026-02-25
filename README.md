@@ -36,3 +36,38 @@ curl -i -X POST http://localhost:8080/system/parse-duration \
 	-H "Content-Type: application/json" \
 	-d '{"duration":"1500ms"}'
 ```
+
+## Infrastructure wiring
+
+PostgreSQL and Redis wiring is available and disabled by default.
+
+PostgreSQL:
+
+- `POSTGRES_ENABLED` (default: `false`)
+- `POSTGRES_URL` (required when enabled)
+- `POSTGRES_MAX_CONNS` (default: `10`)
+- `POSTGRES_MIN_CONNS` (default: `0`)
+- `POSTGRES_CONN_MAX_LIFETIME` (default: `30m`)
+- `POSTGRES_CONN_MAX_IDLE_TIME` (default: `5m`)
+- `POSTGRES_STARTUP_PING_TIMEOUT` (default: `3s`)
+- `POSTGRES_HEALTH_CHECK_TIMEOUT` (default: `1s`)
+
+Redis:
+
+- `REDIS_ENABLED` (default: `false`)
+- `REDIS_ADDR` (required when enabled; default: `127.0.0.1:6379`)
+- `REDIS_PASSWORD` (optional)
+- `REDIS_DB` (default: `0`)
+- `REDIS_DIAL_TIMEOUT` (default: `2s`)
+- `REDIS_READ_TIMEOUT` (default: `2s`)
+- `REDIS_WRITE_TIMEOUT` (default: `2s`)
+- `REDIS_POOL_SIZE` (default: `10`)
+- `REDIS_MIN_IDLE_CONNS` (default: `0`)
+- `REDIS_STARTUP_PING_TIMEOUT` (default: `3s`)
+- `REDIS_HEALTH_CHECK_TIMEOUT` (default: `1s`)
+
+Readiness behavior:
+
+- Startup strategy is fail-fast for enabled dependencies.
+- `/healthz` is process aliveness only.
+- `/readyz` returns dependency statuses (`ok`, `disabled`, `error`) and `status` (`ready` or `not_ready`).
