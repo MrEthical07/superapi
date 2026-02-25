@@ -71,3 +71,54 @@ Readiness behavior:
 - Startup strategy is fail-fast for enabled dependencies.
 - `/healthz` is process aliveness only.
 - `/readyz` returns dependency statuses (`ok`, `disabled`, `error`) and `status` (`ready` or `not_ready`).
+
+## Database migrations and sqlc baseline
+
+The template uses:
+
+- Migrations: `golang-migrate`
+- Query generation: `sqlc` targeting `pgx/v5`
+
+Folder convention (global baseline):
+
+- `db/migrations/` versioned migration files
+- `db/schema/` canonical schema for sqlc
+- `db/queries/` SQL query definitions
+- `internal/core/db/sqlcgen/` generated sqlc package (DO NOT EDIT MANUALLY)
+
+sqlc workflow:
+
+```bash
+sqlc generate
+```
+
+Equivalent without preinstalled sqlc:
+
+```bash
+go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+```
+
+Migration workflow (`golang-migrate` CLI):
+
+```bash
+migrate create -ext sql -dir db/migrations -seq add_feature_table
+migrate -path db/migrations -database "$DB_URL" up
+migrate -path db/migrations -database "$DB_URL" down 1
+migrate -path db/migrations -database "$DB_URL" version
+```
+
+Make targets are also available:
+
+- `make sqlc-generate`
+- `make migrate-create NAME=add_feature_table`
+- `make migrate-up DB_URL=postgres://...`
+- `make migrate-down DB_URL=postgres://...`
+- `make migrate-version DB_URL=postgres://...`
+
+Integration point:
+
+- Use `internal/core/db.NewQueries(pool)` with `*pgxpool.Pool` (or tx-compatible DBTX).
+
+Operational note:
+
+- Migrations are intentionally not auto-run during API startup; apply them explicitly in deploy workflows.

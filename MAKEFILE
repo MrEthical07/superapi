@@ -1,6 +1,9 @@
 GO ?= go
+SQLC ?= sqlc
+MIGRATE ?= migrate
+DB_URL ?=
 
-.PHONY: fmt vet test tidy run
+.PHONY: fmt vet test tidy run sqlc-generate migrate-create migrate-up migrate-down migrate-version
 
 fmt:
 	$(GO) fmt ./...
@@ -16,3 +19,22 @@ tidy:
 
 run:
 	$(GO) run .
+
+sqlc-generate:
+	$(SQLC) generate
+
+migrate-create:
+	@if [ -z "$(NAME)" ]; then echo "NAME is required"; exit 1; fi
+	$(MIGRATE) create -ext sql -dir db/migrations -seq $(NAME)
+
+migrate-up:
+	@if [ -z "$(DB_URL)" ]; then echo "DB_URL is required"; exit 1; fi
+	$(MIGRATE) -path db/migrations -database "$(DB_URL)" up
+
+migrate-down:
+	@if [ -z "$(DB_URL)" ]; then echo "DB_URL is required"; exit 1; fi
+	$(MIGRATE) -path db/migrations -database "$(DB_URL)" down 1
+
+migrate-version:
+	@if [ -z "$(DB_URL)" ]; then echo "DB_URL is required"; exit 1; fi
+	$(MIGRATE) -path db/migrations -database "$(DB_URL)" version

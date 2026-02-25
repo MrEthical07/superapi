@@ -1,0 +1,18 @@
+-- name: UpsertSystemSetting :one
+INSERT INTO system_settings (key, value)
+VALUES ($1, $2)
+ON CONFLICT (key)
+DO UPDATE SET
+    value = EXCLUDED.value,
+    updated_at = NOW()
+RETURNING key, value, updated_at;
+
+-- name: GetSystemSetting :one
+SELECT key, value, updated_at
+FROM system_settings
+WHERE key = $1;
+
+-- name: ListSystemSettings :many
+SELECT key, value, updated_at
+FROM system_settings
+ORDER BY key ASC;
