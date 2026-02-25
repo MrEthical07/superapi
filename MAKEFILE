@@ -29,12 +29,12 @@ migrate-create:
 
 migrate-up:
 	@if [ -z "$(DB_URL)" ]; then echo "DB_URL is required"; exit 1; fi
-	$(MIGRATE) -path db/migrations -database "$(DB_URL)" up
+	POSTGRES_ENABLED=true POSTGRES_URL="$(DB_URL)" $(GO) run ./cmd/migrate up
 
 migrate-down:
 	@if [ -z "$(DB_URL)" ]; then echo "DB_URL is required"; exit 1; fi
-	$(MIGRATE) -path db/migrations -database "$(DB_URL)" down 1
+	POSTGRES_ENABLED=true POSTGRES_URL="$(DB_URL)" $(GO) run ./cmd/migrate down --steps=1
 
 migrate-version:
 	@if [ -z "$(DB_URL)" ]; then echo "DB_URL is required"; exit 1; fi
-	$(MIGRATE) -path db/migrations -database "$(DB_URL)" version
+	POSTGRES_ENABLED=true POSTGRES_URL="$(DB_URL)" $(GO) run ./cmd/migrate version

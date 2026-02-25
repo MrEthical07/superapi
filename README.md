@@ -102,10 +102,25 @@ Migration workflow (`golang-migrate` CLI):
 
 ```bash
 migrate create -ext sql -dir db/migrations -seq add_feature_table
-migrate -path db/migrations -database "$DB_URL" up
-migrate -path db/migrations -database "$DB_URL" down 1
-migrate -path db/migrations -database "$DB_URL" version
+POSTGRES_ENABLED=true POSTGRES_URL="$DB_URL" go run ./cmd/migrate up
+POSTGRES_ENABLED=true POSTGRES_URL="$DB_URL" go run ./cmd/migrate down --steps=1
+POSTGRES_ENABLED=true POSTGRES_URL="$DB_URL" go run ./cmd/migrate version
 ```
+
+`cmd/migrate` commands:
+
+```bash
+go run ./cmd/migrate --help
+go run ./cmd/migrate up
+go run ./cmd/migrate down --steps=1
+go run ./cmd/migrate version
+go run ./cmd/migrate force --version=1
+```
+
+Notes:
+- `POSTGRES_ENABLED=true` and `POSTGRES_URL` are required for `cmd/migrate`.
+- `down` defaults to one step and supports `--steps=N`.
+- "no change" outcomes are treated as successful operations.
 
 Make targets are also available:
 
