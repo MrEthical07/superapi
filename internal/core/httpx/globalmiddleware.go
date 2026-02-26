@@ -14,11 +14,14 @@ import (
 //  2. Recoverer (if enabled)
 //  3. SecurityHeaders (if enabled)
 //  4. MaxBodyBytes (if enabled)
+//  5. AccessLog (if enabled)
 //
 // This order keeps request_id available in recover logs, and keeps recoverer
 // around downstream middleware/handlers.
 func AssembleGlobalMiddleware(base http.Handler, cfg config.HTTPMiddlewareConfig, log *logx.Logger) http.Handler {
 	handler := base
+
+	handler = AccessLog(cfg.AccessLog, log)(handler)
 
 	if cfg.MaxBodyBytes > 0 {
 		handler = MaxBodyBytes(cfg.MaxBodyBytes)(handler)

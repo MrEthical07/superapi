@@ -81,3 +81,29 @@ func TestLintRejectsInvalidMetricsPath(t *testing.T) {
 		t.Fatalf("expected lint error for metrics path")
 	}
 }
+
+func TestLintRejectsInvalidAccessLogSampleRate(t *testing.T) {
+	t.Setenv("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE", "1.2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for access log sample rate")
+	}
+}
+
+func TestLintRejectsInvalidAccessLogExcludePath(t *testing.T) {
+	t.Setenv("HTTP_MIDDLEWARE_ACCESS_LOG_EXCLUDE_PATHS", "healthz,/readyz")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for access log exclude path")
+	}
+}

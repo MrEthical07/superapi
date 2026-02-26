@@ -27,15 +27,20 @@ type Config struct {
 // New creates a production-ready Logger from the given Config.
 // It returns an error if the config contains an invalid log level.
 func New(cfg Config) (*Logger, error) {
+	return NewWithWriter(cfg, os.Stdout)
+}
+
+// NewWithWriter creates a logger writing to the provided writer.
+func NewWithWriter(cfg Config, out io.Writer) (*Logger, error) {
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
 		return nil, err
 	}
 
-	var w io.Writer = os.Stdout
+	var w io.Writer = out
 	if strings.EqualFold(cfg.Format, "text") {
 		w = zerolog.NewConsoleWriter(func(cw *zerolog.ConsoleWriter) {
-			cw.Out = os.Stdout
+			cw.Out = out
 		})
 	}
 

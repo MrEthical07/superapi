@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,16 @@ type HTTPMiddlewareConfig struct {
 	MaxBodyBytes           int64
 	SecurityHeadersEnabled bool
 	RequestTimeout         time.Duration
+	AccessLog              AccessLogConfig
+}
+
+type AccessLogConfig struct {
+	Enabled          bool
+	SampleRate       float64
+	ExcludePaths     []string
+	SlowThreshold    time.Duration
+	IncludeUserAgent bool
+	IncludeRemoteIP  bool
 }
 
 type PostgresConfig struct {
@@ -93,6 +104,14 @@ func Load() (*Config, error) {
 				MaxBodyBytes:           getInt64("HTTP_MIDDLEWARE_MAX_BODY_BYTES", 0),
 				SecurityHeadersEnabled: getBool("HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED", false),
 				RequestTimeout:         getDuration("HTTP_MIDDLEWARE_REQUEST_TIMEOUT", 0),
+				AccessLog: AccessLogConfig{
+					Enabled:          getBool("HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED", true),
+					SampleRate:       getFloat64("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE", 0.05),
+					ExcludePaths:     getCSV("HTTP_MIDDLEWARE_ACCESS_LOG_EXCLUDE_PATHS", []string{"/healthz", "/readyz", "/metrics"}),
+					SlowThreshold:    getDuration("HTTP_MIDDLEWARE_ACCESS_LOG_SLOW_THRESHOLD", 2*time.Second),
+					IncludeUserAgent: getBool("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_USER_AGENT", false),
+					IncludeRemoteIP:  getBool("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_REMOTE_IP", false),
+				},
 			},
 		},
 		Log: LogConfig{
@@ -158,6 +177,20 @@ func (c *Config) Lint() error {
 	}
 	if c.HTTP.Middleware.RequestTimeout < 0 {
 		return fmt.Errorf("http middleware request timeout must be >= 0")
+	}
+	if c.HTTP.Middleware.AccessLog.SampleRate < 0 || c.HTTP.Middleware.AccessLog.SampleRate > 1 {
+		return fmt.Errorf("http middleware access log sample rate must be in [0,1]")
+	}
+	if c.HTTP.Middleware.AccessLog.SlowThreshold < 0 {
+		return fmt.Errorf("http middleware access log slow threshold must be >= 0")
+	}
+	for _, p := range c.HTTP.Middleware.AccessLog.ExcludePaths {
+		if p == "" {
+			return fmt.Errorf("http middleware access log exclude path cannot be empty")
+		}
+		if p[0] != '/' {
+			return fmt.Errorf("http middleware access log exclude path must start with '/': %q", p)
+		}
 	}
 
 	if c.Postgres.Enabled && c.Postgres.URL == "" {
@@ -250,6 +283,21 @@ func (c *Config) Lint() error {
 		if d < 0 {
 			return fmt.Errorf("http middleware request timeout must be >= 0")
 		}
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintFloat64Env("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_MIDDLEWARE_ACCESS_LOG_SLOW_THRESHOLD"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_USER_AGENT"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_REMOTE_IP"); err != nil {
+		return err
 	}
 
 	if err := lintBoolEnv("POSTGRES_ENABLED"); err != nil {
@@ -378,6 +426,39 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 	return d
 }
 
+func getFloat64(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func getCSV(key string, fallback []string) []string {
+	v := os.Getenv(key)
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
+}
+
 func lintBoolEnv(key string) error {
 	v, ok := os.LookupEnv(key)
 	if !ok {
@@ -406,6 +487,17 @@ func lintDurationEnv(key string) error {
 		return nil
 	}
 	if _, err := time.ParseDuration(v); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func lintFloat64Env(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := strconv.ParseFloat(v, 64); err != nil {
 		return fmt.Errorf("invalid %s: %q", key, v)
 	}
 	return nil

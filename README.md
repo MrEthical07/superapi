@@ -20,10 +20,27 @@ Global (server-level) middleware is configured via environment variables:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` (default: `0`, disabled)
 - `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` (default: `false`)
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` (default: `0`, disabled)
+- `HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED` (default: `true`)
+- `HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE` (default: `0.05`)
+- `HTTP_MIDDLEWARE_ACCESS_LOG_EXCLUDE_PATHS` (default: `/healthz,/readyz,/metrics`)
+- `HTTP_MIDDLEWARE_ACCESS_LOG_SLOW_THRESHOLD` (default: `2s`)
+- `HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_USER_AGENT` (default: `false`)
+- `HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_REMOTE_IP` (default: `false`)
 
 Notes:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` must be `>= 0`.
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be a valid duration and `>= 0`.
+- `HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE` must be in `[0,1]`.
+- `HTTP_MIDDLEWARE_ACCESS_LOG_SLOW_THRESHOLD` must be `>= 0`.
+- `HTTP_MIDDLEWARE_ACCESS_LOG_EXCLUDE_PATHS` entries must start with `/`.
+
+Access logging behavior:
+
+- Uses structured logs with route patterns (for example, `/api/v1/tenants/{id}`) instead of raw URL paths.
+- Logs are sampled using a deterministic request-id hash.
+- 5xx responses are always logged, even when sampling would skip.
+- Requests above slow threshold are always logged, even when sampling would skip.
+- Request bodies, Authorization/Cookie headers, and query strings are not logged by default.
 
 ## Typed endpoint example
 

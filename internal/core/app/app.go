@@ -38,9 +38,7 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	if deps.Metrics != nil {
-		router.Use(deps.Metrics.CaptureRoutePattern)
-	}
+	router.Use(httpx.CaptureRoutePattern)
 	if deps.Metrics != nil && deps.Metrics.Enabled() {
 		router.Handle(http.MethodGet, deps.Metrics.Path(), deps.Metrics.Handler())
 	}
