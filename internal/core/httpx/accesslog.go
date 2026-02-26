@@ -2,6 +2,8 @@ package httpx
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -40,6 +42,9 @@ func AccessLog(cfg config.AccessLogConfig, log *logx.Logger) func(http.Handler) 
 
 			requestID := RequestIDFromContext(r.Context())
 			statusCode := aw.statusCode
+			if errors.Is(r.Context().Err(), context.DeadlineExceeded) && !aw.wroteHeader {
+				statusCode = http.StatusGatewayTimeout
+			}
 			route := RoutePattern(r, statusCode, aw.routePattern)
 
 			shouldLogSlow := cfg.SlowThreshold > 0 && duration >= cfg.SlowThreshold
@@ -118,14 +123,19 @@ type accessLogResponseWriter struct {
 	statusCode   int
 	bytesWritten int64
 	routePattern string
+	wroteHeader  bool
 }
 
 func (w *accessLogResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
+	w.wroteHeader = true
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
 func (w *accessLogResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+	}
 	n, err := w.ResponseWriter.Write(b)
 	w.bytesWritten += int64(n)
 	return n, err

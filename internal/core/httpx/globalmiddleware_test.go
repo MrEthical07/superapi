@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/logx"
@@ -108,5 +109,27 @@ func TestAssembleGlobalMiddleware_MaxBodyBytes_DoesNotBreakGet(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestAssembleGlobalMiddleware_RequestTimeout(t *testing.T) {
+	base := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+
+	h := AssembleGlobalMiddleware(base, config.HTTPMiddlewareConfig{
+		RequestIDEnabled: true,
+		RequestTimeout:   20 * time.Millisecond,
+	}, testLogger(t))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/slow", nil)
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusGatewayTimeout)
+	}
+	if got := rr.Header().Get("X-Request-Id"); got == "" {
+		t.Fatalf("missing X-Request-Id header")
 	}
 }

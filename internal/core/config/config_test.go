@@ -107,3 +107,17 @@ func TestLintRejectsInvalidAccessLogExcludePath(t *testing.T) {
 		t.Fatalf("expected lint error for access log exclude path")
 	}
 }
+
+func TestLintRejectsMiddlewareTimeoutExceedingWriteTimeout(t *testing.T) {
+	t.Setenv("HTTP_WRITE_TIMEOUT", "100ms")
+	t.Setenv("HTTP_MIDDLEWARE_REQUEST_TIMEOUT", "200ms")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for middleware timeout > write timeout")
+	}
+}

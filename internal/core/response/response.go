@@ -1,7 +1,9 @@
 package response
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
@@ -47,6 +49,18 @@ func Created(w http.ResponseWriter, data any, requestID string) {
 }
 
 func Error(w http.ResponseWriter, err error, requestID string) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		JSON(w, http.StatusGatewayTimeout, Envelope{
+			OK: false,
+			Error: &ErrorBody{
+				Code:    string(apperr.CodeTimeout),
+				Message: "request timed out",
+			},
+			RequestID: requestID,
+		})
+		return
+	}
+
 	if ae, ok := apperr.AsAppError(err); ok {
 		JSON(w, ae.StatusCode, Envelope{
 			OK: false,

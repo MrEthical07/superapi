@@ -194,3 +194,20 @@ func TestShouldSampleRequestDeterministic(t *testing.T) {
 		t.Fatalf("sample rate 0 must never sample")
 	}
 }
+
+func TestAccessLogTimeoutStatus(t *testing.T) {
+	l, buf := newBufferLogger(t)
+
+	cfg := config.AccessLogConfig{Enabled: true, SampleRate: 1}
+
+	h := RequestID(RequestTimeout(15 * time.Millisecond)(AccessLog(cfg, l)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))))
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/slow-timeout", nil))
+
+	entry := parseSingleLog(t, buf)
+	if got, _ := entry["status"].(float64); int(got) != http.StatusGatewayTimeout {
+		t.Fatalf("status = %v, want %d", entry["status"], http.StatusGatewayTimeout)
+	}
+}

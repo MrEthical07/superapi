@@ -42,6 +42,35 @@ Access logging behavior:
 - Requests above slow threshold are always logged, even when sampling would skip.
 - Request bodies, Authorization/Cookie headers, and query strings are not logged by default.
 
+## Timeout semantics
+
+Server-level transport timeouts:
+
+- `HTTP_READ_HEADER_TIMEOUT`: bounds header read time (slowloris protection).
+- `HTTP_READ_TIMEOUT`: bounds full request read time (headers + body).
+- `HTTP_WRITE_TIMEOUT`: hard cap for writing the response.
+- `HTTP_IDLE_TIMEOUT`: keep-alive idle connection timeout.
+
+Application-level request timeout:
+
+- `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` (default: `0`, disabled)
+- When enabled (`> 0`), middleware sets `context.WithTimeout` for downstream handler/service logic.
+- If the request deadline is exceeded before any response is written, API returns:
+	- HTTP `504 Gateway Timeout`
+	- envelope error code: `timeout`
+	- message: `request timed out`
+
+Validation and tuning guidance:
+
+- `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be `>= 0`.
+- If enabled, it must be `<= HTTP_WRITE_TIMEOUT` (lint enforced).
+- Recommended production tuning: set middleware timeout slightly below write timeout so application logic cancels early and returns a controlled JSON timeout response.
+
+Notes:
+
+- Timeout middleware is cooperative (context-based), so downstream code must honor request context cancellation.
+- Streaming endpoints are not explicitly supported by this timeout response path; for streaming workloads, evaluate dedicated timeout/heartbeat semantics per endpoint.
+
 ## Typed endpoint example
 
 The API includes `POST /system/parse-duration` using the typed JSON adapter.

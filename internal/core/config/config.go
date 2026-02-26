@@ -178,6 +178,9 @@ func (c *Config) Lint() error {
 	if c.HTTP.Middleware.RequestTimeout < 0 {
 		return fmt.Errorf("http middleware request timeout must be >= 0")
 	}
+	if c.HTTP.Middleware.RequestTimeout > 0 && c.HTTP.Middleware.RequestTimeout > c.HTTP.WriteTimeout {
+		return fmt.Errorf("http middleware request timeout (%s) cannot exceed http write timeout (%s)", c.HTTP.Middleware.RequestTimeout, c.HTTP.WriteTimeout)
+	}
 	if c.HTTP.Middleware.AccessLog.SampleRate < 0 || c.HTTP.Middleware.AccessLog.SampleRate > 1 {
 		return fmt.Errorf("http middleware access log sample rate must be in [0,1]")
 	}
