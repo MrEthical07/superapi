@@ -28,6 +28,9 @@ func (m *Module) readyz(w http.ResponseWriter, r *http.Request) {
 	if m.readiness != nil {
 		report = m.readiness.Check(r.Context())
 	}
+	if m.metrics != nil {
+		m.metrics.ObserveReadiness(report)
+	}
 
 	status := http.StatusOK
 	ok := true

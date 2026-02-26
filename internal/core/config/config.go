@@ -15,6 +15,7 @@ type Config struct {
 	Log         LogConfig
 	Postgres    PostgresConfig
 	Redis       RedisConfig
+	Metrics     MetricsConfig
 }
 
 // LogConfig holds structured logging configuration.
@@ -69,6 +70,11 @@ type RedisConfig struct {
 	HealthCheckTimeout time.Duration
 }
 
+type MetricsConfig struct {
+	Enabled bool
+	Path    string
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		Env:         getenv("APP_ENV", "dev"),
@@ -115,6 +121,10 @@ func Load() (*Config, error) {
 			MinIdleConns:       getInt("REDIS_MIN_IDLE_CONNS", 0),
 			StartupPingTimeout: getDuration("REDIS_STARTUP_PING_TIMEOUT", 3*time.Second),
 			HealthCheckTimeout: getDuration("REDIS_HEALTH_CHECK_TIMEOUT", 1*time.Second),
+		},
+		Metrics: MetricsConfig{
+			Enabled: getBool("METRICS_ENABLED", true),
+			Path:    getenv("METRICS_PATH", "/metrics"),
 		},
 	}
 
@@ -205,6 +215,12 @@ func (c *Config) Lint() error {
 	if c.Redis.HealthCheckTimeout <= 0 {
 		return fmt.Errorf("redis health check timeout must be > 0")
 	}
+	if c.Metrics.Path == "" {
+		return fmt.Errorf("metrics path cannot be empty")
+	}
+	if c.Metrics.Path[0] != '/' {
+		return fmt.Errorf("metrics path must start with '/'")
+	}
 
 	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_REQUEST_ID_ENABLED"); ok {
 		if _, err := strconv.ParseBool(v); err != nil {
@@ -283,6 +299,9 @@ func (c *Config) Lint() error {
 		return err
 	}
 	if err := lintDurationEnv("REDIS_HEALTH_CHECK_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("METRICS_ENABLED"); err != nil {
 		return err
 	}
 

@@ -68,3 +68,16 @@ func TestLintRejectsInvalidRedisPoolSize(t *testing.T) {
 		t.Fatalf("expected lint error for redis pool size")
 	}
 }
+
+func TestLintRejectsInvalidMetricsPath(t *testing.T) {
+	t.Setenv("METRICS_PATH", "metrics")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for metrics path")
+	}
+}

@@ -12,6 +12,7 @@ import (
 // Module code depends only on this interface, never on chi directly.
 type Router interface {
 	Handle(method string, pattern string, h http.Handler, policies ...policy.Policy)
+	Use(middlewares ...func(http.Handler) http.Handler)
 }
 
 // Mux is the chi-backed Router implementation.
@@ -41,4 +42,8 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (m *Mux) Handle(method string, pattern string, h http.Handler, policies ...policy.Policy) {
 	final := policy.Chain(h, policies...)
 	m.r.Method(method, pattern, final)
+}
+
+func (m *Mux) Use(middlewares ...func(http.Handler) http.Handler) {
+	m.r.Use(middlewares...)
 }

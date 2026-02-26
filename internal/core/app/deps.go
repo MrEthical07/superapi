@@ -10,6 +10,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/cache"
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/db"
+	"github.com/MrEthical07/superapi/internal/core/metrics"
 	"github.com/MrEthical07/superapi/internal/core/readiness"
 )
 
@@ -17,6 +18,7 @@ type Dependencies struct {
 	Postgres  *pgxpool.Pool
 	Redis     *redis.Client
 	Readiness *readiness.Service
+	Metrics   *metrics.Service
 }
 
 type DependencyBinder interface {
@@ -56,6 +58,18 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	} else {
 		deps.Readiness.Add("redis", false, cfg.Redis.HealthCheckTimeout, nil)
 	}
+
+	metricsSvc, err := metrics.New(cfg.Metrics, deps.Postgres)
+	if err != nil {
+		if deps.Redis != nil {
+			_ = deps.Redis.Close()
+		}
+		if deps.Postgres != nil {
+			deps.Postgres.Close()
+		}
+		return nil, fmt.Errorf("init metrics: %w", err)
+	}
+	deps.Metrics = metricsSvc
 
 	return deps, nil
 }

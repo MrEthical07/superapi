@@ -72,6 +72,35 @@ Readiness behavior:
 - `/healthz` is process aliveness only.
 - `/readyz` returns dependency statuses (`ok`, `disabled`, `error`) and `status` (`ready` or `not_ready`).
 
+## Metrics
+
+Prometheus metrics are enabled by default and exposed from the API process.
+
+Configuration:
+
+- `METRICS_ENABLED` (default: `true`)
+- `METRICS_PATH` (default: `/metrics`)
+
+Notes:
+
+- `METRICS_PATH` must be non-empty and start with `/`.
+- When `METRICS_ENABLED=false`, the metrics endpoint is not registered.
+
+Baseline metrics:
+
+- `superapi_http_requests_total{method,route,status}`
+- `superapi_http_request_duration_seconds{method,route,status}`
+- `superapi_http_in_flight_requests`
+- `superapi_ready`
+- `superapi_dependency_ready{dependency,status}` (`status` in `ok|disabled|error`)
+
+When Postgres is enabled, these pool gauges are also exported:
+
+- `superapi_db_pool_acquired_connections`
+- `superapi_db_pool_idle_connections`
+- `superapi_db_pool_total_connections`
+- `superapi_db_pool_max_connections`
+
 ## Database migrations and sqlc baseline
 
 The template uses:
