@@ -41,6 +41,39 @@ This project uses a global baseline for schema + typed SQL generation:
 
 ## Module data access conventions
 
+## Route policies (core engine)
+
+Routes can attach per-route policies during registration through `httpx.Router`:
+
+```go
+r.Handle(http.MethodPost, "/api/v1/example", handler,
+   policy.RequireJSON(),
+   policy.WithHeader("X-Example", "1"),
+)
+```
+
+Policy type:
+
+- `type Policy func(http.Handler) http.Handler`
+
+Ordering rule (deterministic):
+
+- For route policies `[P1, P2, P3]`, execution is:
+   - request: `P1 -> P2 -> P3 -> handler`
+   - response unwind: `handler -> P3 -> P2 -> P1`
+
+This means the first listed policy is outermost. Use this convention consistently:
+
+- Place authentication/authorization policies first (outermost) once introduced.
+- Place mutation/caching policies carefully after auth checks.
+- Policies may short-circuit by writing a response and not calling `next`.
+
+Built-in utility policies currently available:
+
+- `policy.Noop()`
+- `policy.RequireJSON()`
+- `policy.WithHeader(key, value)`
+
 Service layer owns transaction boundaries. Repositories should never begin/commit transactions.
 
 Recommended shape:
