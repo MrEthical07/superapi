@@ -14,10 +14,16 @@ type Config struct {
 	ServiceName string
 	HTTP        HTTPConfig
 	Log         LogConfig
+	Auth        AuthConfig
 	Postgres    PostgresConfig
 	Redis       RedisConfig
 	Metrics     MetricsConfig
 	Tracing     TracingConfig
+}
+
+type AuthConfig struct {
+	Enabled bool
+	Mode    string
 }
 
 // LogConfig holds structured logging configuration.
@@ -129,6 +135,10 @@ func Load() (*Config, error) {
 			Level:  getenv("LOG_LEVEL", "info"),
 			Format: getenv("LOG_FORMAT", "json"),
 		},
+		Auth: AuthConfig{
+			Enabled: getBool("AUTH_ENABLED", false),
+			Mode:    getenv("AUTH_MODE", "hybrid"),
+		},
 		Postgres: PostgresConfig{
 			Enabled:            getBool("POSTGRES_ENABLED", false),
 			URL:                getenv("POSTGRES_URL", ""),
@@ -211,6 +221,17 @@ func (c *Config) Lint() error {
 	if c.HTTP.Middleware.AccessLog.SlowThreshold < 0 {
 		return fmt.Errorf("http middleware access log slow threshold must be >= 0")
 	}
+
+	switch strings.ToLower(strings.TrimSpace(c.Auth.Mode)) {
+	case "jwt_only", "jwt-only", "jwtonly", "hybrid", "strict", "":
+		// valid
+	default:
+		return fmt.Errorf("invalid auth mode: %q (valid: jwt_only, hybrid, strict)", c.Auth.Mode)
+	}
+	if c.Auth.Enabled && !c.Redis.Enabled {
+		return fmt.Errorf("auth enabled requires redis enabled")
+	}
+
 	for _, p := range c.HTTP.Middleware.AccessLog.ExcludePaths {
 		if p == "" {
 			return fmt.Errorf("http middleware access log exclude path cannot be empty")
@@ -333,6 +354,9 @@ func (c *Config) Lint() error {
 		}
 	}
 	if err := lintBoolEnv("HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("AUTH_ENABLED"); err != nil {
 		return err
 	}
 	if err := lintFloat64Env("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE"); err != nil {

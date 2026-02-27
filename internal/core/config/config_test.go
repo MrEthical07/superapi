@@ -160,3 +160,30 @@ func TestLintRejectsInvalidTracingSampleRatioWhenEnabled(t *testing.T) {
 		t.Fatalf("expected lint error for invalid tracing sample ratio")
 	}
 }
+
+func TestLintRejectsInvalidAuthMode(t *testing.T) {
+	t.Setenv("AUTH_MODE", "invalid")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for invalid auth mode")
+	}
+}
+
+func TestLintRejectsAuthEnabledWithoutRedis(t *testing.T) {
+	t.Setenv("AUTH_ENABLED", "true")
+	t.Setenv("REDIS_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for auth enabled without redis")
+	}
+}

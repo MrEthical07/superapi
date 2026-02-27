@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/cache"
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/db"
@@ -21,6 +22,9 @@ type Dependencies struct {
 	Readiness *readiness.Service
 	Metrics   *metrics.Service
 	Tracing   *tracing.Service
+	Auth      auth.Provider
+	AuthMode  auth.Mode
+	authClose func()
 }
 
 type DependencyBinder interface {
@@ -73,6 +77,34 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	}
 	deps.Metrics = metricsSvc
 
+	authMode, err := auth.ParseMode(cfg.Auth.Mode)
+	if err != nil {
+		if deps.Redis != nil {
+			_ = deps.Redis.Close()
+		}
+		if deps.Postgres != nil {
+			deps.Postgres.Close()
+		}
+		return nil, fmt.Errorf("init auth mode: %w", err)
+	}
+	deps.AuthMode = authMode
+	deps.Auth = auth.NewDisabledProvider()
+
+	if cfg.Auth.Enabled {
+		provider, closeFn, err := auth.NewGoAuthEngineProvider(deps.Redis, authMode)
+		if err != nil {
+			if deps.Redis != nil {
+				_ = deps.Redis.Close()
+			}
+			if deps.Postgres != nil {
+				deps.Postgres.Close()
+			}
+			return nil, fmt.Errorf("init auth provider: %w", err)
+		}
+		deps.Auth = provider
+		deps.authClose = closeFn
+	}
+
 	tracingSvc, err := tracing.New(ctx, cfg.Tracing, cfg.Env)
 	if err != nil {
 		if deps.Redis != nil {
@@ -107,5 +139,8 @@ func (a *App) closeDependencies() {
 		if err := a.deps.Tracing.Shutdown(shutdownCtx); err != nil {
 			a.log.Error().Err(err).Msg("tracing shutdown error")
 		}
+	}
+	if a.deps.authClose != nil {
+		a.deps.authClose()
 	}
 }

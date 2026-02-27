@@ -27,6 +27,23 @@ Global (server-level) middleware is configured via environment variables:
 - `HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_USER_AGENT` (default: `false`)
 - `HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_REMOTE_IP` (default: `false`)
 
+## Auth adapter (goAuth-backed)
+
+Route-level authentication is provided through core policies backed by a thin adapter over goAuth primitives.
+
+Configuration:
+
+- `AUTH_ENABLED` (default: `false`)
+- `AUTH_MODE` (default: `hybrid`; valid: `jwt_only`, `hybrid`, `strict`)
+
+Notes:
+
+- `AUTH_ENABLED=true` requires Redis enabled (`REDIS_ENABLED=true`).
+- Existing public endpoints remain public unless a route declares auth policies.
+- Demo protected route: `GET /api/v1/system/whoami`.
+	- Without bearer token: returns `401`.
+	- With valid token and provider validation: returns safe principal fields (`user_id`, `tenant_id`, `role`, `permissions`).
+
 Notes:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` must be `>= 0`.
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be a valid duration and `>= 0`.
