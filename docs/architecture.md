@@ -1,495 +1,537 @@
-# Architecture — API Template (SaaS, 10k RPS, Security-first)
+# Architecture — Under the Hood
 
-This document defines the final architecture for a reusable Go API template optimized for:
-- **~10,000 RPS on a single instance** for “light” endpoints (routing + auth + rate limits + cache lookups, minimal IO),
-- **security-first defaults**,
-- **module extensibility** with minimal boilerplate,
-- **feature toggles / addons via config** (like goAuth),
-- **route-level control** for auth/rate-limit/cache policies.
+This document explains how SuperAPI works internally: request lifecycle, middleware pipeline, policy chain, dependency wiring, error model, and observability flow.
 
 ---
 
-## 1) Hard Choices (selected for performance)
+## 1. Repository layout
 
-### HTTP stack
-- **net/http + chi**
-  - `chi` is minimal, fast, and plays perfectly with Go’s standard server and middleware model.
-  - Keeps compatibility with observability tooling and avoids the operational edge cases of non-standard servers.
-  - 10k RPS is fully achievable with net/http when the hot path is allocation-light and IO is controlled.
-
-### JSON
-- Default: **encoding/json** (simplicity + correctness)
-- Architecture keeps an encoder abstraction boundary so you can swap to a faster encoder later **without changing handlers**.
-
-### Database
-- **Postgres + pgx v5 (pgxpool) + sqlc**
-  - `pgxpool` is high-performance and stable.
-  - `sqlc` gives type-safe queries at compile-time and avoids reflection overhead typical of ORMs.
-  - This is the best “performance + correctness + maintainability” combo for SaaS templates.
-
-### Redis
-- **go-redis v9**
-  - Used for: caching, rate limiting, (optionally) distributed locks, job queues, and (via goAuth) session/state.
-
----
-
-## 2) Goals & Non-goals
-
-### Goals
-- **Performance:** 10k RPS single instance for light endpoints; stable tail latency via backpressure.
-- **Security-first:** safe defaults, strict input validation, clean error boundaries, secure headers, least-privilege policies.
-- **Extensibility:** adding a module should not require changing core server wiring.
-- **Config-driven addons:** enable/disable tracing, audit, caching, strict auth mode, etc.
-- **Operational hygiene:** readiness/health, metrics, structured logs, graceful shutdown.
-
-### Non-goals (v1)
-- Solving “10k RPS of heavy DB writes” purely via code (DB-heavy workloads require caching, queuing, replicas, and query/index work).
-- Dynamic module loading at runtime (Go builds are static).
-
----
-
-## 3) Service SLO Targets
-
-Assuming healthy dependencies in the same region/VPC and endpoints are not doing heavy work per request:
-
-### Light endpoints (auth/rate-limit/cache lookups)
-- p50: **10–20ms**
-- p95: **50–80ms**
-- p99: **120–200ms**
-
-### DB read endpoints (indexed reads, limited payload)
-- p50: **15–30ms**
-- p95: **70–130ms**
-- p99: **150–300ms**
-
-### DB write endpoints (transactional)
-- p50: **30–60ms**
-- p95: **120–200ms**
-- p99: **250–400ms**
-
----
-
-## 4) Repository Layout
-
-Recommended layout:
-
-/cmd/api/main.go
-
-/internal/core/
-  app/               # App container, lifecycle, startup/shutdown
-  config/            # config structs + loader + lint
-  httpx/             # router setup, middleware stack, policies
-  response/          # response envelope + writers
-  errors/            # typed errors + mapper to HTTP
-  auth/              # adapter over goAuth + policies
-  ratelimit/         # limiter + policies (redis/inmem)
-  cache/             # redis cache client + policies (per-route cache)
-  db/                # pgxpool wiring + migrations hook + tx helpers
-  observability/     # logger, metrics, tracing hooks, audit hooks
-  validate/          # decoding + validation utilities
-
-/internal/modules/
-  health/
-  users/
-  billing/
-  ...
-
-/docs/
-  architecture.md
-  module_guide.md
-  runbook.md
-
----
-
-## 5) Core Concepts
-
-### 5.1 Kernel vs Modules
-- **Kernel (core):** stable infrastructure and cross-cutting concerns (auth, rate limit, cache, errors, observability).
-- **Modules:** business features (users, billing, projects, etc.), implemented as plug-ins via a small interface.
-
-### 5.2 Module internal layering
-Every module follows the same pattern:
-
-**routes → handlers → service → repo**
-
-- **routes:** endpoints + route policies
-- **handlers:** decode/validate; call service
-- **service:** business logic; orchestration; transactions
-- **repo:** DB/Redis access only (no business rules)
-
-This makes modules predictable and easy to scaffold.
-
----
-
-## 6) Module System
-
-### 6.1 Module Interface
-A minimal stable contract:
-
-- `Name() string`
-- `Register(r Router, deps *Deps)` — define routes + attach policies
-- Optional:
-  - `Init(deps *Deps) error` (pre-flight checks)
-  - `Start(ctx) error` / `Stop(ctx) error` (background workers, subscriptions)
-
-### 6.2 Module registration
-Baseline: explicit registry `internal/modules/registry.go`:
-`var All = []core.Module{ users.New(), billing.New(), ... }`
-
-Optional later: `go generate` that scans module folders and generates the registry.
-
----
-
-## 7) Dependency Container (Deps)
-
-Modules do not create infra clients. They receive stable dependencies:
-
-- `Cfg *config.Config`
-- `Logger`
-- `Metrics`
-- `DB *pgxpool.Pool` + `Tx` helper
-- `Redis *redis.Client`
-- `Auth *auth.Provider` (goAuth adapter)
-- `Limiter *ratelimit.Limiter`
-- `Cache *cache.Manager`
-- `Validator`
-- `Clock`, `IDGen`
-
-Rule: **Deps must remain stable**. Add new dependencies carefully; prefer optional interfaces to avoid template churn.
-
----
-
-## 8) Request Lifecycle
-
-### 8.1 End-to-end flow
-1. Accept request (net/http)
-2. Attach context (deadline, request-id)
-3. Global middleware (minimal hot path)
-4. Route match (chi)
-5. Route policies executed (auth/rate-limit/cache/validation/tenant)
-6. Decode input (path/query/json)
-7. Validate DTO
-8. Call service
-9. Map typed errors → HTTP
-10. Write JSON response (consistent envelope)
-
-### 8.2 Response envelope
-Success:
-```json
-{ "ok": true, "data": {...}, "meta": {...optional} }
-````
-
-Error:
-
-```json
-{ "ok": false, "error": { "code": "...", "message": "...", "details": {...} }, "request_id": "..." }
+```
+cmd/
+  api/main.go              # Real server entry point
+  migrate/main.go          # Migration CLI
+  modulegen/main.go        # Module scaffolder CLI
+internal/
+  core/
+    app/                   # App container, lifecycle, dependency init
+      app.go               # App struct, New(), Run(), module registration
+      deps.go              # Dependencies struct, initDependencies(), closeDependencies()
+    config/config.go       # Env-based config + Lint() validation
+    httpx/                 # Router, global middleware, typed JSON, tracing middleware
+    response/response.go   # Response envelope + error mapping
+    errors/errors.go       # Typed AppError model
+    auth/                  # goAuth adapter, AuthContext, Provider interface
+    policy/                # Route-level policies (auth, tenant, rate limit, cache, JSON, headers)
+    ratelimit/             # Redis-backed limiter + keying strategies
+    cache/                 # Redis-backed cache manager + key builder
+    db/                    # pgxpool wiring, tx helpers, sqlc query wrappers, migrations
+    tenant/tenant.go       # Tenant scope helpers
+    logx/logx.go           # zerolog wrapper
+    metrics/metrics.go     # Prometheus metrics service
+    tracing/service.go     # OpenTelemetry tracing service
+    readiness/service.go   # Dependency health check aggregator
+    params/params.go       # URL param extraction (chi wrapper)
+  modules/
+    modules.go             # Centralized module registry
+    health/                # Liveness + readiness module
+    system/                # System utilities (whoami, parse-duration)
+    tenants/               # Tenant CRUD reference module
+  devx/modulegen/          # Module generator logic
+db/
+  migrations/              # Versioned SQL migration files
+  schema/                  # Canonical schema for sqlc
+  queries/                 # SQL query definitions for sqlc
+docs/                      # This documentation
 ```
 
 ---
 
-## 9) Policy-First Routing (the extensibility engine)
+## 2. Startup sequence
 
-Routes declare policies rather than hand-wiring middleware stacks everywhere.
+Entry point: `cmd/api/main.go`
 
-### 9.1 Core policies (always available)
+```
+1. config.Load()          — Read all env vars into Config struct
+2. config.Lint()          — Validate config (fail-fast on bad values)
+3. logx.New()             — Initialize zerolog logger
+4. app.New(cfg, logger, modules.All())
+   a. httpx.NewMux()      — Create chi-backed router
+   b. initDependencies()  — Wire Postgres, Redis, Metrics, Auth, RateLimit, Cache, Tracing
+   c. router.Use(CaptureRoutePattern)  — Register route pattern capture middleware
+   d. Register metrics endpoint (/metrics) if enabled
+   e. AssembleGlobalMiddleware() — Wrap router with global middleware stack
+   f. Wrap with metrics instrumentation (InstrumentHTTP)
+   g. Create http.Server with configured timeouts
+   h. For each module:
+      - If DependencyBinder: call BindDependencies(deps)
+      - Call module.Register(router)
+5. signal.NotifyContext()  — Listen for SIGINT/SIGTERM
+6. app.Run(ctx)           — Start server, wait for shutdown signal
+```
 
-* `Public()`
-* `AuthRequired(mode)` where mode ∈ { jwt-only, hybrid, strict }
-* `RequirePerm(mask)` / `RequireRole(name)`
-* `RateLimit(name, rule)`
-* `Validate()` (auto DTO validation)
-* `TenantScope()` (optional)
-* `CacheRead(cfg)` / `CacheInvalidate(tags...)` (see caching section)
+### Dependency initialization order (in `initDependencies`)
 
-This keeps route addition simple:
+1. **Readiness service** — always created
+2. **Postgres pool** — if `POSTGRES_ENABLED=true`; startup ping with timeout; registered in readiness
+3. **Redis client** — if `REDIS_ENABLED=true`; startup ping with timeout; registered in readiness
+4. **Metrics service** — if `METRICS_ENABLED=true`; registers Prometheus collectors (including pgxpool if Postgres enabled)
+5. **Auth provider** — parse auth mode; if `AUTH_ENABLED=true`, build goAuth engine provider (requires Redis)
+6. **Rate limiter** — if `RATELIMIT_ENABLED=true`, create Redis-backed limiter (requires Redis)
+7. **Cache manager** — if `CACHE_ENABLED=true`, create Redis-backed cache manager (requires Redis)
+8. **Tracing service** — if `TRACING_ENABLED=true`, init OTLP gRPC exporter + tracer provider
 
-* define DTO
-* define handler
-* register route with policies
+If any enabled dependency fails to initialize, all previously created resources are cleaned up and startup fails.
 
----
+### Shutdown sequence
 
-## 10) Security Architecture (highest priority)
-
-### 10.1 Secure-by-default configuration
-
-Startup runs config lint:
-
-* missing secrets, weak cookie settings, unsafe CORS, disabled throttles, etc. are warned/blocked.
-* Production can be configured to **fail-fast** on high severity lint.
-
-### 10.2 Authentication
-
-Auth is provided via **goAuth** behind a core adapter:
-
-* route-level selection of auth mode (jwt-only/hybrid/strict)
-* strict routes can fail closed when Redis is unavailable (configurable status behavior)
-
-### 10.3 Authorization
-
-* Permission masks (O(1) checks)
-* Optional tenant policy to prevent cross-tenant reads/writes
-* Explicit “admin” scopes if needed (never implied)
-
-### 10.4 Input safety
-
-* request body size limit
-* strict JSON parsing option (disallow unknown fields for public APIs)
-* validation required for every DTO
-* consistent error mapping (no stack traces to clients)
-
-### 10.5 Abuse resistance
-
-* global limiter defaults (IP + token/user)
-* dedicated buckets for auth flows (login/refresh/reset)
-* incremental lockouts / penalties handled by auth module + policies
-
-### 10.6 Audit hooks (optional addon)
-
-* async bounded queue, non-blocking
-* critical actions emit audit events (auth changes, role changes, billing actions)
+1. Context cancelled (SIGINT/SIGTERM)
+2. `http.Server.Shutdown()` with configured timeout — drains in-flight requests
+3. `closeDependencies()`: Redis close → Postgres close → Tracing shutdown → Auth close
 
 ---
 
-## 11) Redis Integration (Policies for per-route caching & control)
+## 3. Request lifecycle
 
-Redis is integrated as an **infra dependency**, but caching behavior is controlled via **route policies** so you can configure:
+### 3.1 Global middleware pipeline
 
-* which routes are cached,
-* TTLs and stale strategy,
-* cache keys (per tenant/user/query),
-* invalidation tags.
+Middleware is applied in `AssembleGlobalMiddleware()` (file: `internal/core/httpx/globalmiddleware.go`).
 
-### 11.1 Cache policy: `CacheRead`
+**Execution order (outermost → innermost):**
 
-A route can declare a cache policy:
+1. **RequestID** — Reads `X-Request-Id` header or generates a 32-hex-char random ID; injects into context and response header
+2. **Recoverer** — Catches panics, logs with structured context (request_id, method, path, panic value), returns sanitized 500
+3. **SecurityHeaders** — Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (if enabled)
+4. **MaxBodyBytes** — Limits request body size for POST/PUT/PATCH requests (if configured > 0)
+5. **RequestTimeout** — Sets `context.WithTimeout` on the request context (if configured > 0); returns 504 if deadline exceeded before response
+6. **Tracing** — Extracts W3C traceparent, creates server span, records attributes and status on defer (if enabled)
+7. **AccessLog** — Logs request method, route pattern, status, duration, bytes; sampled by deterministic request-id hash
 
-CacheRead config includes:
+Then: **Metrics instrumentation** wraps the entire stack (measures in-flight, total requests, duration by method/route/status).
 
-* `Enabled` (config toggle + per-route override)
-* `TTL` (hard TTL)
-* `StaleTTL` (optional: serve stale while revalidating)
-* `Key` builder: deterministic, composable
-* `VaryBy`: tenant id, user id, roles, query params, headers
-* `NegativeCaching`: cache “not found” for short TTL (optional)
-* `MaxObjectBytes`: prevent caching huge payloads
-* `OnBypass`: debug or emergency bypass toggle
+Then: **Router** (chi) matches the route pattern and invokes the handler.
 
-### 11.2 Cache key strategy
+### 3.2 Route-level policy chain
 
-Keys are versioned and namespaced:
+When a route is registered with policies:
 
-`cache:{env}:{service}:{route}:{version}:{tenant}:{user}:{hash(params)}`
+```go
+r.Handle(http.MethodGet, "/api/v1/resource/{id}", handler,
+    policy.AuthRequired(provider, mode),      // P1 (outermost)
+    policy.TenantRequired(),                   // P2
+    policy.RateLimit(limiter, rule),           // P3
+    policy.CacheRead(cacheMgr, cfg),           // P4 (innermost before handler)
+)
+```
 
-Rules:
+Execution for `[P1, P2, P3, P4]`:
 
-* include tenant/user only when needed (avoid exploding keyspace)
-* ensure stable ordering of query params
-* never include secrets/raw tokens in keys
-* version keys to bust on schema changes
+- **Request flow:** P1 → P2 → P3 → P4 → handler
+- **Response unwind:** handler → P4 → P3 → P2 → P1
 
-### 11.3 Stampede protection
+The first policy listed is outermost. Any policy can short-circuit by writing a response and NOT calling `next.ServeHTTP()`.
 
-Cache layer supports (configurable):
+Implementation: `policy.Chain()` in `internal/core/policy/policy.go` iterates policies in reverse to build the handler chain, so the first policy wraps everything else.
 
-* **singleflight** (in-process) for high QPS routes
-* optional Redis lock for cross-instance stampede control (only if required)
+### 3.3 Complete request flow diagram
 
-### 11.4 Invalidation: `CacheInvalidate`
-
-Write routes can declare invalidation tags:
-
-* `CacheInvalidate("users:*", "projects:tenant:{tid}")`
-
-Implementation options (configurable):
-
-* tag → key-set tracking (more storage)
-* tag → version bump (cheap, recommended for high performance)
-* explicit key deletion (only for narrow sets)
-
-**Recommended default:** tag-based **version bump** to avoid large delete storms.
-
----
-
-## 12) Rate Limiting (Policies)
-
-Rate limiting is part of the kernel and selectable per route.
-
-### 12.1 Global default limiting
-
-* per-IP baseline
-* per-user/token when authenticated
-* protects DB/Redis from overload
-
-### 12.2 Route overrides
-
-Routes can declare:
-
-* different rates
-* different keys (IP vs user vs tenant)
-* stricter limits for sensitive endpoints (login, billing)
-
-Implementation:
-
-* Redis-backed token bucket / leaky bucket (fast Lua or atomic ops)
-* optional in-memory limiter for dev and for ultra-low latency routes (not distributed)
+```
+Client request
+  │
+  ├─ RequestID middleware (assign/propagate X-Request-Id)
+  ├─ Recoverer (catch panics → 500)
+  ├─ SecurityHeaders (optional response headers)
+  ├─ MaxBodyBytes (limit body size for write methods)
+  ├─ RequestTimeout (context deadline → 504 on timeout)
+  ├─ Tracing (create span, extract traceparent)
+  ├─ AccessLog (log on defer: method, route, status, duration)
+  ├─ Metrics instrumentation (counters, histograms, in-flight gauge)
+  │
+  ├─ Chi router (pattern match)
+  │   │
+  │   ├─ Route policies (auth → tenant → rate limit → cache → ...)
+  │   │   │
+  │   │   └─ Handler (decode input, call service, write response)
+  │   │
+  │   ├─ 404 Not Found (no route matched)
+  │   └─ 405 Method Not Allowed (route exists, wrong method)
+  │
+  └─ Response flows back through middleware stack
+```
 
 ---
 
-## 13) Performance Design for 10k RPS
+## 4. Error model
 
-### 13.1 Hot path constraints
+### 4.1 Typed errors
 
-To hit 10k RPS reliably:
+All application errors use `AppError` (file: `internal/core/errors/errors.go`):
 
-* keep global middleware short and allocation-light
-* avoid fmt-heavy logs in hot path (structured logs, sampled)
-* avoid maps in response creation when possible
-* avoid reflection-heavy decoding loops
-* keep policy checks O(1)
+```go
+type AppError struct {
+    Code       Code    // e.g., "bad_request", "not_found"
+    Message    string  // Safe message for clients
+    StatusCode int     // HTTP status code
+    Details    any     // Optional structured details
+    Cause      error   // Internal cause (never exposed to clients)
+}
+```
 
-### 13.2 Backpressure and overload control
+**Error codes** (all defined in `internal/core/errors/errors.go`):
 
-* global max in-flight requests gate (semaphore)
-* fast-fail under overload:
+| Code | Typical HTTP Status | Usage |
+|---|---|---|
+| `internal_error` | 500 | Unexpected server errors |
+| `bad_request` | 400 | Validation failures, malformed input |
+| `not_found` | 404 | Resource not found |
+| `method_not_allowed` | 405 | Wrong HTTP method |
+| `unauthorized` | 401 | Missing or invalid authentication |
+| `forbidden` | 403 | Authenticated but insufficient permissions |
+| `too_many_requests` | 429 | Rate limit exceeded |
+| `conflict` | 409 | Unique constraint violation |
+| `timeout` | 504 | Request deadline exceeded |
+| `dependency_unavailable` | 503 | Database/Redis unavailable |
 
-  * return 429 when limiter triggers
-  * return 503 when concurrency gate triggers
-* strict timeouts on downstream calls prevent request pileups
+### 4.2 Error mapping (centralized)
 
-### 13.3 Timeouts (defaults; configurable)
+File: `internal/core/response/response.go`
 
-* server read header timeout (e.g., 5s)
-* request timeout (e.g., 10–15s)
-* DB query timeout (e.g., 2–5s typical)
-* Redis op timeout (e.g., 50–150ms)
+The `response.Error()` function handles all error-to-HTTP mapping:
 
-### 13.4 DB reality check
+1. **`context.DeadlineExceeded`** → 504 with code `timeout`
+2. **`*AppError`** → Uses the error's own `StatusCode`, `Code`, `Message`, and `Details`
+3. **Any other error** → 500 with code `internal_error` and generic message `"internal server error"` (internal details never leaked)
 
-10k RPS with DB writes per request is not a template problem; it’s a system design problem.
-The template supports:
+### 4.3 Response envelope
 
-* caching
-* queue-based async writes (optional addon)
-* read replicas patterns
-* query instrumentation
-  …but DB capacity must be planned per product.
+All responses use a consistent JSON envelope:
 
----
+```json
+{
+  "ok": true,
+  "data": { ... },
+  "request_id": "abc123..."
+}
+```
 
-## 14) Reliability & Resilience
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "bad_request",
+    "message": "name is required",
+    "details": null
+  },
+  "request_id": "abc123..."
+}
+```
 
-### 14.1 Dependency failure behavior
-
-* Redis down:
-
-  * jwt-only endpoints still work
-  * strict auth endpoints fail closed (behavior configurable: 401 vs 503)
-  * cache policies fail open (bypass cache) by default unless configured otherwise
-* DB down:
-
-  * readiness fails
-  * endpoints return typed dependency-unavailable errors
-
-### 14.2 Graceful shutdown
-
-* stop accepting new requests
-* drain in-flight with deadline
-* stop module workers
-* flush audit/metrics best-effort
-
-### 14.3 Health endpoints
-
-* `/healthz`: process alive
-* `/readyz`: dependency checks + module readiness
-
----
-
-## 15) Observability
-
-### 15.1 Logging
-
-* JSON structured logs
-* request-id on every request
-* configurable sampling to keep overhead low at 10k RPS
-
-### 15.2 Metrics
-
-Prometheus metrics (default):
-
-* request count by route/status
-* latency histograms
-* in-flight
-* limiter rejections
-* cache hit/miss/stale/evictions
-* DB pool stats
-* Redis latency/errors
-
-### 15.3 Tracing (optional addon)
-
-* enabled via config
-* OTel propagation hooks and exporter config
-* keep tracing overhead off by default in very high-RPS services unless needed
-
-### 15.4 Audit (optional addon)
-
-* async, bounded queue
-* sinks: stdout/json/file; expandable later
+Helper functions: `response.OK()`, `response.Created()`, `response.Error()`, `response.JSON()`.
 
 ---
 
-## 16) Configuration System (Addons & Safe Defaults)
+## 5. Dependency wiring
 
-Config is env-driven (12-factor) and supports:
+### 5.1 Postgres
 
-* environment modes (dev/staging/prod)
-* feature toggles (audit, tracing, cache, strict auth default)
-* policy defaults (rate limits, cache TTLs)
+File: `internal/core/db/postgres.go`
 
-Startup config lint:
+- Uses `pgxpool` for connection pooling
+- Configuration parsed from `POSTGRES_URL`; pool parameters from env vars
+- **Startup behavior:** Pool is created, then a startup ping is sent with `POSTGRES_STARTUP_PING_TIMEOUT` (default 3s). If ping fails, startup aborts.
+- **Health check:** Registered in readiness service with `POSTGRES_HEALTH_CHECK_TIMEOUT` (default 1s). Called on `/readyz`.
+- **When disabled:** `deps.Postgres` is nil; modules that need it check for nil and return `dependency_unavailable` (503).
 
-* warns/errors on insecure or risky production settings.
+Pool tuning env vars:
+
+| Env | Default | Description |
+|---|---|---|
+| `POSTGRES_MAX_CONNS` | 10 | Maximum pool connections |
+| `POSTGRES_MIN_CONNS` | 0 | Minimum idle connections |
+| `POSTGRES_CONN_MAX_LIFETIME` | 30m | Max connection age |
+| `POSTGRES_CONN_MAX_IDLE_TIME` | 5m | Max idle time before close |
+
+### 5.2 Redis
+
+File: `internal/core/cache/redis.go`
+
+- Uses `redis.NewClient` with configured timeouts and pool settings
+- **Startup behavior:** Client is created, then startup ping with `REDIS_STARTUP_PING_TIMEOUT` (default 3s). If ping fails, startup aborts.
+- **Health check:** Registered in readiness with `REDIS_HEALTH_CHECK_TIMEOUT` (default 1s).
+- **Fail-open behaviors:**
+  - Rate limiting: If `RATELIMIT_FAIL_OPEN=true` (default), Redis errors allow requests through
+  - Caching: If `CACHE_FAIL_OPEN=true` (default), Redis errors bypass cache (request goes to handler)
+  - Auth (strict mode): If Redis is unreachable, authentication fails (no fail-open for security)
+
+### 5.3 Readiness signals
+
+File: `internal/core/readiness/service.go`
+
+The readiness service aggregates dependency health checks:
+
+- Each dependency is registered with `Add(name, enabled, timeout, checkFn)`
+- `Check(ctx)` returns a `Report` with per-dependency status
+- If any enabled dependency check fails → overall status is `not_ready`
+- Disabled dependencies report `disabled` (not counted as failures)
+
+**`/readyz` response** (HTTP 200 when ready, 503 when not):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "status": "ready",
+    "dependencies": {
+      "postgres": { "status": "ok" },
+      "redis": { "status": "ok" }
+    }
+  }
+}
+```
+
+Error messages are sanitized: `context.DeadlineExceeded` becomes `"timeout"`, all others become `"unavailable"`.
+
+### 5.4 Metrics
+
+File: `internal/core/metrics/metrics.go`
+
+Prometheus metrics registered (namespace: `superapi`):
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `http_requests_total` | Counter | method, route, status | Total HTTP requests |
+| `http_request_duration_seconds` | Histogram | method, route, status | Request latency |
+| `http_in_flight_requests` | Gauge | — | Current in-flight requests |
+| `rate_limit_requests_total` | Counter | route, outcome | Rate limit decisions |
+| `cache_operations_total` | Counter | route, outcome | Cache operations |
+| `ready` | Gauge | — | Service readiness (1=ready, 0=not_ready) |
+| `dependency_ready` | Gauge | dependency, status | Per-dependency readiness |
+| `db_pool_*` | Gauge | — | Postgres pool stats (if enabled) |
+
+Route labels use **low-cardinality route patterns** (e.g., `/api/v1/tenants/{id}`), not raw paths. This prevents metric cardinality explosion.
+
+### 5.5 Tracing
+
+File: `internal/core/tracing/service.go`
+
+- Uses OpenTelemetry SDK with OTLP/gRPC exporter
+- Propagation: W3C `traceparent` + `baggage`
+- One server span per request, named `METHOD /route/pattern`
+- Span attributes: `http.method`, `http.route`, `http.status_code`, `request.id`, `server.address`, `server.port`
+- 5xx responses are recorded as span errors
+- Sampler options: `always_on`, `always_off`, `traceidratio` (default: `traceidratio` at 5%)
+- If OTLP endpoint is unreachable, API still starts; spans are best-effort
+
+### 5.6 Access logging
+
+File: `internal/core/httpx/accesslog.go`
+
+- Structured JSON logs via zerolog
+- **Sampling:** Deterministic hash of request_id against configured sample rate (default 5%). Same request_id always produces the same sample decision.
+- **Always logged regardless of sampling:** 5xx responses, requests exceeding slow threshold
+- **Excluded paths:** `/healthz`, `/readyz`, `/metrics` by default (configurable)
+- **Route labels:** Uses captured route patterns, not raw URL paths
+- **Log level:** Info for normal, Warn for 4xx or slow, Error for 5xx
+- **Security:** Request bodies, Authorization headers, Cookie headers, and query strings are NOT logged
 
 ---
 
-## 17) Testing & Benchmarking
+## 6. Module system
 
-### 17.1 Testing layers
+### 6.1 Module interface
 
-* unit: services, key validation, policy logic
-* integration: DB/Redis + routes
-* contract: error mapping and response envelope stability
+File: `internal/core/app/app.go`
 
-### 17.2 Performance benchmarks included
+```go
+type Module interface {
+    Name() string
+    Register(r httpx.Router) error
+}
+```
 
-* baseline load tests (k6/vegeta)
-* scenarios:
+Optional interface for receiving dependencies:
 
-  * jwt-only 10k RPS
-  * strict auth + redis 10k RPS
-  * cache-heavy route 10k RPS
-  * mixed load
+```go
+type DependencyBinder interface {
+    BindDependencies(*Dependencies)
+}
+```
+
+### 6.2 Module lifecycle
+
+1. Module is listed in `internal/modules/modules.go` (`All()` function)
+2. During `app.New()`:
+   a. If the module implements `DependencyBinder`, `BindDependencies(deps)` is called
+   b. `Register(router)` is called — module registers routes via `router.Handle()`
+3. Module is active for the lifetime of the server
+
+### 6.3 Dependency injection
+
+Modules receive dependencies through `BindDependencies(*app.Dependencies)`. The `Dependencies` struct provides:
+
+| Field | Type | Description |
+|---|---|---|
+| `Postgres` | `*pgxpool.Pool` | Nil if Postgres disabled |
+| `Redis` | `*redis.Client` | Nil if Redis disabled |
+| `Readiness` | `*readiness.Service` | Always available |
+| `Metrics` | `*metrics.Service` | Always available (may be disabled internally) |
+| `Tracing` | `*tracing.Service` | Always available (may be disabled internally) |
+| `Auth` | `auth.Provider` | DisabledProvider if auth disabled |
+| `AuthMode` | `auth.Mode` | Configured auth mode |
+| `RateLimit` | `config.RateLimitConfig` | Rate limit configuration values |
+| `Cache` | `config.CacheConfig` | Cache configuration values |
+| `Limiter` | `ratelimit.Limiter` | Nil if rate limiting disabled |
+| `CacheMgr` | `*cache.Manager` | Nil if caching disabled |
 
 ---
 
-## 18) Implementation Notes (What this template enables)
+## 7. sqlc and transaction helpers
 
-With this architecture, adding a module is:
+### 7.1 Query access
 
-1. create `internal/modules/<name>/`
-2. implement `module.go` + `routes.go` + DTOs + service + repo
-3. register module (or use generator later)
+File: `internal/core/db/queries.go`
 
-You do not reconfigure:
+```go
+// From pool (non-transactional reads)
+q := db.NewQueries(pool)
 
-* auth
-* rate limiting
-* caching
-* error model
-* observability
-* DB/Redis wiring
+// From transaction
+q := db.QueriesFrom(tx)
+q := db.QueriesFromTx(pgxTx)
+```
 
-All are reused and controlled per route via policies.
+The key insight: `sqlcgen.Queries` accepts `DBTX` interface, which both `*pgxpool.Pool` and `pgx.Tx` satisfy. Repositories always receive `*sqlcgen.Queries` and never care whether they're inside a transaction or not.
+
+### 7.2 Transaction helpers
+
+File: `internal/core/db/tx.go`
+
+**`WithTx`** — for write operations that don't return a value:
+
+```go
+err := db.WithTx(ctx, pool, func(q *sqlcgen.Queries) error {
+    _, err := q.CreateTenant(ctx, params)
+    return err
+})
+```
+
+**`WithTxResult`** — for write operations that return a value:
+
+```go
+tenant, err := db.WithTxResult(ctx, pool, func(q *sqlcgen.Queries) (Tenant, error) {
+    row, err := q.CreateTenant(ctx, params)
+    if err != nil {
+        return Tenant{}, err
+    }
+    return fromRow(row), nil
+})
+```
+
+**Transaction semantics:**
+- Begin → run callback → commit on success / rollback on error
+- On panic: rollback (best effort), then re-panic
+- Rollback failures are intentionally swallowed (do not mask callback error)
+- Commit failure is returned when callback succeeds but commit fails
+
+### 7.3 Repository pattern
+
+Repositories accept `*sqlcgen.Queries` and perform data access only. They never start transactions.
+
+```go
+type repository struct {
+    q *sqlcgen.Queries
+}
+
+func NewRepository(q *sqlcgen.Queries) Repository {
+    return &repository{q: q}
+}
+```
+
+Services own transaction boundaries:
+
+```go
+type service struct {
+    pool *pgxpool.Pool
+    repo Repository
+}
+
+// Read path: repo uses queries bound to pool directly
+func (s *service) GetByID(ctx context.Context, id string) (Tenant, error) {
+    return s.repo.GetByID(ctx, id)
+}
+
+// Write path: service wraps in transaction
+func (s *service) Create(ctx context.Context, req Request) (Result, error) {
+    return db.WithTxResult(ctx, s.pool, func(q *sqlcgen.Queries) (Result, error) {
+        return NewRepository(q).Create(ctx, input)
+    })
+}
+```
 
 ---
 
+## 8. Typed JSON handler adapter
+
+File: `internal/core/httpx/typedjson.go`
+
+The `httpx.JSON[Req, Resp]()` adapter converts a typed function into an `http.Handler`:
+
+```go
+func JSON[Req any, Resp any](fn JSONHandlerFunc[Req, Resp]) http.Handler
+```
+
+Where `JSONHandlerFunc` is:
+
+```go
+type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp, error)
+```
+
+**What it does automatically:**
+
+1. Limits body to 1 MiB
+2. Decodes JSON with `DisallowUnknownFields()` (strict)
+3. Rejects multiple JSON values in body
+4. Calls `Validate()` if request implements `Validatable` interface
+5. On success: writes `response.OK(w, resp, requestID)`
+6. On error: maps through `response.Error()` (AppError passthrough, internal sanitized)
+
+**Decode error mapping:**
+
+| Condition | AppError |
+|---|---|
+| Empty body | `bad_request`: "request body is required" |
+| Body too large | `bad_request`: "request body too large" |
+| Syntax error | `bad_request`: "malformed JSON body" |
+| Type mismatch | `bad_request`: "invalid JSON field type" |
+| Unknown field | `bad_request`: "unknown field in request body" |
+| Multiple objects | `bad_request`: "request body must contain a single JSON object" |
+
+---
+
+## 9. Production notes
+
+### Failure modes
+
+| Dependency down | Behavior |
+|---|---|
+| Postgres unreachable at startup | **Startup fails** (fail-fast) |
+| Postgres unreachable at runtime | `/readyz` returns 503; DB-dependent endpoints return 503 (`dependency_unavailable`) |
+| Redis unreachable at startup | **Startup fails** (fail-fast) if Redis is enabled |
+| Redis unreachable at runtime | Rate limiting: fail-open by default (requests pass through). Caching: fail-open by default (bypass cache). Auth (strict mode): fails closed (401). `/readyz` returns 503. |
+| Tracing endpoint unreachable | Startup succeeds; spans are lost silently |
+
+### Security considerations
+
+- Internal errors are never leaked to clients (centralized sanitization in `response.Error()`)
+- Bearer tokens are never stored in rate limit keys (SHA-256 hash prefix only)
+- Request bodies and auth headers are never logged
+- Cache keys never contain raw tokens, IPs, or full query strings
+- `Set-Cookie` responses are never cached
+- Authenticated responses are bypassed from cache unless explicitly configured with vary-by dimensions
+- Tenant mismatch returns 404 (not 403) to prevent tenant enumeration
+
+### Cardinality safety
+
+- Route labels in metrics and logs use chi route patterns (e.g., `/api/v1/tenants/{id}`), not raw paths
+- Rate limit keys use low-cardinality scopes (`ip`, `user`, `tenant`, `token`, `anon`)
+- Cache keys use route pattern + selected vary dimensions + query param hash — not raw URLs
+- Access logs are sampled by default (5%) with always-log exceptions for errors and slow requests

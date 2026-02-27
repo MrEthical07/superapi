@@ -1,15 +1,48 @@
-# api-template
+# SuperAPI
 
-A security-first, high-performance Go API template for SaaS projects.
+A security-first, high-performance Go API template for multi-tenant SaaS projects.
 
 ## Requirements
+
 - Go 1.26+
+- PostgreSQL 15+ (optional, enable via `POSTGRES_ENABLED=true`)
+- Redis 7+ (optional, enable via `REDIS_ENABLED=true`)
 
 ## Quick start
+
 ```bash
 go test ./...
-go run .
+go run ./cmd/api
 ```
+
+## Where to start
+
+| Goal | Read |
+|---|---|
+| Understand the project | [docs/overview.md](docs/overview.md) |
+| Learn the architecture | [docs/architecture.md](docs/architecture.md) |
+| Day-to-day dev workflows | [docs/workflows.md](docs/workflows.md) |
+| Build a new module | [docs/modules.md](docs/modules.md) |
+| Full CRUD walkthrough | [docs/crud-examples.md](docs/crud-examples.md) |
+| Route policies (auth, rate limit, cache) | [docs/policies.md](docs/policies.md) |
+| Cache deep dive | [docs/cache-guide.md](docs/cache-guide.md) |
+| Auth & goAuth integration | [docs/auth-goauth.md](docs/auth-goauth.md) |
+
+## Feature toggles
+
+All major subsystems are opt-in via environment variables:
+
+| Feature | Env var | Default |
+|---|---|---|
+| PostgreSQL | `POSTGRES_ENABLED` | `false` |
+| Redis | `REDIS_ENABLED` | `false` |
+| Authentication | `AUTH_ENABLED` | `false` |
+| Rate limiting | `RATELIMIT_ENABLED` | `false` |
+| Response caching | `CACHE_ENABLED` | `false` |
+| Prometheus metrics | `METRICS_ENABLED` | `true` |
+| OpenTelemetry tracing | `TRACING_ENABLED` | `false` |
+
+Dependencies: Auth, rate limiting, and caching all require Redis. Auth and rate limiting require Postgres for session/token storage.
 
 ## HTTP middleware config
 
