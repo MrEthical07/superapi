@@ -386,3 +386,53 @@ The first DB-backed reference module is available at:
 - `GET /api/v1/tenants?limit=50`
 
 It demonstrates the module pattern with typed handlers, service/repo separation, sqlc queries, and transactional create flow.
+
+## Module scaffolder (DX)
+
+Generate a fully wired module skeleton with one command:
+
+```bash
+make module name=projects
+```
+
+Optional overwrite of existing module folder:
+
+```bash
+make module name=projects force=1
+```
+
+Behavior:
+
+- Creates `internal/modules/<package>/` with:
+	- `module.go`, `routes.go`, `dto.go`, `handler.go`, `service.go`, `repo.go`
+	- `handler_test.go`, `service_test.go`
+- Adds package import + module `New()` entry to module registry (`internal/modules/modules.go`).
+- Registry updates are idempotent (no duplicate imports/entries).
+- Without `force`, generation fails when target module directory already exists.
+
+Name normalization rules:
+
+- Input must be lowercase and may contain: `a-z`, `0-9`, `-`, `_`.
+- Must start with a letter.
+- Package/folder normalization: snake_case.
+- Route normalization: kebab-case under `/api/v1/<route>`.
+
+Examples:
+
+- `projects` -> package `projects`, route `/api/v1/projects`
+- `project_tasks` -> package `project_tasks`, route `/api/v1/project-tasks`
+- `project-tasks` -> package `project_tasks`, route `/api/v1/project-tasks`
+
+Generated default route:
+
+- `GET /api/v1/<module>/ping` returns envelope data:
+	- `{ "status": "ok", "module": "<module>" }`
+
+Policy guidance in generated routes:
+
+- Includes a minimal policy slot (`policy.Noop()`).
+- Includes commented examples showing where to attach:
+	- `AuthRequired`
+	- `RateLimit`
+	- `CacheRead`
+	- `TenantRequired` / tenant scope policies

@@ -270,7 +270,7 @@ func TestCacheReadFailClosedOnRedisError(t *testing.T) {
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d want=%d", rr.Code, http.StatusInternalServerError)
 	}
-	if !strings.Contains(rr.Body.String(), `"code":"internal"`) {
+	if !strings.Contains(rr.Body.String(), `"code":"internal_error"`) {
 		t.Fatalf("unexpected body: %s", rr.Body.String())
 	}
 }

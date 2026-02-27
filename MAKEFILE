@@ -3,7 +3,7 @@ SQLC ?= sqlc
 MIGRATE ?= migrate
 DB_URL ?=
 
-.PHONY: fmt vet test tidy run sqlc-generate migrate-create migrate-up migrate-down migrate-version
+.PHONY: fmt vet test tidy run sqlc-generate migrate-create migrate-up migrate-down migrate-version module
 
 fmt:
 	$(GO) fmt ./...
@@ -38,3 +38,6 @@ migrate-down:
 migrate-version:
 	@if [ -z "$(DB_URL)" ]; then echo "DB_URL is required"; exit 1; fi
 	POSTGRES_ENABLED=true POSTGRES_URL="$(DB_URL)" $(GO) run ./cmd/migrate version
+
+module:
+	$(GO) run ./cmd/modulegen --name "$(name)" --force "$(force)"
