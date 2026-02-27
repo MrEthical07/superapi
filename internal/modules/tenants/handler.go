@@ -8,6 +8,7 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/response"
+	"github.com/MrEthical07/superapi/internal/core/tenant"
 )
 
 type Handler struct {
@@ -81,6 +82,26 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		Count: len(out),
 		Limit: int(limit),
 	}, httpx.RequestIDFromContext(r.Context()))
+}
+
+func (h *Handler) GetSelf(w http.ResponseWriter, r *http.Request) {
+	if h.svc == nil {
+		response.Error(w, apperr.New(apperr.CodeDependencyFailure, 503, "database is not configured"), httpx.RequestIDFromContext(r.Context()))
+		return
+	}
+
+	tenantID, ok := tenant.TenantIDFromContext(r.Context())
+	if !ok {
+		response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), httpx.RequestIDFromContext(r.Context()))
+		return
+	}
+
+	tn, err := h.svc.GetByID(r.Context(), tenantID)
+	if err != nil {
+		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
+		return
+	}
+	response.OK(w, toTenantResponse(tn), httpx.RequestIDFromContext(r.Context()))
 }
 
 func toTenantResponse(t Tenant) tenantResponse {

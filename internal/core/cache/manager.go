@@ -193,7 +193,7 @@ func (m *Manager) TagVersionToken(ctx context.Context, tags []string) (string, e
 
 	parts := make([]string, 0, len(tags))
 	for i, tag := range tags {
-		version := int64(1)
+		version := int64(0)
 		if i < len(vals) && vals[i] != nil {
 			switch n := vals[i].(type) {
 			case string:

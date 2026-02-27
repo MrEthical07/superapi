@@ -296,7 +296,7 @@ func TestCacheInvalidateNoopWithoutSuccessStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TagVersionToken() error = %v", err)
 	}
-	if token != "tenant=1" {
-		t.Fatalf("token=%q want=%q", token, "tenant=1")
+	if token != "tenant=0" {
+		t.Fatalf("token=%q want=%q", token, "tenant=0")
 	}
 }

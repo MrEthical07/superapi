@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 )
 
@@ -95,5 +96,44 @@ func TestRoutesRegistered(t *testing.T) {
 
 	if rr.Code == http.StatusNotFound {
 		t.Fatalf("expected tenants route to be registered")
+	}
+}
+
+func TestHandlerGetSelfDependencyUnavailable(t *testing.T) {
+	h := NewHandler(nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/self", nil)
+	req = req.WithContext(auth.WithContext(req.Context(), auth.AuthContext{UserID: "u1", TenantID: "tenant_1"}))
+	rr := httptest.NewRecorder()
+
+	h.GetSelf(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(rr.Body.String(), `"code":"dependency_unavailable"`) {
+		t.Fatalf("unexpected body: %s", rr.Body.String())
+	}
+}
+
+func TestHandlerGetSelfSuccess(t *testing.T) {
+	now := time.Now().UTC()
+	h := NewHandler(&fakeService{getFn: func(ctx context.Context, id string) (Tenant, error) {
+		if id != "tenant_1" {
+			t.Fatalf("id=%q want=%q", id, "tenant_1")
+		}
+		return Tenant{ID: "tenant_1", Slug: "acme", Name: "Acme", Status: "active", CreatedAt: now, UpdatedAt: now}, nil
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/self", nil)
+	req = req.WithContext(auth.WithContext(req.Context(), auth.AuthContext{UserID: "u1", TenantID: "tenant_1"}))
+	rr := httptest.NewRecorder()
+
+	h.GetSelf(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusOK)
+	}
+	if !strings.Contains(rr.Body.String(), `"id":"tenant_1"`) {
+		t.Fatalf("unexpected body: %s", rr.Body.String())
 	}
 }

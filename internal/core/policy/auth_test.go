@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/MrEthical07/superapi/internal/core/auth"
 )
 
@@ -143,5 +145,131 @@ func TestAuthRequiredNoSecretLeakOnFailure(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "very-secret") {
 		t.Fatalf("response leaked secret: %s", rr.Body.String())
+	}
+}
+
+func TestRequireAnyPermForbiddenWhenMissingAll(t *testing.T) {
+	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Permissions: []string{"a.read"}}}
+
+	h := Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		AuthRequired(provider, auth.ModeHybrid),
+		RequireAnyPerm("a.write", "a.admin"),
+	)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusForbidden)
+	}
+}
+
+func TestRequireAnyPermAllowsWhenAnyPresent(t *testing.T) {
+	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Permissions: []string{"a.read", "a.write"}}}
+
+	h := Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		AuthRequired(provider, auth.ModeHybrid),
+		RequireAnyPerm("a.write", "a.admin"),
+	)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestTenantRequiredUnauthorizedWhenMissingAuth(t *testing.T) {
+	h := Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		TenantRequired(),
+	)
+
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/secure", nil))
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestTenantRequiredForbiddenWhenTenantMissing(t *testing.T) {
+	h := Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		TenantRequired(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
+	req = req.WithContext(auth.WithContext(req.Context(), auth.AuthContext{UserID: "u1"}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusForbidden)
+	}
+}
+
+func TestTenantMatchFromPathPassesOnMatch(t *testing.T) {
+	r := chi.NewRouter()
+	r.With(TenantMatchFromPath("id")).Get("/api/v1/tenants/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
+	req = req.WithContext(auth.WithContext(req.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"}))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestTenantMatchFromPathReturnsNotFoundOnMismatch(t *testing.T) {
+	r := chi.NewRouter()
+	r.With(TenantMatchFromPath("id")).Get("/api/v1/tenants/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t2", nil)
+	req = req.WithContext(auth.WithContext(req.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"}))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusNotFound)
+	}
+}
+
+func TestTenantMatchFromPathReturnsBadRequestOnMissingParam(t *testing.T) {
+	h := Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		TenantMatchFromPath("id"),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+	req = req.WithContext(auth.WithContext(req.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusBadRequest)
 	}
 }

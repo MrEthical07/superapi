@@ -102,6 +102,53 @@ Current route usage example:
 - `GET /api/v1/tenants/{id}` uses `CacheRead` with `TTL=30s`, tag `tenant`, and path param vary `id`.
 - `POST /api/v1/tenants` uses `CacheInvalidate` and bumps tag `tenant`.
 
+## Tenant scope + RBAC policy helpers
+
+Tenant isolation helpers are provided as route policies so checks stay centralized and hard to forget.
+
+Core helper package:
+
+- `internal/core/tenant`
+	- `TenantIDFromContext(ctx)`
+	- `RequireTenant(ctx)`
+	- `IsSameTenant(principalTenant, resourceTenant)`
+
+Policy helpers:
+
+- `policy.TenantRequired()`
+	- Requires auth context and non-empty `tenant_id`.
+	- Missing auth context -> `401 unauthorized`.
+	- Auth present but missing tenant scope -> `403 forbidden`.
+- `policy.TenantMatchFromPath(paramName)`
+	- Compares path tenant id (via `httpx.URLParam`) with principal `tenant_id`.
+	- Missing path param -> `400 bad_request`.
+	- Mismatch -> `404 not_found` (chosen to reduce tenant enumeration risk).
+
+RBAC helpers:
+
+- `policy.RequireRole(...)`: any-of roles.
+- `policy.RequirePerm(...)`: all-of permissions.
+- `policy.RequireAnyPerm(...)`: any-of permissions.
+
+RBAC status rules:
+
+- Missing auth context -> `401 unauthorized`.
+- Authenticated but missing required role/permission -> `403 forbidden`.
+
+Recommended attachment order for tenant-scoped routes:
+
+1. `AuthRequired(...)`
+2. `TenantRequired()`
+3. `TenantMatchFromPath("tenant_id")` (for routes containing tenant id in path)
+4. RBAC checks (`RequireRole` / `RequirePerm` / `RequireAnyPerm`) as needed.
+
+Demonstration endpoint:
+
+- `GET /api/v1/tenants/self`
+	- Protected by `AuthRequired` + `TenantRequired`.
+	- Resolves tenant id from principal context and fetches tenant by id.
+	- When DB is disabled, returns `dependency_unavailable`.
+
 Notes:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` must be `>= 0`.
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be a valid duration and `>= 0`.
