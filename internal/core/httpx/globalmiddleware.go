@@ -5,6 +5,7 @@ import (
 
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/logx"
+	"github.com/MrEthical07/superapi/internal/core/tracing"
 )
 
 // AssembleGlobalMiddleware wraps a base handler with configured global middleware.
@@ -15,14 +16,16 @@ import (
 //  3. SecurityHeaders (if enabled)
 //  4. MaxBodyBytes (if enabled)
 //  5. RequestTimeout (if enabled)
-//  6. AccessLog (if enabled)
+//  6. Tracing (if enabled)
+//  7. AccessLog (if enabled)
 //
 // This order keeps request_id available in recover logs, and keeps recoverer
 // around downstream middleware/handlers.
-func AssembleGlobalMiddleware(base http.Handler, cfg config.HTTPMiddlewareConfig, log *logx.Logger) http.Handler {
+func AssembleGlobalMiddleware(base http.Handler, cfg config.HTTPMiddlewareConfig, log *logx.Logger, tracingSvc *tracing.Service) http.Handler {
 	handler := base
 
 	handler = AccessLog(cfg.AccessLog, log)(handler)
+	handler = Tracing(tracingSvc)(handler)
 	handler = RequestTimeout(cfg.RequestTimeout)(handler)
 
 	if cfg.MaxBodyBytes > 0 {

@@ -12,6 +12,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/db"
 	"github.com/MrEthical07/superapi/internal/core/metrics"
 	"github.com/MrEthical07/superapi/internal/core/readiness"
+	"github.com/MrEthical07/superapi/internal/core/tracing"
 )
 
 type Dependencies struct {
@@ -19,6 +20,7 @@ type Dependencies struct {
 	Redis     *redis.Client
 	Readiness *readiness.Service
 	Metrics   *metrics.Service
+	Tracing   *tracing.Service
 }
 
 type DependencyBinder interface {
@@ -71,6 +73,18 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	}
 	deps.Metrics = metricsSvc
 
+	tracingSvc, err := tracing.New(ctx, cfg.Tracing, cfg.Env)
+	if err != nil {
+		if deps.Redis != nil {
+			_ = deps.Redis.Close()
+		}
+		if deps.Postgres != nil {
+			deps.Postgres.Close()
+		}
+		return nil, fmt.Errorf("init tracing: %w", err)
+	}
+	deps.Tracing = tracingSvc
+
 	return deps, nil
 }
 
@@ -86,5 +100,12 @@ func (a *App) closeDependencies() {
 	}
 	if a.deps.Postgres != nil {
 		a.deps.Postgres.Close()
+	}
+	if a.deps.Tracing != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.HTTP.ShutdownTimeout)
+		defer cancel()
+		if err := a.deps.Tracing.Shutdown(shutdownCtx); err != nil {
+			a.log.Error().Err(err).Msg("tracing shutdown error")
+		}
 	}
 }

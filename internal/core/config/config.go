@@ -17,6 +17,7 @@ type Config struct {
 	Postgres    PostgresConfig
 	Redis       RedisConfig
 	Metrics     MetricsConfig
+	Tracing     TracingConfig
 }
 
 // LogConfig holds structured logging configuration.
@@ -86,6 +87,16 @@ type MetricsConfig struct {
 	Path    string
 }
 
+type TracingConfig struct {
+	Enabled      bool
+	ServiceName  string
+	Exporter     string
+	OTLPEndpoint string
+	Sampler      string
+	SampleRatio  float64
+	Insecure     bool
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		Env:         getenv("APP_ENV", "dev"),
@@ -145,6 +156,19 @@ func Load() (*Config, error) {
 			Enabled: getBool("METRICS_ENABLED", true),
 			Path:    getenv("METRICS_PATH", "/metrics"),
 		},
+		Tracing: TracingConfig{
+			Enabled:      getBool("TRACING_ENABLED", false),
+			ServiceName:  getenv("TRACING_SERVICE_NAME", ""),
+			Exporter:     getenv("TRACING_EXPORTER", "otlpgrpc"),
+			OTLPEndpoint: getenv("TRACING_OTLP_ENDPOINT", "localhost:4317"),
+			Sampler:      getenv("TRACING_SAMPLER", "traceidratio"),
+			SampleRatio:  getFloat64("TRACING_SAMPLE_RATIO", 0.05),
+			Insecure:     getBool("TRACING_INSECURE", true),
+		},
+	}
+
+	if cfg.Tracing.ServiceName == "" {
+		cfg.Tracing.ServiceName = cfg.ServiceName
 	}
 
 	return cfg, nil
@@ -257,6 +281,27 @@ func (c *Config) Lint() error {
 	if c.Metrics.Path[0] != '/' {
 		return fmt.Errorf("metrics path must start with '/'")
 	}
+	if c.Tracing.Enabled {
+		if c.Tracing.ServiceName == "" {
+			return fmt.Errorf("tracing service name cannot be empty when enabled")
+		}
+		if c.Tracing.OTLPEndpoint == "" {
+			return fmt.Errorf("tracing otlp endpoint cannot be empty when enabled")
+		}
+		switch c.Tracing.Exporter {
+		case "otlpgrpc":
+		default:
+			return fmt.Errorf("invalid tracing exporter: %q (valid: otlpgrpc)", c.Tracing.Exporter)
+		}
+		switch c.Tracing.Sampler {
+		case "always_on", "always_off", "traceidratio":
+		default:
+			return fmt.Errorf("invalid tracing sampler: %q (valid: always_on, always_off, traceidratio)", c.Tracing.Sampler)
+		}
+		if c.Tracing.SampleRatio < 0 || c.Tracing.SampleRatio > 1 {
+			return fmt.Errorf("tracing sample ratio must be in [0,1]")
+		}
+	}
 
 	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_REQUEST_ID_ENABLED"); ok {
 		if _, err := strconv.ParseBool(v); err != nil {
@@ -353,6 +398,15 @@ func (c *Config) Lint() error {
 		return err
 	}
 	if err := lintBoolEnv("METRICS_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("TRACING_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintFloat64Env("TRACING_SAMPLE_RATIO"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("TRACING_INSECURE"); err != nil {
 		return err
 	}
 

@@ -147,6 +147,47 @@ When Postgres is enabled, these pool gauges are also exported:
 - `superapi_db_pool_total_connections`
 - `superapi_db_pool_max_connections`
 
+## Tracing
+
+OpenTelemetry tracing hooks are available and disabled by default.
+
+Configuration:
+
+- `TRACING_ENABLED` (default: `false`)
+- `TRACING_SERVICE_NAME` (default: `APP_SERVICE_NAME`)
+- `TRACING_EXPORTER` (default: `otlpgrpc`)
+- `TRACING_OTLP_ENDPOINT` (default: `localhost:4317`)
+- `TRACING_SAMPLER` (default: `traceidratio`; options: `always_on`, `always_off`, `traceidratio`)
+- `TRACING_SAMPLE_RATIO` (default: `0.05`, used by `traceidratio`)
+- `TRACING_INSECURE` (default: `true`)
+
+Behavior:
+
+- Uses W3C `traceparent` + baggage propagation.
+- Creates one server span per request.
+- Span name uses low-cardinality route patterns (for example, `GET /api/v1/tenants/{id}`), not raw paths.
+- Adds attributes: `http.method`, `http.route`, `http.status_code`, optional `server.address`/`server.port`, and `request.id`.
+- Does not capture request/response bodies, query strings, or sensitive headers.
+
+Middleware order (outermost → innermost):
+
+- RequestID → Recoverer → SecurityHeaders → MaxBodyBytes → RequestTimeout → Tracing → AccessLog → Router
+
+Example enablement:
+
+```bash
+TRACING_ENABLED=true \
+TRACING_EXPORTER=otlpgrpc \
+TRACING_OTLP_ENDPOINT=localhost:4317 \
+TRACING_SAMPLER=traceidratio \
+TRACING_SAMPLE_RATIO=0.05 \
+go run ./cmd/api
+```
+
+Operational note:
+
+- If exporter endpoint is unreachable, API startup still succeeds; spans are best-effort and tracer provider shutdown is attempted during app shutdown.
+
 ## Database migrations and sqlc baseline
 
 The template uses:

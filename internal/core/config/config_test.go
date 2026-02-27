@@ -121,3 +121,42 @@ func TestLintRejectsMiddlewareTimeoutExceedingWriteTimeout(t *testing.T) {
 		t.Fatalf("expected lint error for middleware timeout > write timeout")
 	}
 }
+
+func TestTracingDefaultsToDisabled(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Tracing.Enabled {
+		t.Fatalf("expected tracing to be disabled by default")
+	}
+}
+
+func TestLintRejectsInvalidTracingSamplerWhenEnabled(t *testing.T) {
+	t.Setenv("TRACING_ENABLED", "true")
+	t.Setenv("TRACING_SAMPLER", "invalid")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for invalid tracing sampler")
+	}
+}
+
+func TestLintRejectsInvalidTracingSampleRatioWhenEnabled(t *testing.T) {
+	t.Setenv("TRACING_ENABLED", "true")
+	t.Setenv("TRACING_SAMPLE_RATIO", "1.5")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for invalid tracing sample ratio")
+	}
+}

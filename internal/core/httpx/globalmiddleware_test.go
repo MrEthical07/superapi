@@ -30,7 +30,7 @@ func TestAssembleGlobalMiddleware_RecovererUsesRequestID(t *testing.T) {
 	h := AssembleGlobalMiddleware(base, config.HTTPMiddlewareConfig{
 		RequestIDEnabled: true,
 		RecovererEnabled: true,
-	}, testLogger(t))
+	}, testLogger(t), nil)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
@@ -54,7 +54,7 @@ func TestAssembleGlobalMiddleware_SecurityHeaders(t *testing.T) {
 
 	h := AssembleGlobalMiddleware(base, config.HTTPMiddlewareConfig{
 		SecurityHeadersEnabled: true,
-	}, testLogger(t))
+	}, testLogger(t), nil)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -83,7 +83,7 @@ func TestAssembleGlobalMiddleware_MaxBodyBytes(t *testing.T) {
 
 	h := AssembleGlobalMiddleware(base, config.HTTPMiddlewareConfig{
 		MaxBodyBytes: 8,
-	}, testLogger(t))
+	}, testLogger(t), nil)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("0123456789"))
@@ -101,7 +101,7 @@ func TestAssembleGlobalMiddleware_MaxBodyBytes_DoesNotBreakGet(t *testing.T) {
 
 	h := AssembleGlobalMiddleware(base, config.HTTPMiddlewareConfig{
 		MaxBodyBytes: 1,
-	}, testLogger(t))
+	}, testLogger(t), nil)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -120,7 +120,7 @@ func TestAssembleGlobalMiddleware_RequestTimeout(t *testing.T) {
 	h := AssembleGlobalMiddleware(base, config.HTTPMiddlewareConfig{
 		RequestIDEnabled: true,
 		RequestTimeout:   20 * time.Millisecond,
-	}, testLogger(t))
+	}, testLogger(t), nil)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/slow", nil)
