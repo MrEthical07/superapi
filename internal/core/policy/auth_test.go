@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/MrEthical07/superapi/internal/core/auth"
-	"github.com/MrEthical07/superapi/internal/core/httpx"
 )
 
 type mockProvider struct {
@@ -29,13 +28,13 @@ func (m mockProvider) Authenticate(ctx context.Context, token string, mode auth.
 
 func TestAuthRequiredMissingTokenUnauthorized(t *testing.T) {
 	handlerCalled := false
-	h := httpx.RequestID(Chain(
+	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handlerCalled = true
 			w.WriteHeader(http.StatusOK)
 		}),
 		AuthRequired(mockProvider{}, auth.ModeHybrid),
-	))
+	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
@@ -55,7 +54,7 @@ func TestAuthRequiredMissingTokenUnauthorized(t *testing.T) {
 func TestAuthRequiredValidTokenInjectsContext(t *testing.T) {
 	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", TenantID: "t1", Role: "admin", Permissions: []string{"system.whoami"}}}
 
-	h := httpx.RequestID(Chain(
+	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, ok := auth.FromContext(r.Context())
 			if !ok {
@@ -67,7 +66,7 @@ func TestAuthRequiredValidTokenInjectsContext(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}),
 		AuthRequired(provider, auth.ModeHybrid),
-	))
+	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
@@ -82,13 +81,13 @@ func TestAuthRequiredValidTokenInjectsContext(t *testing.T) {
 func TestRequirePermForbiddenWhenMissing(t *testing.T) {
 	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Permissions: []string{"a.read"}}}
 
-	h := httpx.RequestID(Chain(
+	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
 		AuthRequired(provider, auth.ModeHybrid),
 		RequirePerm("a.write"),
-	))
+	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
@@ -106,13 +105,13 @@ func TestRequirePermForbiddenWhenMissing(t *testing.T) {
 func TestRequireRoleForbiddenWhenMissing(t *testing.T) {
 	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Role: "viewer"}}
 
-	h := httpx.RequestID(Chain(
+	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
 		AuthRequired(provider, auth.ModeHybrid),
 		RequireRole("admin"),
-	))
+	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
@@ -127,12 +126,12 @@ func TestRequireRoleForbiddenWhenMissing(t *testing.T) {
 func TestAuthRequiredNoSecretLeakOnFailure(t *testing.T) {
 	provider := mockProvider{err: errors.New("token signature mismatch: very-secret")}
 
-	h := httpx.RequestID(Chain(
+	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
 		AuthRequired(provider, auth.ModeHybrid),
-	))
+	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)

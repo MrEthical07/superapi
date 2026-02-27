@@ -187,3 +187,31 @@ func TestLintRejectsAuthEnabledWithoutRedis(t *testing.T) {
 		t.Fatalf("expected lint error for auth enabled without redis")
 	}
 }
+
+func TestLintRejectsRateLimitEnabledWithoutRedis(t *testing.T) {
+	t.Setenv("RATELIMIT_ENABLED", "true")
+	t.Setenv("REDIS_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for ratelimit enabled without redis")
+	}
+}
+
+func TestLintRejectsInvalidRateLimitDefaults(t *testing.T) {
+	t.Setenv("RATELIMIT_DEFAULT_LIMIT", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.Redis.Enabled = true
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for invalid ratelimit default limit")
+	}
+}

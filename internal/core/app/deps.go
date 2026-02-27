@@ -12,6 +12,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/db"
 	"github.com/MrEthical07/superapi/internal/core/metrics"
+	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 	"github.com/MrEthical07/superapi/internal/core/readiness"
 	"github.com/MrEthical07/superapi/internal/core/tracing"
 )
@@ -24,6 +25,8 @@ type Dependencies struct {
 	Tracing   *tracing.Service
 	Auth      auth.Provider
 	AuthMode  auth.Mode
+	RateLimit config.RateLimitConfig
+	Limiter   ratelimit.Limiter
 	authClose func()
 }
 
@@ -34,6 +37,7 @@ type DependencyBinder interface {
 func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, error) {
 	deps := &Dependencies{
 		Readiness: readiness.NewService(),
+		RateLimit: cfg.RateLimit,
 	}
 
 	if cfg.Postgres.Enabled {
@@ -103,6 +107,29 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 		}
 		deps.Auth = provider
 		deps.authClose = closeFn
+	}
+
+	if cfg.RateLimit.Enabled {
+		limiter, err := ratelimit.NewRedisLimiter(deps.Redis, ratelimit.Config{
+			Env:      cfg.Env,
+			FailOpen: cfg.RateLimit.FailOpen,
+			Observe: func(route string, outcome ratelimit.Outcome) {
+				if deps.Metrics == nil {
+					return
+				}
+				deps.Metrics.ObserveRateLimit(route, string(outcome))
+			},
+		})
+		if err != nil {
+			if deps.Redis != nil {
+				_ = deps.Redis.Close()
+			}
+			if deps.Postgres != nil {
+				deps.Postgres.Close()
+			}
+			return nil, fmt.Errorf("init rate limiter: %w", err)
+		}
+		deps.Limiter = limiter
 	}
 
 	tracingSvc, err := tracing.New(ctx, cfg.Tracing, cfg.Env)

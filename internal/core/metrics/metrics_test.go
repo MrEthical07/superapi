@@ -116,6 +116,25 @@ func TestObserveReadinessUpdatesGauges(t *testing.T) {
 	)
 }
 
+func TestObserveRateLimitIncrementsCounter(t *testing.T) {
+	svc, err := New(config.MetricsConfig{Enabled: true, Path: "/metrics"}, nil)
+	if err != nil {
+		t.Fatalf("new metrics service: %v", err)
+	}
+
+	svc.ObserveRateLimit("/api/v1/system/whoami", "allowed")
+	svc.ObserveRateLimit("/api/v1/system/whoami", "blocked")
+
+	assertMetricValue(t, svc, "superapi_rate_limit_requests_total",
+		map[string]string{"route": "/api/v1/system/whoami", "outcome": "allowed"},
+		1,
+	)
+	assertMetricValue(t, svc, "superapi_rate_limit_requests_total",
+		map[string]string{"route": "/api/v1/system/whoami", "outcome": "blocked"},
+		1,
+	)
+}
+
 func assertMetricValue(t *testing.T, svc *Service, metricName string, labels map[string]string, expected float64) {
 	t.Helper()
 

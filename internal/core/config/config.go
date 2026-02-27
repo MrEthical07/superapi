@@ -15,6 +15,7 @@ type Config struct {
 	HTTP        HTTPConfig
 	Log         LogConfig
 	Auth        AuthConfig
+	RateLimit   RateLimitConfig
 	Postgres    PostgresConfig
 	Redis       RedisConfig
 	Metrics     MetricsConfig
@@ -24,6 +25,13 @@ type Config struct {
 type AuthConfig struct {
 	Enabled bool
 	Mode    string
+}
+
+type RateLimitConfig struct {
+	Enabled       bool
+	FailOpen      bool
+	DefaultLimit  int
+	DefaultWindow time.Duration
 }
 
 // LogConfig holds structured logging configuration.
@@ -139,6 +147,12 @@ func Load() (*Config, error) {
 			Enabled: getBool("AUTH_ENABLED", false),
 			Mode:    getenv("AUTH_MODE", "hybrid"),
 		},
+		RateLimit: RateLimitConfig{
+			Enabled:       getBool("RATELIMIT_ENABLED", false),
+			FailOpen:      getBool("RATELIMIT_FAIL_OPEN", true),
+			DefaultLimit:  getInt("RATELIMIT_DEFAULT_LIMIT", 10),
+			DefaultWindow: getDuration("RATELIMIT_DEFAULT_WINDOW", time.Minute),
+		},
 		Postgres: PostgresConfig{
 			Enabled:            getBool("POSTGRES_ENABLED", false),
 			URL:                getenv("POSTGRES_URL", ""),
@@ -230,6 +244,15 @@ func (c *Config) Lint() error {
 	}
 	if c.Auth.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("auth enabled requires redis enabled")
+	}
+	if c.RateLimit.Enabled && !c.Redis.Enabled {
+		return fmt.Errorf("ratelimit enabled requires redis enabled")
+	}
+	if c.RateLimit.DefaultLimit <= 0 {
+		return fmt.Errorf("ratelimit default limit must be > 0")
+	}
+	if c.RateLimit.DefaultWindow <= 0 {
+		return fmt.Errorf("ratelimit default window must be > 0")
 	}
 
 	for _, p := range c.HTTP.Middleware.AccessLog.ExcludePaths {
@@ -357,6 +380,18 @@ func (c *Config) Lint() error {
 		return err
 	}
 	if err := lintBoolEnv("AUTH_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("RATELIMIT_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("RATELIMIT_FAIL_OPEN"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("RATELIMIT_DEFAULT_LIMIT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("RATELIMIT_DEFAULT_WINDOW"); err != nil {
 		return err
 	}
 	if err := lintFloat64Env("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE"); err != nil {

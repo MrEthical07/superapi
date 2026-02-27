@@ -44,6 +44,28 @@ Notes:
 	- Without bearer token: returns `401`.
 	- With valid token and provider validation: returns safe principal fields (`user_id`, `tenant_id`, `role`, `permissions`).
 
+## Rate limit policy (Redis-backed)
+
+Route-level rate limiting is available through policy wrappers and is Redis-backed using an atomic Lua script.
+
+Configuration:
+
+- `RATELIMIT_ENABLED` (default: `false`)
+- `RATELIMIT_FAIL_OPEN` (default: `true`)
+- `RATELIMIT_DEFAULT_LIMIT` (default: `10`)
+- `RATELIMIT_DEFAULT_WINDOW` (default: `1m`)
+
+Notes:
+
+- `RATELIMIT_ENABLED=true` requires `REDIS_ENABLED=true` (startup lint).
+- Fail-open behavior (`RATELIMIT_FAIL_OPEN=true`) allows requests when Redis is unavailable to avoid full API outage.
+- Key format: `rl:{env}:{route}:{scope}:{id}` where `route` is route pattern and `scope` is low-cardinality (`ip`, `user`, `tenant`, `token`, `anon`).
+- Token-based scope stores only token fingerprint hash prefix (never raw bearer tokens).
+
+Policy metrics:
+
+- `superapi_rate_limit_requests_total{route,outcome}` where outcome is one of `allowed`, `blocked`, `fail_open`, `error`.
+
 Notes:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` must be `>= 0`.
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be a valid duration and `>= 0`.

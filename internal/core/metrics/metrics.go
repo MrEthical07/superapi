@@ -28,6 +28,7 @@ type Service struct {
 	httpRequestsTotal      *prometheus.CounterVec
 	httpRequestDurationSec *prometheus.HistogramVec
 	httpInFlight           prometheus.Gauge
+	rateLimitRequests      *prometheus.CounterVec
 
 	readyGauge     prometheus.Gauge
 	dependencyRead *prometheus.GaugeVec
@@ -67,6 +68,15 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 		},
 	)
 
+	rateLimitRequests := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "rate_limit_requests_total",
+			Help:      "Rate limit outcomes by route.",
+		},
+		[]string{"route", "outcome"},
+	)
+
 	readyGauge := prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -93,6 +103,9 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 	if err := r.Register(httpInFlight); err != nil {
 		return nil, err
 	}
+	if err := r.Register(rateLimitRequests); err != nil {
+		return nil, err
+	}
 	if err := r.Register(readyGauge); err != nil {
 		return nil, err
 	}
@@ -114,6 +127,7 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 		httpRequestsTotal:      httpRequestsTotal,
 		httpRequestDurationSec: httpRequestDurationSec,
 		httpInFlight:           httpInFlight,
+		rateLimitRequests:      rateLimitRequests,
 		readyGauge:             readyGauge,
 		dependencyRead:         dependencyRead,
 	}, nil
@@ -209,6 +223,21 @@ func (s *Service) ObserveReadiness(report readiness.Report) {
 		s.dependencyRead.WithLabelValues(dep, readiness.DependencyDisabled).Set(boolToFloat64(st.Status == readiness.DependencyDisabled))
 		s.dependencyRead.WithLabelValues(dep, readiness.DependencyError).Set(boolToFloat64(st.Status == readiness.DependencyError))
 	}
+}
+
+func (s *Service) ObserveRateLimit(route, outcome string) {
+	if s == nil || !s.enabled || s.rateLimitRequests == nil {
+		return
+	}
+	r := route
+	if r == "" {
+		r = "unknown"
+	}
+	o := outcome
+	if o == "" {
+		o = "unknown"
+	}
+	s.rateLimitRequests.WithLabelValues(r, o).Inc()
 }
 
 func boolToFloat64(v bool) float64 {

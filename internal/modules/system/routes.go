@@ -10,6 +10,7 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/policy"
+	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
@@ -32,7 +33,13 @@ type parseDurationResponse struct {
 
 func (m *Module) Register(r httpx.Router) error {
 	r.Handle(http.MethodPost, "/system/parse-duration", httpx.JSON(m.parseDuration))
-	r.Handle(http.MethodGet, "/api/v1/system/whoami", http.HandlerFunc(m.whoami), policy.AuthRequired(m.authProvider, m.authMode))
+	r.Handle(
+		http.MethodGet,
+		"/api/v1/system/whoami",
+		http.HandlerFunc(m.whoami),
+		policy.AuthRequired(m.authProvider, m.authMode),
+		policy.RateLimitWithKeyer(m.limiter, "system.whoami", m.rateRule, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
+	)
 	return nil
 }
 
