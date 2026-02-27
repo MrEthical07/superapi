@@ -26,7 +26,9 @@ type Dependencies struct {
 	Auth      auth.Provider
 	AuthMode  auth.Mode
 	RateLimit config.RateLimitConfig
+	Cache     config.CacheConfig
 	Limiter   ratelimit.Limiter
+	CacheMgr  *cache.Manager
 	authClose func()
 }
 
@@ -38,6 +40,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	deps := &Dependencies{
 		Readiness: readiness.NewService(),
 		RateLimit: cfg.RateLimit,
+		Cache:     cfg.Cache,
 	}
 
 	if cfg.Postgres.Enabled {
@@ -130,6 +133,30 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init rate limiter: %w", err)
 		}
 		deps.Limiter = limiter
+	}
+
+	if cfg.Cache.Enabled {
+		cacheMgr, err := cache.NewManager(deps.Redis, cache.ManagerConfig{
+			Env:             cfg.Env,
+			FailOpen:        cfg.Cache.FailOpen,
+			DefaultMaxBytes: cfg.Cache.DefaultMaxBytes,
+			Observe: func(route, outcome string) {
+				if deps.Metrics == nil {
+					return
+				}
+				deps.Metrics.ObserveCache(route, outcome)
+			},
+		})
+		if err != nil {
+			if deps.Redis != nil {
+				_ = deps.Redis.Close()
+			}
+			if deps.Postgres != nil {
+				deps.Postgres.Close()
+			}
+			return nil, fmt.Errorf("init cache manager: %w", err)
+		}
+		deps.CacheMgr = cacheMgr
 	}
 
 	tracingSvc, err := tracing.New(ctx, cfg.Tracing, cfg.Env)

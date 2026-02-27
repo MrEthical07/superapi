@@ -29,6 +29,7 @@ type Service struct {
 	httpRequestDurationSec *prometheus.HistogramVec
 	httpInFlight           prometheus.Gauge
 	rateLimitRequests      *prometheus.CounterVec
+	cacheOperations        *prometheus.CounterVec
 
 	readyGauge     prometheus.Gauge
 	dependencyRead *prometheus.GaugeVec
@@ -77,6 +78,15 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 		[]string{"route", "outcome"},
 	)
 
+	cacheOperations := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "cache_operations_total",
+			Help:      "Cache outcomes by route.",
+		},
+		[]string{"route", "outcome"},
+	)
+
 	readyGauge := prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: namespace,
@@ -106,6 +116,9 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 	if err := r.Register(rateLimitRequests); err != nil {
 		return nil, err
 	}
+	if err := r.Register(cacheOperations); err != nil {
+		return nil, err
+	}
 	if err := r.Register(readyGauge); err != nil {
 		return nil, err
 	}
@@ -128,6 +141,7 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 		httpRequestDurationSec: httpRequestDurationSec,
 		httpInFlight:           httpInFlight,
 		rateLimitRequests:      rateLimitRequests,
+		cacheOperations:        cacheOperations,
 		readyGauge:             readyGauge,
 		dependencyRead:         dependencyRead,
 	}, nil
@@ -238,6 +252,21 @@ func (s *Service) ObserveRateLimit(route, outcome string) {
 		o = "unknown"
 	}
 	s.rateLimitRequests.WithLabelValues(r, o).Inc()
+}
+
+func (s *Service) ObserveCache(route, outcome string) {
+	if s == nil || !s.enabled || s.cacheOperations == nil {
+		return
+	}
+	r := route
+	if r == "" {
+		r = "unknown"
+	}
+	o := outcome
+	if o == "" {
+		o = "unknown"
+	}
+	s.cacheOperations.WithLabelValues(r, o).Inc()
 }
 
 func boolToFloat64(v bool) float64 {

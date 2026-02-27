@@ -16,6 +16,7 @@ type Config struct {
 	Log         LogConfig
 	Auth        AuthConfig
 	RateLimit   RateLimitConfig
+	Cache       CacheConfig
 	Postgres    PostgresConfig
 	Redis       RedisConfig
 	Metrics     MetricsConfig
@@ -32,6 +33,12 @@ type RateLimitConfig struct {
 	FailOpen      bool
 	DefaultLimit  int
 	DefaultWindow time.Duration
+}
+
+type CacheConfig struct {
+	Enabled         bool
+	FailOpen        bool
+	DefaultMaxBytes int
 }
 
 // LogConfig holds structured logging configuration.
@@ -153,6 +160,11 @@ func Load() (*Config, error) {
 			DefaultLimit:  getInt("RATELIMIT_DEFAULT_LIMIT", 10),
 			DefaultWindow: getDuration("RATELIMIT_DEFAULT_WINDOW", time.Minute),
 		},
+		Cache: CacheConfig{
+			Enabled:         getBool("CACHE_ENABLED", false),
+			FailOpen:        getBool("CACHE_FAIL_OPEN", true),
+			DefaultMaxBytes: getInt("CACHE_DEFAULT_MAX_BYTES", 256*1024),
+		},
 		Postgres: PostgresConfig{
 			Enabled:            getBool("POSTGRES_ENABLED", false),
 			URL:                getenv("POSTGRES_URL", ""),
@@ -248,11 +260,17 @@ func (c *Config) Lint() error {
 	if c.RateLimit.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("ratelimit enabled requires redis enabled")
 	}
+	if c.Cache.Enabled && !c.Redis.Enabled {
+		return fmt.Errorf("cache enabled requires redis enabled")
+	}
 	if c.RateLimit.DefaultLimit <= 0 {
 		return fmt.Errorf("ratelimit default limit must be > 0")
 	}
 	if c.RateLimit.DefaultWindow <= 0 {
 		return fmt.Errorf("ratelimit default window must be > 0")
+	}
+	if c.Cache.DefaultMaxBytes <= 0 {
+		return fmt.Errorf("cache default max bytes must be > 0")
 	}
 
 	for _, p := range c.HTTP.Middleware.AccessLog.ExcludePaths {

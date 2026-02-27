@@ -66,6 +66,42 @@ Policy metrics:
 
 - `superapi_rate_limit_requests_total{route,outcome}` where outcome is one of `allowed`, `blocked`, `fail_open`, `error`.
 
+## Cache policy (Redis-backed)
+
+Route-level response caching is available through policy wrappers and backed by Redis.
+
+Configuration:
+
+- `CACHE_ENABLED` (default: `false`)
+- `CACHE_FAIL_OPEN` (default: `true`)
+- `CACHE_DEFAULT_MAX_BYTES` (default: `262144` / 256 KiB)
+
+Notes:
+
+- `CACHE_ENABLED=true` requires `REDIS_ENABLED=true` (startup lint).
+- Invalidation strategy uses tag version bump (O(1) invalidation), not mass key deletion.
+- Version keys are stored as `cver:{env}:{tag}` and incremented on write-route invalidation.
+- Read keys are deterministic and low-cardinality: route pattern + selected vary dimensions + selected query hash + tag-version token.
+- Raw query strings, request IDs, and IPs are not used in cache keys by default.
+
+Safety defaults:
+
+- Cache read policy only applies to `GET`/`HEAD` by default.
+- Only `200` responses are cached by default.
+- Responses with `Set-Cookie` are bypassed (not cached).
+- Responses larger than configured max bytes are bypassed.
+- Authenticated responses are bypassed unless cache key explicitly varies by user and/or tenant (or auth caching is explicitly allowed).
+- Redis failures are fail-open by default (`CACHE_FAIL_OPEN=true`) so requests continue to origin handlers.
+
+Policy metrics:
+
+- `superapi_cache_operations_total{route,outcome}` where outcome is one of `hit`, `miss`, `set`, `bypass`, `error`.
+
+Current route usage example:
+
+- `GET /api/v1/tenants/{id}` uses `CacheRead` with `TTL=30s`, tag `tenant`, and path param vary `id`.
+- `POST /api/v1/tenants` uses `CacheInvalidate` and bumps tag `tenant`.
+
 Notes:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` must be `>= 0`.
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be a valid duration and `>= 0`.
@@ -176,6 +212,7 @@ Baseline metrics:
 - `superapi_http_requests_total{method,route,status}`
 - `superapi_http_request_duration_seconds{method,route,status}`
 - `superapi_http_in_flight_requests`
+- `superapi_cache_operations_total{route,outcome}`
 - `superapi_ready`
 - `superapi_dependency_ready{dependency,status}` (`status` in `ok|disabled|error`)
 

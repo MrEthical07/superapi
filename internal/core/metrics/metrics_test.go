@@ -135,6 +135,25 @@ func TestObserveRateLimitIncrementsCounter(t *testing.T) {
 	)
 }
 
+func TestObserveCacheIncrementsCounter(t *testing.T) {
+	svc, err := New(config.MetricsConfig{Enabled: true, Path: "/metrics"}, nil)
+	if err != nil {
+		t.Fatalf("new metrics service: %v", err)
+	}
+
+	svc.ObserveCache("/api/v1/tenants/{id}", "hit")
+	svc.ObserveCache("/api/v1/tenants/{id}", "miss")
+
+	assertMetricValue(t, svc, "superapi_cache_operations_total",
+		map[string]string{"route": "/api/v1/tenants/{id}", "outcome": "hit"},
+		1,
+	)
+	assertMetricValue(t, svc, "superapi_cache_operations_total",
+		map[string]string{"route": "/api/v1/tenants/{id}", "outcome": "miss"},
+		1,
+	)
+}
+
 func assertMetricValue(t *testing.T, svc *Service, metricName string, labels map[string]string, expected float64) {
 	t.Helper()
 

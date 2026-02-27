@@ -202,6 +202,33 @@ func TestLintRejectsRateLimitEnabledWithoutRedis(t *testing.T) {
 	}
 }
 
+func TestLintRejectsCacheEnabledWithoutRedis(t *testing.T) {
+	t.Setenv("CACHE_ENABLED", "true")
+	t.Setenv("REDIS_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for cache enabled without redis")
+	}
+}
+
+func TestLintRejectsInvalidCacheDefaultMaxBytes(t *testing.T) {
+	t.Setenv("CACHE_DEFAULT_MAX_BYTES", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for invalid cache default max bytes")
+	}
+}
+
 func TestLintRejectsInvalidRateLimitDefaults(t *testing.T) {
 	t.Setenv("RATELIMIT_DEFAULT_LIMIT", "0")
 
