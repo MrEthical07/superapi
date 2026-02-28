@@ -1,0 +1,16 @@
+# Auth bootstrap configuration for testing.
+# Default goAuth-aligned setup.
+
+tenant_enabled: false
+role_enabled: true
+permissions_enabled: true
+permissions_mode: bitmask
+id_type: uuid
+login_method: email
+table_name: users
+password_hash: true
+status_enabled: true
+verification_flag: false
+timestamps: true
+soft_delete: false
+last_login: false

@@ -58,7 +58,7 @@ func (p *GoAuthProvider) Authenticate(ctx context.Context, token string, mode Mo
 	return principal, nil
 }
 
-func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode) (Provider, func(), error) {
+func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (Provider, func(), error) {
 	if redisClient == nil {
 		return nil, nil, fmt.Errorf("goAuth provider requires redis client")
 	}
@@ -77,7 +77,7 @@ func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode) (Prov
 			"user":  {"system.whoami"},
 			"admin": {"system.whoami"},
 		}).
-		WithUserProvider(noopUserProvider{}).
+		WithUserProvider(userProvider).
 		Build()
 	if err != nil {
 		return nil, nil, fmt.Errorf("build goAuth engine: %w", err)

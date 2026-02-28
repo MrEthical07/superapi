@@ -3,7 +3,7 @@ SQLC ?= sqlc
 MIGRATE ?= migrate
 DB_URL ?=
 
-.PHONY: fmt vet test tidy run sqlc-generate migrate-create migrate-up migrate-down migrate-version module
+.PHONY: fmt vet test tidy run sqlc-generate migrate-create migrate-up migrate-down migrate-version module auth auth-config
 
 fmt:
 	$(GO) fmt ./...
@@ -41,3 +41,10 @@ migrate-version:
 
 module:
 	$(GO) run ./cmd/modulegen --name "$(name)" --force "$(force)"
+
+auth:
+	$(GO) run ./cmd/authgen
+
+auth-config:
+	@if [ -z "$(file)" ]; then echo "file is required: make auth-config file=authgen.yaml"; exit 1; fi
+	$(GO) run ./cmd/authgen --config "$(file)"

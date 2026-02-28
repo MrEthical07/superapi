@@ -98,7 +98,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	deps.Auth = auth.NewDisabledProvider()
 
 	if cfg.Auth.Enabled {
-		provider, closeFn, err := auth.NewGoAuthEngineProvider(deps.Redis, authMode)
+		provider, closeFn, err := auth.NewGoAuthEngineProvider(deps.Redis, authMode, auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres)))
 		if err != nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()
