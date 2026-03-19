@@ -16,6 +16,9 @@ internal/modules/projects/
   handler.go        # Handler struct, HTTP handler methods
   service.go        # Service interface + implementation, business logic, tx boundaries
   repo.go           # Repository interface + implementation, data access via sqlcgen.Queries
+  db/
+    schema.sql      # Module-local sqlc schema source (optional)
+    queries.sql     # Module-local sqlc query source (optional)
   handler_test.go   # Handler unit tests
   service_test.go   # Service unit tests
   dto_test.go       # DTO validation tests (optional)
@@ -85,7 +88,7 @@ The `// MODULE_IMPORTS` and `// MODULE_LIST` markers are used by the module gene
 make module name=projects
 ```
 
-Or create files manually following the structure above.
+Or run `make module` with no `name` to use the interactive wizard. Create files manually only if you want a custom layout.
 
 ### 4.2 Define module.go
 

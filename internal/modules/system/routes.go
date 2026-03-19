@@ -37,8 +37,8 @@ func (m *Module) Register(r httpx.Router) error {
 		http.MethodGet,
 		"/api/v1/system/whoami",
 		http.HandlerFunc(m.whoami),
-		policy.AuthRequired(m.authProvider, m.authMode),
-		policy.RateLimitWithKeyer(m.limiter, "system.whoami", m.rateRule, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
+		policy.AuthRequired(m.runtime.AuthProvider(), m.runtime.AuthMode()),
+		policy.RateLimitWithKeyer(m.runtime.Limiter(), "system.whoami", m.rateRule, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
 	)
 	return nil
 }

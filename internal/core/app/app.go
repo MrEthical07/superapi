@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/config"
@@ -40,7 +42,11 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	}
 	router.Use(httpx.CaptureRoutePattern)
 	if deps.Metrics != nil && deps.Metrics.Enabled() {
-		router.Handle(http.MethodGet, deps.Metrics.Path(), deps.Metrics.Handler())
+		metricsHandler := deps.Metrics.Handler()
+		if token := strings.TrimSpace(cfg.Metrics.AuthToken); token != "" {
+			metricsHandler = requireBearerToken(metricsHandler, token)
+		}
+		router.Handle(http.MethodGet, deps.Metrics.Path(), metricsHandler)
 	}
 
 	var handler http.Handler = httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing)
@@ -81,6 +87,32 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	}
 
 	return a, nil
+}
+
+func requireBearerToken(next http.Handler, token string) http.Handler {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+		parts := strings.Fields(authHeader)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		provided := strings.TrimSpace(parts[1])
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *App) Run(ctx context.Context) error {

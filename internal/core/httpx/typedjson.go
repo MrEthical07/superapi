@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
@@ -19,6 +20,7 @@ type Validatable interface {
 }
 
 type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp, error)
+type JSONRequestHandlerFunc[Req any, Resp any] func(ctx context.Context, r *http.Request, req Req) (Resp, error)
 
 // JSON adapts a typed JSON request/response handler to net/http.
 //
@@ -30,39 +32,29 @@ type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp
 //   - writes success via standard envelope
 //   - maps errors through response.Error (AppError passthrough, internal sanitized)
 func JSON[Req any, Resp any](fn JSONHandlerFunc[Req, Resp]) http.Handler {
+	return JSONWithRequest(func(ctx context.Context, _ *http.Request, req Req) (Resp, error) {
+		return fn(ctx, req)
+	})
+}
+
+// JSONWithRequest adapts a typed JSON request/response handler to net/http while
+// preserving access to the incoming request for path params, headers, and query
+// values.
+func JSONWithRequest[Req any, Resp any](fn JSONRequestHandlerFunc[Req, Resp]) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := RequestIDFromContext(r.Context())
 
-		r.Body = http.MaxBytesReader(w, r.Body, defaultJSONBodyLimit)
-		defer r.Body.Close()
-
 		var req Req
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-
-		if err := dec.Decode(&req); err != nil {
+		if err := DecodeAndValidateJSON(w, r, &req); err != nil {
+			if _, isApp := apperr.AsAppError(err); isApp {
+				response.Error(w, err, reqID)
+				return
+			}
 			response.Error(w, mapDecodeError(err), reqID)
 			return
 		}
 
-		var extra struct{}
-		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-			response.Error(w, appBadRequest("request body must contain a single JSON object", err), reqID)
-			return
-		}
-
-		if v, ok := any(req).(Validatable); ok {
-			if err := v.Validate(); err != nil {
-				if _, isApp := apperr.AsAppError(err); isApp {
-					response.Error(w, err, reqID)
-					return
-				}
-				response.Error(w, appBadRequest(err.Error(), err), reqID)
-				return
-			}
-		}
-
-		resp, err := fn(r.Context(), req)
+		resp, err := fn(r.Context(), r, req)
 		if err != nil {
 			response.Error(w, err, reqID)
 			return
@@ -70,6 +62,39 @@ func JSON[Req any, Resp any](fn JSONHandlerFunc[Req, Resp]) http.Handler {
 
 		response.OK(w, resp, reqID)
 	})
+}
+
+// DecodeAndValidateJSON strictly decodes a JSON request body into dst, applies
+// the default body limit, rejects trailing values, and runs Validate when
+// available.
+func DecodeAndValidateJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	if r == nil {
+		return appBadRequest("request is required", errors.New("nil request"))
+	}
+	if dst == nil {
+		return appBadRequest("request body is required", errors.New("nil destination"))
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, defaultJSONBodyLimit)
+	defer r.Body.Close()
+
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+
+	var extra struct{}
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return appBadRequest("request body must contain a single JSON object", err)
+	}
+
+	if err := validateDecoded(dst); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func appBadRequest(msg string, cause error) error {
@@ -101,4 +126,31 @@ func mapDecodeError(err error) error {
 	}
 
 	return appBadRequest("invalid JSON body", err)
+}
+
+func validateDecoded(dst any) error {
+	if v, ok := dst.(Validatable); ok {
+		return normalizeValidationError(v.Validate())
+	}
+
+	rv := reflect.ValueOf(dst)
+	if !rv.IsValid() {
+		return nil
+	}
+	if rv.Kind() == reflect.Pointer && !rv.IsNil() {
+		if v, ok := rv.Elem().Interface().(Validatable); ok {
+			return normalizeValidationError(v.Validate())
+		}
+	}
+	return nil
+}
+
+func normalizeValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, isApp := apperr.AsAppError(err); isApp {
+		return err
+	}
+	return appBadRequest(err.Error(), err)
 }

@@ -75,7 +75,7 @@ Entry point: `cmd/api/main.go`
 2. **Postgres pool** — if `POSTGRES_ENABLED=true`; startup ping with timeout; registered in readiness
 3. **Redis client** — if `REDIS_ENABLED=true`; startup ping with timeout; registered in readiness
 4. **Metrics service** — if `METRICS_ENABLED=true`; registers Prometheus collectors (including pgxpool if Postgres enabled)
-5. **Auth provider** — parse auth mode; if `AUTH_ENABLED=true`, build goAuth engine provider (requires Redis)
+5. **Auth provider** — parse auth mode; if `AUTH_ENABLED=true`, build goAuth engine provider (requires Redis + Postgres)
 6. **Rate limiter** — if `RATELIMIT_ENABLED=true`, create Redis-backed limiter (requires Redis)
 7. **Cache manager** — if `CACHE_ENABLED=true`, create Redis-backed cache manager (requires Redis)
 8. **Tracing service** — if `TRACING_ENABLED=true`, init OTLP gRPC exporter + tracer provider

@@ -115,3 +115,43 @@ func TestJSON_InternalErrorSanitized(t *testing.T) {
 		t.Fatalf("response missing internal_error code: %s", rr.Body.String())
 	}
 }
+
+func TestJSONWithRequest_ExposesRequest(t *testing.T) {
+	h := JSONWithRequest(func(ctx context.Context, r *http.Request, req echoRequest) (map[string]string, error) {
+		return map[string]string{
+			"id":   r.PathValue("id"),
+			"name": req.Name,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/projects/abc", strings.NewReader(`{"name":"alice"}`))
+	req.SetPathValue("id", "abc")
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !strings.Contains(rr.Body.String(), `"id":"abc"`) {
+		t.Fatalf("expected path value in response: %s", rr.Body.String())
+	}
+}
+
+func TestDecodeAndValidateJSON_AppErrorPassthrough(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":""}`))
+	rr := httptest.NewRecorder()
+
+	var dst echoRequest
+	err := DecodeAndValidateJSON(rr, req, &dst)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	appErr, ok := apperr.AsAppError(err)
+	if !ok {
+		t.Fatalf("expected app error, got %T", err)
+	}
+	if appErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d", appErr.StatusCode, http.StatusBadRequest)
+	}
+}

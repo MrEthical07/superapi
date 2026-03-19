@@ -104,8 +104,9 @@ type RedisConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled bool
-	Path    string
+	Enabled   bool
+	Path      string
+	AuthToken string
 }
 
 type TracingConfig struct {
@@ -119,8 +120,13 @@ type TracingConfig struct {
 }
 
 func Load() (*Config, error) {
+	env := getenv("APP_ENV", "dev")
+	isProdEnv := strings.EqualFold(strings.TrimSpace(env), "prod") || strings.EqualFold(strings.TrimSpace(env), "production")
+	securityHeadersDefault := isProdEnv
+	tracingInsecureDefault := !isProdEnv
+
 	cfg := &Config{
-		Env:         getenv("APP_ENV", "dev"),
+		Env:         env,
 		ServiceName: getenv("APP_SERVICE_NAME", "api-template"),
 		HTTP: HTTPConfig{
 			Addr:              getenv("HTTP_ADDR", ":8080"),
@@ -133,8 +139,8 @@ func Load() (*Config, error) {
 			Middleware: HTTPMiddlewareConfig{
 				RequestIDEnabled:       getBool("HTTP_MIDDLEWARE_REQUEST_ID_ENABLED", true),
 				RecovererEnabled:       getBool("HTTP_MIDDLEWARE_RECOVERER_ENABLED", true),
-				MaxBodyBytes:           getInt64("HTTP_MIDDLEWARE_MAX_BODY_BYTES", 0),
-				SecurityHeadersEnabled: getBool("HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED", false),
+				MaxBodyBytes:           getInt64("HTTP_MIDDLEWARE_MAX_BODY_BYTES", 1<<20), // 1 MiB
+				SecurityHeadersEnabled: getBool("HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED", securityHeadersDefault),
 				RequestTimeout:         getDuration("HTTP_MIDDLEWARE_REQUEST_TIMEOUT", 0),
 				AccessLog: AccessLogConfig{
 					Enabled:          getBool("HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED", true),
@@ -189,8 +195,9 @@ func Load() (*Config, error) {
 			HealthCheckTimeout: getDuration("REDIS_HEALTH_CHECK_TIMEOUT", 1*time.Second),
 		},
 		Metrics: MetricsConfig{
-			Enabled: getBool("METRICS_ENABLED", true),
-			Path:    getenv("METRICS_PATH", "/metrics"),
+			Enabled:   getBool("METRICS_ENABLED", true),
+			Path:      getenv("METRICS_PATH", "/metrics"),
+			AuthToken: getenv("METRICS_AUTH_TOKEN", ""),
 		},
 		Tracing: TracingConfig{
 			Enabled:      getBool("TRACING_ENABLED", false),
@@ -199,7 +206,7 @@ func Load() (*Config, error) {
 			OTLPEndpoint: getenv("TRACING_OTLP_ENDPOINT", "localhost:4317"),
 			Sampler:      getenv("TRACING_SAMPLER", "traceidratio"),
 			SampleRatio:  getFloat64("TRACING_SAMPLE_RATIO", 0.05),
-			Insecure:     getBool("TRACING_INSECURE", true),
+			Insecure:     getBool("TRACING_INSECURE", tracingInsecureDefault),
 		},
 	}
 
@@ -256,6 +263,9 @@ func (c *Config) Lint() error {
 	}
 	if c.Auth.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("auth enabled requires redis enabled")
+	}
+	if c.Auth.Enabled && !c.Postgres.Enabled {
+		return fmt.Errorf("auth enabled requires postgres enabled")
 	}
 	if c.RateLimit.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("ratelimit enabled requires redis enabled")
@@ -342,6 +352,11 @@ func (c *Config) Lint() error {
 	}
 	if c.Metrics.Path[0] != '/' {
 		return fmt.Errorf("metrics path must start with '/'")
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Env), "prod") || strings.EqualFold(strings.TrimSpace(c.Env), "production") {
+		if c.Metrics.Enabled && strings.TrimSpace(c.Metrics.AuthToken) == "" {
+			return fmt.Errorf("metrics auth token cannot be empty in prod when metrics is enabled")
+		}
 	}
 	if c.Tracing.Enabled {
 		if c.Tracing.ServiceName == "" {

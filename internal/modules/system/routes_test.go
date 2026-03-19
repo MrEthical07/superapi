@@ -5,15 +5,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 )
 
 func TestWhoamiRequiresAuth(t *testing.T) {
-	m := &Module{
-		authProvider: auth.NewDisabledProvider(),
-		authMode:     auth.ModeHybrid,
-	}
+	m := &Module{}
+	m.BindDependencies(nil)
 
 	r := httpx.NewMux()
 	if err := m.Register(r); err != nil {

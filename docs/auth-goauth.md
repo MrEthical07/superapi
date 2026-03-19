@@ -24,6 +24,8 @@ Authentication is a pluggable subsystem with three layers:
 ```
 AUTH_ENABLED=true
 REDIS_ENABLED=true    # goAuth uses Redis for session storage
+POSTGRES_ENABLED=true
+POSTGRES_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
 ```
 
 **Auth configuration:**
@@ -395,3 +397,4 @@ tokens, _ := engine.CreateTokenPair(ctx, goauth.User{
 | 403 "forbidden" | Missing role or permission | Check `AUTH_ROLES` and `AUTH_PERMISSIONS` include required values |
 | 404 on tenant routes | Tenant ID mismatch in path | User's tenant doesn't match URL tenant_id |
 | Empty `AuthContext` | Token valid but claims missing | Check goAuth token generation includes all claims |
+When auth is enabled in this template, both Redis and Postgres must also be enabled because the runtime wires a SQL-backed user provider for goAuth.

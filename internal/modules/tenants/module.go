@@ -2,19 +2,16 @@ package tenants
 
 import (
 	"github.com/MrEthical07/superapi/internal/core/app"
-	"github.com/MrEthical07/superapi/internal/core/auth"
-	"github.com/MrEthical07/superapi/internal/core/cache"
 	coredb "github.com/MrEthical07/superapi/internal/core/db"
+	"github.com/MrEthical07/superapi/internal/core/modulekit"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Module struct {
+	runtime modulekit.Runtime
 	pool    *pgxpool.Pool
 	handler *Handler
-	cache   *cache.Manager
-	auth    auth.Provider
-	mode    auth.Mode
 }
 
 func New() *Module { return &Module{} }
@@ -25,11 +22,7 @@ var _ app.DependencyBinder = (*Module)(nil)
 func (m *Module) Name() string { return "tenants" }
 
 func (m *Module) BindDependencies(deps *app.Dependencies) {
-	if deps != nil {
-		m.cache = deps.CacheMgr
-		m.auth = deps.Auth
-		m.mode = deps.AuthMode
-	}
+	m.runtime = modulekit.New(deps)
 
 	if deps == nil || deps.Postgres == nil {
 		m.pool = nil

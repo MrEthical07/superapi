@@ -32,6 +32,7 @@ type CacheVaryBy struct {
 }
 
 type CacheReadConfig struct {
+	Key                string
 	TTL                time.Duration
 	MaxBytes           int
 	Tags               []string
@@ -126,6 +127,9 @@ func (m *Manager) BuildReadKey(ctx context.Context, r *http.Request, route strin
 	}
 
 	routePart := normalizeRoute(route)
+	if customKey := strings.TrimSpace(cfg.Key); customKey != "" {
+		routePart = normalizeRoute(customKey)
+	}
 	queryHash, err := queryParamHash(r.URL.Query(), cfg.VaryBy.QueryParams)
 	if err != nil {
 		return "", err

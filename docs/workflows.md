@@ -339,7 +339,7 @@ go build ./...
 
 ### "auth enabled requires redis enabled"
 
-Config lint enforces that `AUTH_ENABLED=true` requires `REDIS_ENABLED=true`. Same for rate limiting and caching. Enable Redis first.
+Config lint enforces that `AUTH_ENABLED=true` requires both `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`. Rate limiting and caching still require Redis only.
 
 ### "postgres url cannot be empty when enabled"
 

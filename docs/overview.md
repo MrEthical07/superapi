@@ -70,6 +70,8 @@ export AUTH_ENABLED=true
 export AUTH_MODE=hybrid          # jwt_only | hybrid | strict
 export REDIS_ENABLED=true
 export REDIS_ADDR="127.0.0.1:6379"
+export POSTGRES_ENABLED=true
+export POSTGRES_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
 go run ./cmd/api
 ```
 
@@ -79,7 +81,7 @@ go run ./cmd/api
 |---|---|---|---|
 | Postgres | `POSTGRES_ENABLED` | `false` | `POSTGRES_URL` |
 | Redis | `REDIS_ENABLED` | `false` | `REDIS_ADDR` |
-| Auth (goAuth) | `AUTH_ENABLED` | `false` | Redis |
+| Auth (goAuth) | `AUTH_ENABLED` | `false` | Redis + Postgres |
 | Rate limiting | `RATELIMIT_ENABLED` | `false` | Redis |
 | Response caching | `CACHE_ENABLED` | `false` | Redis |
 | Prometheus metrics | `METRICS_ENABLED` | `true` | — |
@@ -108,4 +110,4 @@ go run ./cmd/api
 2. Read [docs/modules.md](modules.md) to learn how to add a module
 3. Read [docs/policies.md](policies.md) for auth/rate-limit/cache/tenant policy reference
 4. Read [docs/crud-examples.md](crud-examples.md) for full CRUD with recommended policy stacks
-5. Use `make module name=<your_module>` to scaffold and start building
+5. Use `make module` for the interactive wizard, or `make module name=<your_module>` for flags-only scaffolding

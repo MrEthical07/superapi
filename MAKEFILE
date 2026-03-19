@@ -3,7 +3,7 @@ SQLC ?= sqlc
 MIGRATE ?= migrate
 DB_URL ?=
 
-.PHONY: fmt vet test tidy run sqlc-generate migrate-create migrate-up migrate-down migrate-version module auth auth-config
+.PHONY: fmt vet test tidy run db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module auth auth-config
 
 fmt:
 	$(GO) fmt ./...
@@ -20,7 +20,11 @@ tidy:
 run:
 	$(GO) run .
 
+db-sync:
+	$(GO) run ./cmd/modulesync
+
 sqlc-generate:
+	$(MAKE) db-sync
 	$(SQLC) generate
 
 migrate-create:
@@ -40,7 +44,7 @@ migrate-version:
 	POSTGRES_ENABLED=true POSTGRES_URL="$(DB_URL)" $(GO) run ./cmd/migrate version
 
 module:
-	$(GO) run ./cmd/modulegen --name "$(name)" --force "$(force)"
+	$(GO) run ./cmd/modulegen $(if $(name),--name "$(name)",) $(if $(force),--force "$(force)",) $(if $(db),--db=$(db),) $(if $(auth),--auth=$(auth),) $(if $(tenant),--tenant=$(tenant),) $(if $(ratelimit),--ratelimit=$(ratelimit),) $(if $(cache),--cache=$(cache),) $(if $(migration),--migration=$(migration),)
 
 auth:
 	$(GO) run ./cmd/authgen

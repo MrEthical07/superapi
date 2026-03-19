@@ -42,7 +42,7 @@ All major subsystems are opt-in via environment variables:
 | Prometheus metrics | `METRICS_ENABLED` | `true` |
 | OpenTelemetry tracing | `TRACING_ENABLED` | `false` |
 
-Dependencies: Auth, rate limiting, and caching all require Redis. Auth and rate limiting require Postgres for session/token storage.
+Dependencies: auth requires both Redis and Postgres. Rate limiting and caching require Redis.
 
 ## HTTP middleware config
 
@@ -50,8 +50,8 @@ Global (server-level) middleware is configured via environment variables:
 
 - `HTTP_MIDDLEWARE_REQUEST_ID_ENABLED` (default: `true`)
 - `HTTP_MIDDLEWARE_RECOVERER_ENABLED` (default: `true`)
-- `HTTP_MIDDLEWARE_MAX_BODY_BYTES` (default: `0`, disabled)
-- `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` (default: `false`)
+- `HTTP_MIDDLEWARE_MAX_BODY_BYTES` (default: `1048576` / 1 MiB)
+- `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` (default: `true` in `prod`, otherwise `false`)
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` (default: `0`, disabled)
 - `HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED` (default: `true`)
 - `HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE` (default: `0.05`)
@@ -71,7 +71,7 @@ Configuration:
 
 Notes:
 
-- `AUTH_ENABLED=true` requires Redis enabled (`REDIS_ENABLED=true`).
+- `AUTH_ENABLED=true` requires both `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`.
 - Existing public endpoints remain public unless a route declares auth policies.
 - Demo protected route: `GET /api/v1/system/whoami`.
 	- Without bearer token: returns `401`.
@@ -280,6 +280,12 @@ Prometheus metrics are enabled by default and exposed from the API process.
 Configuration:
 
 - `METRICS_ENABLED` (default: `true`)
+- `METRICS_AUTH_TOKEN` (default: empty)
+
+Production hardening:
+
+- In `prod`/`production`, metrics require `METRICS_AUTH_TOKEN` when metrics are enabled.
+- Send `Authorization: Bearer <METRICS_AUTH_TOKEN>` to access metrics.
 - `METRICS_PATH` (default: `/metrics`)
 
 Notes:
@@ -310,6 +316,7 @@ OpenTelemetry tracing hooks are available and disabled by default.
 Configuration:
 
 - `TRACING_ENABLED` (default: `false`)
+- `TRACING_INSECURE` (default: `false` in `prod`, otherwise `true`)
 - `TRACING_SERVICE_NAME` (default: `APP_SERVICE_NAME`)
 - `TRACING_EXPORTER` (default: `otlpgrpc`)
 - `TRACING_OTLP_ENDPOINT` (default: `localhost:4317`)
@@ -351,12 +358,20 @@ The template uses:
 - Migrations: `golang-migrate`
 - Query generation: `sqlc` targeting `pgx/v5`
 
-Folder convention (global baseline):
+Folder convention:
 
 - `db/migrations/` versioned migration files
-- `db/schema/` canonical schema for sqlc
-- `db/queries/` SQL query definitions
+- `internal/modules/<module>/db/schema.sql` module-local sqlc schema source
+- `internal/modules/<module>/db/queries.sql` module-local sqlc query source
+- `db/schema/` generated sync output consumed by sqlc
+- `db/queries/` generated sync output consumed by sqlc
 - `internal/core/db/sqlcgen/` generated sqlc package (DO NOT EDIT MANUALLY)
+
+Sync module-local SQL into the global sqlc input folders:
+
+```bash
+make db-sync
+```
 
 sqlc workflow:
 
@@ -396,6 +411,7 @@ Notes:
 
 Make targets are also available:
 
+- `make db-sync`
 - `make sqlc-generate`
 - `make migrate-create NAME=add_feature_table`
 - `make migrate-up DB_URL=postgres://...`
@@ -428,6 +444,8 @@ Generate a fully wired module skeleton with one command:
 make module name=projects
 ```
 
+If you omit `name`, the generator starts an interactive wizard and asks which options to scaffold.
+
 Optional overwrite of existing module folder:
 
 ```bash
@@ -439,6 +457,8 @@ Behavior:
 - Creates `internal/modules/<package>/` with:
 	- `module.go`, `routes.go`, `dto.go`, `handler.go`, `service.go`, `repo.go`
 	- `handler_test.go`, `service_test.go`
+- Optional DB scaffolding creates `internal/modules/<package>/db/schema.sql` and `internal/modules/<package>/db/queries.sql`
+- Optional migration scaffolding creates global `db/migrations/NNNNNN_<route>.up.sql` and `.down.sql`
 - Adds package import + module `New()` entry to module registry (`internal/modules/modules.go`).
 - Registry updates are idempotent (no duplicate imports/entries).
 - Without `force`, generation fails when target module directory already exists.
@@ -463,9 +483,5 @@ Generated default route:
 
 Policy guidance in generated routes:
 
-- Includes a minimal policy slot (`policy.Noop()`).
-- Includes commented examples showing where to attach:
-	- `AuthRequired`
-	- `RateLimit`
-	- `CacheRead`
-	- `TenantRequired` / tenant scope policies
+- Can attach generated `AuthRequired`, `TenantRequired`, `RateLimit`, and `CacheRead` hooks based on wizard/flag options.
+- Routes call `policy.*` directly, while the module runtime only supplies injected dependencies like auth provider, limiter, and cache manager.

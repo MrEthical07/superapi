@@ -283,6 +283,7 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 
 | Field | Type | Default | Description |
 |---|---|---|---|
+| `Key` | `string` | route pattern | Optional custom cache key prefix when you want tighter control than the route pattern |
 | `TTL` | `time.Duration` | (required) | Cache entry time-to-live |
 | `MaxBytes` | `int` | `CACHE_DEFAULT_MAX_BYTES` (256 KiB) | Max response body size to cache |
 | `Tags` | `[]string` | — | Invalidation tags included in key (version-bumped on write) |

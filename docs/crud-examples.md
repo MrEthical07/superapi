@@ -407,7 +407,7 @@ func (h *Handler) UpdateManual(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateProjectRequest
-	if err := httpx.DecodeAndValidateJSON(r, &req); err != nil {
+	if err := httpx.DecodeAndValidateJSON(w, r, &req); err != nil {
 		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
 		return
 	}
