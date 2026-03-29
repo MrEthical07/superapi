@@ -89,6 +89,12 @@ go run ./cmd/api
 | Security headers | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `false` | — |
 | Request timeout | `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` | `0` (disabled) | — |
 | Max body bytes | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | `0` (disabled) | — |
+| CORS middleware | `HTTP_MIDDLEWARE_CORS_ENABLED` | `false` | — |
+| Trusted proxies | `HTTP_TRUSTED_PROXIES` | empty | — |
+
+Notes:
+- Client IP resolution trusts `Forwarded` / `X-Forwarded-For` only when `HTTP_TRUSTED_PROXIES` is configured.
+- `HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS=true` cannot be used with `HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS=*`.
 
 ## Key endpoints (built-in)
 

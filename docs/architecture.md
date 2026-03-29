@@ -28,6 +28,8 @@ internal/
     tenant/tenant.go       # Tenant scope helpers
     logx/logx.go           # zerolog wrapper
     metrics/metrics.go     # Prometheus metrics service
+    netx/                  # Client IP context helpers
+    requestid/             # Request ID context helpers
     tracing/service.go     # OpenTelemetry tracing service
     readiness/service.go   # Dependency health check aggregator
     params/params.go       # URL param extraction (chi wrapper)
@@ -98,13 +100,15 @@ Middleware is applied in `AssembleGlobalMiddleware()` (file: `internal/core/http
 
 **Execution order (outermost → innermost):**
 
-1. **RequestID** — Reads `X-Request-Id` header or generates a 32-hex-char random ID; injects into context and response header
-2. **Recoverer** — Catches panics, logs with structured context (request_id, method, path, panic value), returns sanitized 500
-3. **SecurityHeaders** — Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (if enabled)
-4. **MaxBodyBytes** — Limits request body size for POST/PUT/PATCH requests (if configured > 0)
-5. **RequestTimeout** — Sets `context.WithTimeout` on the request context (if configured > 0); returns 504 if deadline exceeded before response
-6. **Tracing** — Extracts W3C traceparent, creates server span, records attributes and status on defer (if enabled)
-7. **AccessLog** — Logs request method, route pattern, status, duration, bytes; sampled by deterministic request-id hash
+1. **RequestID** — Accepts `X-Request-Id` only when <= 64 chars and `[A-Za-z0-9._-]`, otherwise generates a 32-hex-char ID; injects into context and response header
+2. **ClientIP** — Resolves client IP from trusted proxy headers when `HTTP_TRUSTED_PROXIES` is set; otherwise uses `RemoteAddr`
+3. **Recoverer** — Catches panics, logs with structured context (request_id, method, path, panic value), returns sanitized 500
+4. **CORS** — Applies CORS headers and preflight handling (if enabled)
+5. **SecurityHeaders** — Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (if enabled)
+6. **MaxBodyBytes** — Limits request body size for POST/PUT/PATCH requests (if configured > 0)
+7. **RequestTimeout** — Sets `context.WithTimeout` on the request context (if configured > 0); returns 504 if deadline exceeded before response
+8. **Tracing** — Extracts W3C traceparent, creates server span, records attributes and status on defer (if enabled)
+9. **AccessLog** — Logs request method, route pattern, status, duration, bytes; sampled by deterministic request-id hash
 
 Then: **Metrics instrumentation** wraps the entire stack (measures in-flight, total requests, duration by method/route/status).
 
@@ -138,7 +142,9 @@ Implementation: `policy.Chain()` in `internal/core/policy/policy.go` iterates po
 Client request
   │
   ├─ RequestID middleware (assign/propagate X-Request-Id)
+  ├─ ClientIP (resolve client IP, trusted proxies optional)
   ├─ Recoverer (catch panics → 500)
+  ├─ CORS (preflight + CORS headers)
   ├─ SecurityHeaders (optional response headers)
   ├─ MaxBodyBytes (limit body size for write methods)
   ├─ RequestTimeout (context deadline → 504 on timeout)
@@ -332,6 +338,7 @@ File: `internal/core/httpx/accesslog.go`
 - **Route labels:** Uses captured route patterns, not raw URL paths
 - **Log level:** Info for normal, Warn for 4xx or slow, Error for 5xx
 - **Security:** Request bodies, Authorization headers, Cookie headers, and query strings are NOT logged
+- **Client IP:** Remote IP logging uses the resolved client IP (trusted proxy headers only when `HTTP_TRUSTED_PROXIES` is set)
 
 ---
 

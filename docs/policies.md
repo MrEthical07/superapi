@@ -215,14 +215,14 @@ policy.RateLimitWithKeyer(limiter, "projects.list", rule, ratelimit.KeyByTenant(
 |---|---|---|---|
 | Auto | `ScopeAuto` | User → Tenant → Token hash → Anonymous | Default. Tries the most specific scope available. |
 | Anon | `ScopeAnon` | Static "anonymous" | Public endpoints, no identity available |
-| IP | `ScopeIP` | `r.RemoteAddr` | Public endpoints where IP is meaningful |
+| IP | `ScopeIP` | Resolved client IP (trusted proxy headers when configured) | Public endpoints where IP is meaningful |
 | User | `ScopeUser` | `AuthContext.UserID` | Authenticated endpoints, per-user limits |
 | Tenant | `ScopeTenant` | `AuthContext.TenantID` | Tenant-scoped endpoints, shared limit across tenant users |
 | Token | `ScopeToken` | SHA-256 hash prefix of Bearer token | When you want per-token limits (e.g., API keys) |
 
 **Built-in keyers:**
 
-- `ratelimit.KeyByIP()` — key by remote address
+- `ratelimit.KeyByIP()` — key by resolved client IP
 - `ratelimit.KeyByUser()` — key by user ID from auth context
 - `ratelimit.KeyByTenant()` — key by tenant ID from auth context
 - `ratelimit.KeyByTokenHash(prefixLen)` — key by token hash prefix
@@ -238,6 +238,10 @@ rl:{env}:{route_pattern}:{scope}:{identifier}
 ```
 
 Example: `rl:prod:/api/v1/projects:user:usr_abc123`
+
+Client IP note:
+
+- IP scoping trusts `Forwarded` / `X-Forwarded-For` only when `HTTP_TRUSTED_PROXIES` is configured. Otherwise `RemoteAddr` is used.
 
 ### Fail-open / fail-closed behavior
 
@@ -376,7 +380,7 @@ policy.RequireJSON()
 
 **Behavior:**
 - GET/HEAD/DELETE without body → passes through
-- POST/PUT/PATCH without `application/json` Content-Type → 415 Unsupported Media Type
+- POST/PUT/PATCH without `application/json` Content-Type → 415 Unsupported Media Type (standard error envelope)
 - Correct Content-Type → passes through
 
 ### WithHeader(key, value)
