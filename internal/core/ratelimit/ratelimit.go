@@ -15,6 +15,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/MrEthical07/superapi/internal/core/auth"
+	"github.com/MrEthical07/superapi/internal/core/netx"
 )
 
 type Scope string
@@ -271,6 +272,9 @@ func KeyByIP() Keyer {
 	return func(r *http.Request) (Scope, string) {
 		if r == nil {
 			return ScopeAnon, "anonymous"
+		}
+		if ip, ok := netx.ClientIPFromContext(r.Context()); ok {
+			return ScopeIP, ip
 		}
 		host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 		if err != nil {

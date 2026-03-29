@@ -21,12 +21,14 @@ go run ./cmd/api
 |---|---|
 | Understand the project | [docs/overview.md](docs/overview.md) |
 | Learn the architecture | [docs/architecture.md](docs/architecture.md) |
+| Full environment reference | [docs/environment-variables.md](docs/environment-variables.md) |
 | Day-to-day dev workflows | [docs/workflows.md](docs/workflows.md) |
 | Build a new module | [docs/modules.md](docs/modules.md) |
 | Full CRUD walkthrough | [docs/crud-examples.md](docs/crud-examples.md) |
 | Route policies (auth, rate limit, cache) | [docs/policies.md](docs/policies.md) |
 | Cache deep dive | [docs/cache-guide.md](docs/cache-guide.md) |
 | Auth & goAuth integration | [docs/auth-goauth.md](docs/auth-goauth.md) |
+| Auth bootstrap generation | [docs/auth-bootstrap.md](docs/auth-bootstrap.md) |
 
 ## Feature toggles
 
@@ -44,6 +46,13 @@ All major subsystems are opt-in via environment variables:
 
 Dependencies: auth requires both Redis and Postgres. Rate limiting and caching require Redis.
 
+For the complete list of runtime env vars and defaults, see `docs/environment-variables.md`.
+
+Runtime identity and environment:
+
+- `APP_ENV` (default: `dev`) influences prod-safe defaults (for example, security headers and tracing transport).
+- `APP_SERVICE_NAME` (default: `api-template`) is used for service identity and tracing fallback naming.
+
 ## HTTP middleware config
 
 Global (server-level) middleware is configured via environment variables:
@@ -59,6 +68,18 @@ Global (server-level) middleware is configured via environment variables:
 - `HTTP_MIDDLEWARE_ACCESS_LOG_SLOW_THRESHOLD` (default: `2s`)
 - `HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_USER_AGENT` (default: `false`)
 - `HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_REMOTE_IP` (default: `false`)
+- `HTTP_TRUSTED_PROXIES` (default: empty; comma-separated CIDRs/IPs)
+- `HTTP_MIDDLEWARE_CORS_ENABLED` (default: `false`)
+- `HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS` (default: empty)
+- `HTTP_MIDDLEWARE_CORS_DENY_ORIGINS` (default: empty)
+- `HTTP_MIDDLEWARE_CORS_ALLOW_METHODS` (default: empty; defaults to common methods)
+- `HTTP_MIDDLEWARE_CORS_ALLOW_HEADERS` (default: empty; echoes request headers)
+- `HTTP_MIDDLEWARE_CORS_EXPOSE_HEADERS` (default: empty)
+- `HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS` (default: `false`)
+- `HTTP_MIDDLEWARE_CORS_MAX_AGE` (default: `0`)
+- `HTTP_MIDDLEWARE_CORS_ALLOW_PRIVATE_NETWORK` (default: `false`)
+
+All `HTTP_*` env values are linted at startup; invalid values fail `config.Lint()`.
 
 ## Auth adapter (goAuth-backed)
 
@@ -130,10 +151,10 @@ Policy metrics:
 
 - `superapi_cache_operations_total{route,outcome}` where outcome is one of `hit`, `miss`, `set`, `bypass`, `error`.
 
-Current route usage example:
+Example cache policy wiring:
 
-- `GET /api/v1/tenants/{id}` uses `CacheRead` with `TTL=30s`, tag `tenant`, and path param vary `id`.
-- `POST /api/v1/tenants` uses `CacheInvalidate` and bumps tag `tenant`.
+- Read route example: use `CacheRead` with route-level `TTL`, tags, and `VaryBy` dimensions.
+- Write route example: use `CacheInvalidate` to bump related tags.
 
 ## Tenant scope + RBAC policy helpers
 
@@ -175,12 +196,10 @@ Recommended attachment order for tenant-scoped routes:
 3. `TenantMatchFromPath("tenant_id")` (for routes containing tenant id in path)
 4. RBAC checks (`RequireRole` / `RequirePerm` / `RequireAnyPerm`) as needed.
 
-Demonstration endpoint:
+Demonstration pattern:
 
-- `GET /api/v1/tenants/self`
-	- Protected by `AuthRequired` + `TenantRequired`.
-	- Resolves tenant id from principal context and fetches tenant by id.
-	- When DB is disabled, returns `dependency_unavailable`.
+- Apply `AuthRequired` + `TenantRequired` to tenant-scoped routes in your modules.
+- For path-based tenant isolation, add `TenantMatchFromPath("tenant_id")`.
 
 Notes:
 - `HTTP_MIDDLEWARE_MAX_BODY_BYTES` must be `>= 0`.
@@ -191,11 +210,16 @@ Notes:
 
 Access logging behavior:
 
-- Uses structured logs with route patterns (for example, `/api/v1/tenants/{id}`) instead of raw URL paths.
+- Uses structured logs with route patterns (for example, `/api/v1/projects/{id}`) instead of raw URL paths.
 - Logs are sampled using a deterministic request-id hash.
 - 5xx responses are always logged, even when sampling would skip.
 - Requests above slow threshold are always logged, even when sampling would skip.
 - Request bodies, Authorization/Cookie headers, and query strings are not logged by default.
+- Remote IP logging uses the resolved client IP (trusted proxy headers only when `HTTP_TRUSTED_PROXIES` is set).
+
+Request ID behavior:
+
+- Incoming `X-Request-Id` is accepted only if it is <= 64 chars and matches `[A-Za-z0-9._-]`. Otherwise a new ID is generated.
 
 ## Timeout semantics
 
@@ -205,6 +229,8 @@ Server-level transport timeouts:
 - `HTTP_READ_TIMEOUT`: bounds full request read time (headers + body).
 - `HTTP_WRITE_TIMEOUT`: hard cap for writing the response.
 - `HTTP_IDLE_TIMEOUT`: keep-alive idle connection timeout.
+- `HTTP_SHUTDOWN_TIMEOUT`: graceful shutdown deadline for draining in-flight requests.
+- `HTTP_MAX_HEADER_BYTES`: maximum allowed request header size.
 
 Application-level request timeout:
 
@@ -219,6 +245,8 @@ Validation and tuning guidance:
 
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must be `>= 0`.
 - If enabled, it must be `<= HTTP_WRITE_TIMEOUT` (lint enforced).
+- `HTTP_SHUTDOWN_TIMEOUT` must be `> 0`.
+- `HTTP_MAX_HEADER_BYTES` must be `>= 4096`.
 - Recommended production tuning: set middleware timeout slightly below write timeout so application logic cancels early and returns a controlled JSON timeout response.
 
 Notes:
@@ -322,19 +350,18 @@ Configuration:
 - `TRACING_OTLP_ENDPOINT` (default: `localhost:4317`)
 - `TRACING_SAMPLER` (default: `traceidratio`; options: `always_on`, `always_off`, `traceidratio`)
 - `TRACING_SAMPLE_RATIO` (default: `0.05`, used by `traceidratio`)
-- `TRACING_INSECURE` (default: `true`)
 
 Behavior:
 
 - Uses W3C `traceparent` + baggage propagation.
 - Creates one server span per request.
-- Span name uses low-cardinality route patterns (for example, `GET /api/v1/tenants/{id}`), not raw paths.
+- Span name uses low-cardinality route patterns (for example, `GET /api/v1/projects/{id}`), not raw paths.
 - Adds attributes: `http.method`, `http.route`, `http.status_code`, optional `server.address`/`server.port`, and `request.id`.
 - Does not capture request/response bodies, query strings, or sensitive headers.
 
 Middleware order (outermost → innermost):
 
-- RequestID → Recoverer → SecurityHeaders → MaxBodyBytes → RequestTimeout → Tracing → AccessLog → Router
+- RequestID → ClientIP → Recoverer → CORS → SecurityHeaders → MaxBodyBytes → RequestTimeout → Tracing → AccessLog → Router
 
 Example enablement:
 
@@ -426,15 +453,9 @@ Operational note:
 
 - Migrations are intentionally not auto-run during API startup; apply them explicitly in deploy workflows.
 
-## Tenants reference module
+## Reference module pattern
 
-The first DB-backed reference module is available at:
-
-- `POST /api/v1/tenants`
-- `GET /api/v1/tenants/{id}`
-- `GET /api/v1/tenants?limit=50`
-
-It demonstrates the module pattern with typed handlers, service/repo separation, sqlc queries, and transactional create flow.
+Use the module scaffolder to generate a DB-backed reference module skeleton and implement your own routes.
 
 ## Module scaffolder (DX)
 
@@ -451,6 +472,24 @@ Optional overwrite of existing module folder:
 ```bash
 make module name=projects force=1
 ```
+
+Advanced scaffolding flags:
+
+```bash
+# Include module-local db/schema.sql and db/queries.sql
+make module name=projects db=1
+
+# Attach generated auth/tenant/rate-limit/cache policy examples to routes
+make module name=projects auth=1 tenant=1 ratelimit=1 cache=1
+
+# Also scaffold a global migration (requires db=1)
+make module name=projects db=1 migration=1
+```
+
+Flag constraints enforced by generator:
+
+- `tenant=1` requires `auth=1`
+- `migration=1` requires `db=1`
 
 Behavior:
 
@@ -485,3 +524,19 @@ Policy guidance in generated routes:
 
 - Can attach generated `AuthRequired`, `TenantRequired`, `RateLimit`, and `CacheRead` hooks based on wizard/flag options.
 - Routes call `policy.*` directly, while the module runtime only supplies injected dependencies like auth provider, limiter, and cache manager.
+
+## Auth bootstrap generator (DX)
+
+Create auth bootstrap schema/queries/provider wiring:
+
+```bash
+make auth
+```
+
+Run authgen with a config file:
+
+```bash
+make auth-config file=authgen.example.yaml
+```
+
+Auth bootstrap docs are generated/updated at `docs/auth-bootstrap.md`.

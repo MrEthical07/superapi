@@ -7,6 +7,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/auth"
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/params"
+	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
 	"github.com/MrEthical07/superapi/internal/core/tenant"
 )
@@ -18,15 +19,16 @@ func AuthRequired(provider auth.Provider, mode auth.Mode) Policy {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			token, ok := bearerToken(r.Header.Get("Authorization"))
 			if !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), "")
+				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 
 			principal, err := provider.Authenticate(r.Context(), token, mode)
 			if err != nil {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), "")
+				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 
@@ -48,13 +50,14 @@ func RequireRole(roles ...string) Policy {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			principal, ok := auth.FromContext(r.Context())
 			if !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), "")
+				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 			if _, has := allowed[principal.Role]; !has {
-				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "forbidden"), "")
+				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "forbidden"), rid)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -73,9 +76,10 @@ func RequirePerm(perms ...string) Policy {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			principal, ok := auth.FromContext(r.Context())
 			if !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), "")
+				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 
@@ -86,7 +90,7 @@ func RequirePerm(perms ...string) Policy {
 
 			for _, permission := range required {
 				if _, has := available[permission]; !has {
-					response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "forbidden"), "")
+					response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "forbidden"), rid)
 					return
 				}
 			}
@@ -110,9 +114,10 @@ func RequireAnyPerm(perms ...string) Policy {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			principal, ok := auth.FromContext(r.Context())
 			if !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), "")
+				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 
@@ -128,7 +133,7 @@ func RequireAnyPerm(perms ...string) Policy {
 				}
 			}
 
-			response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "forbidden"), "")
+			response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "forbidden"), rid)
 		})
 	}
 }
@@ -136,12 +141,13 @@ func RequireAnyPerm(perms ...string) Policy {
 func TenantRequired() Policy {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			if _, ok := auth.FromContext(r.Context()); !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), "")
+				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 			if err := tenant.RequireTenant(r.Context()); err != nil {
-				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), "")
+				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), rid)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -157,23 +163,24 @@ func TenantMatchFromPath(paramName string) Policy {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			principal, ok := auth.FromContext(r.Context())
 			if !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), "")
+				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 
 			resourceTenant := strings.TrimSpace(params.URLParam(r, paramName))
 			if resourceTenant == "" {
-				response.Error(w, apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, paramName+" is required"), "")
+				response.Error(w, apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, paramName+" is required"), rid)
 				return
 			}
 			if strings.TrimSpace(principal.TenantID) == "" {
-				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), "")
+				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), rid)
 				return
 			}
 			if !tenant.IsSameTenant(principal.TenantID, resourceTenant) {
-				response.Error(w, apperr.New(apperr.CodeNotFound, http.StatusNotFound, "not found"), "")
+				response.Error(w, apperr.New(apperr.CodeNotFound, http.StatusNotFound, "not found"), rid)
 				return
 			}
 

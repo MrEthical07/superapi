@@ -69,7 +69,6 @@ func All() []app.Module {
     return []app.Module{
         health.New(),
         system.New(),
-        tenants.New(),
         projects.New(),   // <-- add your module here
         // MODULE_LIST
     }
@@ -89,6 +88,24 @@ make module name=projects
 ```
 
 Or run `make module` with no `name` to use the interactive wizard. Create files manually only if you want a custom layout.
+
+Advanced examples:
+
+```bash
+# Add module-local SQL stubs
+make module name=projects db=1
+
+# Pre-wire policy examples in routes
+make module name=projects auth=1 tenant=1 ratelimit=1 cache=1
+
+# Also scaffold a global migration (requires db=1)
+make module name=projects db=1 migration=1
+```
+
+Constraints enforced by generator:
+
+- `tenant=1` requires `auth=1`
+- `migration=1` requires `db=1`
 
 ### 4.2 Define module.go
 

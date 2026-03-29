@@ -74,10 +74,12 @@ CREATE INDEX IF NOT EXISTS users_created_at_idx ON users (created_at);
 3. Enable auth in your environment:
    ```
    AUTH_ENABLED=true
+   AUTH_MODE=hybrid
    REDIS_ENABLED=true
    POSTGRES_ENABLED=true
-   AUTH_SECRET=your-secret-key-min-32-chars
    ```
+
+   In this template, startup auth configuration is currently controlled by `AUTH_ENABLED` and `AUTH_MODE`.
 
 4. Verify everything compiles:
    ```

@@ -267,10 +267,10 @@ func TestCacheReadFailClosedOnRedisError(t *testing.T) {
 	if called {
 		t.Fatalf("expected handler not to run in fail-closed mode")
 	}
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d want=%d", rr.Code, http.StatusInternalServerError)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusServiceUnavailable)
 	}
-	if !strings.Contains(rr.Body.String(), `"code":"internal_error"`) {
+	if !strings.Contains(rr.Body.String(), `"code":"dependency_unavailable"`) {
 		t.Fatalf("unexpected body: %s", rr.Body.String())
 	}
 }

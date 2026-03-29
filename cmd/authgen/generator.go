@@ -379,7 +379,8 @@ func generateDocs(workspaceRoot string, cfg AuthGenConfig) error {
 	b.WriteString("2. Run migrations against your database:\n")
 	b.WriteString("   ```\n   make migrate-up DB_URL=\"your_postgres_url\"\n   ```\n\n")
 	b.WriteString("3. Enable auth in your environment:\n")
-	b.WriteString("   ```\n   AUTH_ENABLED=true\n   REDIS_ENABLED=true\n   POSTGRES_ENABLED=true\n   AUTH_SECRET=your-secret-key-min-32-chars\n   ```\n\n")
+	b.WriteString("   ```\n   AUTH_ENABLED=true\n   AUTH_MODE=hybrid\n   REDIS_ENABLED=true\n   POSTGRES_ENABLED=true\n   ```\n\n")
+	b.WriteString("   In this template, startup auth configuration is currently controlled by `AUTH_ENABLED` and `AUTH_MODE`.\n\n")
 	b.WriteString("4. Verify everything compiles:\n")
 	b.WriteString("   ```\n   go build ./...\n   go test ./...\n   ```\n\n")
 

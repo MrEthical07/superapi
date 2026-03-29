@@ -72,3 +72,26 @@ func TestRateLimitAllowsWhenUnderLimit(t *testing.T) {
 		t.Fatalf("status=%d want=%d", rr.Code, http.StatusOK)
 	}
 }
+
+func TestRateLimitReturnsDependencyUnavailableOnLimiterErrorOutcome(t *testing.T) {
+	limiter := &mockLimiter{decision: ratelimit.Decision{Allowed: false, Outcome: ratelimit.OutcomeError}}
+
+	r := chi.NewRouter()
+	r.Get("/api/v1/system/whoami", Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		RateLimit(limiter, ratelimit.Rule{Limit: 10, Window: time.Minute, Scope: ratelimit.ScopeAnon}),
+	).ServeHTTP)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/whoami", nil)
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(rr.Body.String(), `"code":"dependency_unavailable"`) {
+		t.Fatalf("unexpected body: %s", rr.Body.String())
+	}
+}

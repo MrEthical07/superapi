@@ -21,7 +21,7 @@ If P2 short-circuits (writes a response without calling next), P3 and handler ne
 
 ```go
 r.Handle(method, pattern, handler,
-    // 1. Authentication (outermost — reject unauthenticated early)
+    // 1. Authentication (outermost — reject unauthenticated early, add auth context for downstream policies)
     policy.AuthRequired(provider, mode),
 
     // 2. Tenant scope (after auth — needs AuthContext)
@@ -569,3 +569,54 @@ policy.RequireAnyPerm()  // Empty list — becomes Noop (passes through!)
 
 `RequirePerm()` with no args: checks auth context exists but doesn't check any specific permission.
 `RequireAnyPerm()` with no args: returns `Noop()` — no check at all.
+
+
+## 9. Required configuration by policy
+
+### 9.1 Auth / Tenant / RBAC
+
+Required environment:
+
+- `AUTH_ENABLED=true`
+- `AUTH_MODE=jwt_only|hybrid|strict`
+- `REDIS_ENABLED=true`
+- `POSTGRES_ENABLED=true`
+
+If auth is disabled, routes with `AuthRequired` will always return `401`.
+
+### 9.2 Rate limit
+
+Required environment:
+
+- `RATELIMIT_ENABLED=true`
+- `REDIS_ENABLED=true`
+
+Optional tuning:
+
+- `RATELIMIT_FAIL_OPEN` (default `true`)
+- `RATELIMIT_DEFAULT_LIMIT`
+- `RATELIMIT_DEFAULT_WINDOW`
+
+### 9.3 Cache
+
+Required environment:
+
+- `CACHE_ENABLED=true`
+- `REDIS_ENABLED=true`
+
+Optional tuning:
+
+- `CACHE_FAIL_OPEN` (default `true`)
+- `CACHE_DEFAULT_MAX_BYTES`
+
+## 10. Extensibility guidelines
+
+When adding a new policy:
+
+1. Keep it stateless and constructor-injected.
+2. Use centralized envelope responses via `response.Error`.
+3. Use typed app error codes from `internal/core/errors/errors.go`.
+4. Add focused tests under `internal/core/policy/*_test.go`.
+5. Document required env/config and exact failure behavior in this file.
+
+This keeps the template copy-paste friendly and production-safe by default.

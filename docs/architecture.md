@@ -9,8 +9,10 @@ This document explains how SuperAPI works internally: request lifecycle, middlew
 ```
 cmd/
   api/main.go              # Real server entry point
+  authgen/main.go          # Auth bootstrap generator CLI
   migrate/main.go          # Migration CLI
   modulegen/main.go        # Module scaffolder CLI
+  modulesync/main.go       # Sync module-local SQL into db/schema + db/queries
 internal/
   core/
     app/                   # App container, lifecycle, dependency init
@@ -105,7 +107,7 @@ Middleware is applied in `AssembleGlobalMiddleware()` (file: `internal/core/http
 3. **Recoverer** — Catches panics, logs with structured context (request_id, method, path, panic value), returns sanitized 500
 4. **CORS** — Applies CORS headers and preflight handling (if enabled)
 5. **SecurityHeaders** — Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (if enabled)
-6. **MaxBodyBytes** — Limits request body size for POST/PUT/PATCH requests (if configured > 0)
+6. **MaxBodyBytes** — Limits request body size for write methods and any request that carries a body (if configured > 0)
 7. **RequestTimeout** — Sets `context.WithTimeout` on the request context (if configured > 0); returns 504 if deadline exceeded before response
 8. **Tracing** — Extracts W3C traceparent, creates server span, records attributes and status on defer (if enabled)
 9. **AccessLog** — Logs request method, route pattern, status, duration, bytes; sampled by deterministic request-id hash
@@ -215,9 +217,12 @@ All responses use a consistent JSON envelope:
 {
   "ok": true,
   "data": { ... },
+  "meta": { ... },
   "request_id": "abc123..."
 }
 ```
+
+`meta` is optional and can be used for envelope-level metadata (for example pagination cursors).
 
 ```json
 {
@@ -313,7 +318,7 @@ Prometheus metrics registered (namespace: `superapi`):
 | `dependency_ready` | Gauge | dependency, status | Per-dependency readiness |
 | `db_pool_*` | Gauge | — | Postgres pool stats (if enabled) |
 
-Route labels use **low-cardinality route patterns** (e.g., `/api/v1/tenants/{id}`), not raw paths. This prevents metric cardinality explosion.
+Route labels use **low-cardinality route patterns** (e.g., `/api/v1/projects/{id}`), not raw paths. This prevents metric cardinality explosion.
 
 ### 5.5 Tracing
 
@@ -538,7 +543,7 @@ type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp
 
 ### Cardinality safety
 
-- Route labels in metrics and logs use chi route patterns (e.g., `/api/v1/tenants/{id}`), not raw paths
+- Route labels in metrics and logs use chi route patterns (e.g., `/api/v1/projects/{id}`), not raw paths
 - Rate limit keys use low-cardinality scopes (`ip`, `user`, `tenant`, `token`, `anon`)
 - Cache keys use route pattern + selected vary dimensions + query param hash — not raw URLs
 - Access logs are sampled by default (5%) with always-log exceptions for errors and slow requests

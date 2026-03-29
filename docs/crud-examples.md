@@ -2,7 +2,7 @@
 
 End-to-end walkthrough of building a CRUD module in SuperAPI. Uses a fictional **projects** module as the example, showing every file from database migration to route registration.
 
-> **Reference module:** The existing `internal/modules/tenants/` follows the same patterns and is the production reference.
+> **Reference note:** There is no built-in tenant CRUD module registered by default; this document is the canonical CRUD module pattern.
 
 ---
 
@@ -839,7 +839,6 @@ func All() []app.Module {
 	return []app.Module{
 		health.New(),
 		system.New(),
-		tenants.New(),
 		projects.New(),  // Add here
 	}
 }

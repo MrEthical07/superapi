@@ -9,6 +9,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/cache"
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
+	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
@@ -27,6 +28,7 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			route := routePattern(r)
 			failOpen := manager.ResolveFailOpen(cfg.FailOpen)
 
@@ -46,7 +48,7 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 			if err != nil {
 				manager.Observe(route, cacheOutcomeError)
 				if !failOpen {
-					response.Error(w, apperr.New(apperr.CodeInternal, http.StatusInternalServerError, "cache unavailable"), "")
+					response.Error(w, apperr.New(apperr.CodeDependencyFailure, http.StatusServiceUnavailable, "cache unavailable"), rid)
 					return
 				}
 				next.ServeHTTP(w, r)
@@ -57,7 +59,7 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 			if err != nil {
 				manager.Observe(route, cacheOutcomeError)
 				if !failOpen {
-					response.Error(w, apperr.New(apperr.CodeInternal, http.StatusInternalServerError, "cache unavailable"), "")
+					response.Error(w, apperr.New(apperr.CodeDependencyFailure, http.StatusServiceUnavailable, "cache unavailable"), rid)
 					return
 				}
 			} else if hit {

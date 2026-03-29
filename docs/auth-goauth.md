@@ -34,14 +34,10 @@ POSTGRES_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
 |---|---|---|
 | `AUTH_ENABLED` | `false` | Master toggle |
 | `AUTH_MODE` | `hybrid` | Default auth mode: `jwt_only`, `hybrid`, `strict` |
-| `AUTH_SECRET` | — | JWT signing secret (required when AUTH_ENABLED=true) |
-| `AUTH_ISSUER` | `superapi` | JWT issuer claim |
-| `AUTH_AUDIENCE` | `superapi` | JWT audience claim |
-| `AUTH_ACCESS_TOKEN_TTL` | `15m` | Access token lifetime |
-| `AUTH_REFRESH_TOKEN_TTL` | `168h` (7 days) | Refresh token lifetime |
-| `AUTH_MAX_ACTIVE_SESSIONS` | `5` | Max concurrent sessions per user |
-| `AUTH_ROLES` | `user,admin` | Comma-separated list of valid roles |
-| `AUTH_PERMISSIONS` | (empty) | Comma-separated list of valid permissions |
+
+Notes:
+- In this template, startup config exposed via `internal/core/config/config.go` is currently `AUTH_ENABLED` + `AUTH_MODE`.
+- The provider itself is built from goAuth defaults inside `internal/core/auth/goauth_provider.go`.
 
 ---
 
@@ -176,7 +172,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 For tenant-scoped operations, you can use the tenant helper:
 
 ```go
-import "github.com/MrEthical06/superapi/internal/core/tenant"
+import "github.com/MrEthical07/superapi/internal/core/tenant"
 
 tenantID, ok := tenant.TenantIDFromContext(r.Context())
 if !ok {
@@ -234,21 +230,14 @@ SuperAPI wraps goAuth via `GoAuthProvider` which implements the `Provider` inter
 The goAuth engine is initialized in `internal/core/auth/goauth_provider.go`:
 
 ```go
-func NewGoAuthEngineProvider(cfg GoAuthConfig, redisClient *redis.Client) (*GoAuthProvider, error)
+func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (Provider, func(), error)
 ```
 
-**GoAuthConfig fields:**
+Runtime wiring details in this template:
 
-| Field | Source env var | Description |
-|---|---|---|
-| `Secret` | `AUTH_SECRET` | JWT HMAC signing key |
-| `Issuer` | `AUTH_ISSUER` | JWT `iss` claim |
-| `Audience` | `AUTH_AUDIENCE` | JWT `aud` claim |
-| `AccessTokenTTL` | `AUTH_ACCESS_TOKEN_TTL` | Access token expiry |
-| `RefreshTokenTTL` | `AUTH_REFRESH_TOKEN_TTL` | Refresh token expiry |
-| `MaxActiveSessions` | `AUTH_MAX_ACTIVE_SESSIONS` | Session limit per user |
-| `Roles` | `AUTH_ROLES` | Allowed roles |
-| `Permissions` | `AUTH_PERMISSIONS` | Allowed permissions |
+- Uses `goauth.DefaultConfig()` and sets validation mode from `AUTH_MODE`.
+- Wires Redis client + SQL-backed user provider (`auth.NewSQLCUserProvider(...)`).
+- Enables role and permission extraction in auth results.
 
 ### Validate call
 
@@ -269,17 +258,12 @@ func (p *GoAuthProvider) Authenticate(ctx context.Context, token string, mode Mo
 
 ### User provider
 
-goAuth requires a `UserProvider` to look up users during validation. SuperAPI uses a no-op implementation because tokens are self-contained (JWT claims carry all needed data):
+goAuth requires a `UserProvider` during validation. This template uses the DB-backed implementation:
 
-```go
-type noopUserProvider struct{}
+- `internal/core/auth/provider_sqlc.go` (`SQLCUserProvider`)
+- wired in `internal/core/app/deps.go` via `auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres))`
 
-func (noopUserProvider) GetUser(ctx context.Context, userID string) (goauth.User, error) {
-    return goauth.User{ID: userID}, nil
-}
-```
-
-If you need to enrich user data during validation (e.g., check if user is banned), implement a real `UserProvider`.
+This is why `AUTH_ENABLED=true` requires both Redis and Postgres at startup.
 
 ---
 
@@ -354,34 +338,27 @@ No authentication is performed. All `AuthRequired` policies will return 401. Do 
 
 ```
 AUTH_ENABLED=true
-AUTH_SECRET=dev-secret-min-32-chars-long!!!!
 AUTH_MODE=jwt_only
 REDIS_ENABLED=true
-REDIS_ADDRESS=localhost:6379
+REDIS_ADDR=localhost:6379
+POSTGRES_ENABLED=true
+POSTGRES_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
 ```
 
-Use `jwt_only` mode locally to avoid Redis dependency for session checks during development. Switch to `hybrid` or `strict` in staging/production.
+Use `jwt_only` mode locally to reduce strict session coupling during request validation. In this template, auth still requires Redis + Postgres to be enabled at startup.
 
 ### Generating test tokens
 
-goAuth provides token generation through its engine. For testing, you can generate tokens in a test helper:
+For integration tests, create a goAuth engine in test setup and mint tokens through the normal login flow:
 
 ```go
-engine, _ := goauth.NewEngine(goauth.Config{
-    Secret:   "dev-secret-min-32-chars-long!!!!",
-    Issuer:   "superapi",
-    Audience: "superapi",
-    // ...
-}, redisClient, &noopUserProvider{}, roles, permissions)
+accessToken, refreshToken, err := engine.Login(ctx, "test@example.com", "test-password")
+if err != nil {
+    t.Fatal(err)
+}
 
-tokens, _ := engine.CreateTokenPair(ctx, goauth.User{
-    ID:       "usr_test",
-    TenantID: "tnt_test",
-    Role:     "admin",
-    Permissions: []string{"project.read", "project.write"},
-})
-
-// Use tokens.AccessToken in Authorization header
+_ = refreshToken // use for refresh-flow tests as needed
+req.Header.Set("Authorization", "Bearer "+accessToken)
 ```
 
 ---
@@ -391,10 +368,10 @@ tokens, _ := engine.CreateTokenPair(ctx, goauth.User{
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | 401 on all requests | `AUTH_ENABLED=false` with `AuthRequired` policy | Enable auth or remove policy |
-| 401 with valid token | Wrong `AUTH_SECRET`, `AUTH_ISSUER`, or `AUTH_AUDIENCE` | Check env vars match token issuer |
+| 401 with valid token | Token was signed/issued with incompatible key material or claims | Regenerate token with the same goAuth configuration used by the running API |
 | 401 in strict mode | Redis down | Switch to hybrid mode or fix Redis |
 | 403 "tenant scope required" | Token has no `tenant_id` | Ensure user is assigned to a tenant |
-| 403 "forbidden" | Missing role or permission | Check `AUTH_ROLES` and `AUTH_PERMISSIONS` include required values |
+| 403 "forbidden" | Missing role or permission | Check token claims and route policy requirements |
 | 404 on tenant routes | Tenant ID mismatch in path | User's tenant doesn't match URL tenant_id |
 | Empty `AuthContext` | Token valid but claims missing | Check goAuth token generation includes all claims |
 When auth is enabled in this template, both Redis and Postgres must also be enabled because the runtime wires a SQL-backed user provider for goAuth.

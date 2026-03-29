@@ -11,6 +11,7 @@ import (
 
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/logx"
+	"github.com/MrEthical07/superapi/internal/core/netx"
 )
 
 const (
@@ -77,7 +78,11 @@ func AccessLog(cfg config.AccessLogConfig, log *logx.Logger) func(http.Handler) 
 				event = event.Str("user_agent", r.UserAgent())
 			}
 			if cfg.IncludeRemoteIP {
-				event = event.Str("remote_ip", remoteIP(r.RemoteAddr))
+				ip, ok := netx.ClientIPFromContext(r.Context())
+				if !ok {
+					ip = remoteIP(r.RemoteAddr)
+				}
+				event = event.Str("remote_ip", ip)
 			}
 
 			event.Msg("request")

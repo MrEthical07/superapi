@@ -2,6 +2,8 @@
 
 ---
 
+For the full runtime environment variable matrix (defaults, behavior, and constraints), see [docs/environment-variables.md](environment-variables.md).
+
 ## 1. Running the server
 
 ### Minimal (no external dependencies)
@@ -69,6 +71,23 @@ It also updates `internal/modules/modules.go`:
 make module name=projects force=1
 ```
 
+### Advanced scaffolding flags
+
+```bash
+# Add module-local db/schema.sql + db/queries.sql stubs
+make module name=projects db=1
+
+# Add policy-ready route wiring examples
+make module name=projects auth=1 tenant=1 ratelimit=1 cache=1
+
+# Also create a global migration scaffold (requires db=1)
+make module name=projects db=1 migration=1
+```
+
+Generator constraints:
+- `tenant=1` requires `auth=1`
+- `migration=1` requires `db=1`
+
 ### Name normalization rules
 
 | Input | Package name | Route path |
@@ -88,6 +107,18 @@ Requirements:
 2. Run tests: `go test ./...`
 3. Start server and test the ping endpoint: `curl http://localhost:8080/api/v1/projects/ping`
 4. Begin adding real routes, handlers, services, and repos
+
+### Bootstrapping auth schema/provider (optional)
+
+```bash
+# Interactive auth bootstrap wizard
+make auth
+
+# Config-driven auth bootstrap
+make auth-config file=authgen.example.yaml
+```
+
+This generates/updates auth bootstrap outputs, including `docs/auth-bootstrap.md`.
 
 ---
 
@@ -223,7 +254,7 @@ AUTH_ENABLED=true AUTH_MODE=hybrid   # Enable with hybrid mode
 AUTH_ENABLED=false                    # Disable (default)
 ```
 
-Requires: `REDIS_ENABLED=true`
+Requires: `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`
 
 ### Rate limiting
 
@@ -302,13 +333,13 @@ make test
 ### Run a specific package
 
 ```bash
-go test ./internal/modules/tenants/...
+go test ./internal/modules/system/...
 ```
 
 ### Run a specific test
 
 ```bash
-go test ./internal/modules/tenants/ -run TestCreateTenant
+go test ./internal/modules/system/ -run TestWhoamiRequiresAuth
 ```
 
 ### Build check (no tests)

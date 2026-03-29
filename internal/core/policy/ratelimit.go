@@ -8,6 +8,7 @@ import (
 
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
+	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
@@ -30,6 +31,7 @@ func RateLimitWithKeyer(limiter ratelimit.Limiter, name string, rule ratelimit.R
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rid := requestid.FromContext(r.Context())
 			route := routePattern(r)
 			scope, identifier := ratelimit.ResolveScopeAndIdentifier(r, rule)
 
@@ -41,15 +43,20 @@ func RateLimitWithKeyer(limiter ratelimit.Limiter, name string, rule ratelimit.R
 				Window:     rule.Window,
 			})
 			if err != nil {
-				response.Error(w, apperr.New(apperr.CodeInternal, http.StatusInternalServerError, "internal server error"), "")
+				response.Error(w, apperr.New(apperr.CodeInternal, http.StatusInternalServerError, "internal server error"), rid)
 				return
 			}
 
 			if !decision.Allowed {
+				if decision.Outcome == ratelimit.OutcomeError {
+					response.Error(w, apperr.New(apperr.CodeDependencyFailure, http.StatusServiceUnavailable, "rate limiter unavailable"), rid)
+					return
+				}
+
 				if seconds := ratelimit.RetryAfterSeconds(decision.RetryAfter); seconds > 0 {
 					w.Header().Set("Retry-After", strconv.Itoa(seconds))
 				}
-				response.Error(w, apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "rate limit exceeded"), "")
+				response.Error(w, apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "rate limit exceeded"), rid)
 				return
 			}
 

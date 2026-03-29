@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,9 @@ func TestRequireJSONRejectsNonJSONForBodyMethods(t *testing.T) {
 	if rr.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("status=%d want=%d", rr.Code, http.StatusUnsupportedMediaType)
 	}
+	if !strings.Contains(rr.Body.String(), `"code":"unsupported_media_type"`) {
+		t.Fatalf("unexpected body: %s", rr.Body.String())
+	}
 }
 
 func TestRequireJSONAllowsJSONCharset(t *testing.T) {
@@ -116,6 +120,21 @@ func TestRequireJSONAllowsJSONCharset(t *testing.T) {
 
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status=%d want=%d", rr.Code, http.StatusCreated)
+	}
+}
+
+func TestRequireJSONRejectsJSONPrefixLookalike(t *testing.T) {
+	h := Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	}), RequireJSON())
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Content-Type", "application/jsonx")
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusUnsupportedMediaType)
 	}
 }
 

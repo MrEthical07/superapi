@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -67,6 +69,8 @@ type HTTPMiddlewareConfig struct {
 	SecurityHeadersEnabled bool
 	RequestTimeout         time.Duration
 	AccessLog              AccessLogConfig
+	ClientIP               ClientIPConfig
+	CORS                   CORSConfig
 }
 
 type AccessLogConfig struct {
@@ -76,6 +80,22 @@ type AccessLogConfig struct {
 	SlowThreshold    time.Duration
 	IncludeUserAgent bool
 	IncludeRemoteIP  bool
+}
+
+type ClientIPConfig struct {
+	TrustedProxies []string
+}
+
+type CORSConfig struct {
+	Enabled             bool
+	AllowOrigins        []string
+	DenyOrigins         []string
+	AllowMethods        []string
+	AllowHeaders        []string
+	ExposeHeaders       []string
+	AllowCredentials    bool
+	MaxAge              time.Duration
+	AllowPrivateNetwork bool
 }
 
 type PostgresConfig struct {
@@ -150,6 +170,20 @@ func Load() (*Config, error) {
 					IncludeUserAgent: getBool("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_USER_AGENT", false),
 					IncludeRemoteIP:  getBool("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_REMOTE_IP", false),
 				},
+				ClientIP: ClientIPConfig{
+					TrustedProxies: getCSV("HTTP_TRUSTED_PROXIES", nil),
+				},
+				CORS: CORSConfig{
+					Enabled:             getBool("HTTP_MIDDLEWARE_CORS_ENABLED", false),
+					AllowOrigins:        getCSV("HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS", nil),
+					DenyOrigins:         getCSV("HTTP_MIDDLEWARE_CORS_DENY_ORIGINS", nil),
+					AllowMethods:        getCSV("HTTP_MIDDLEWARE_CORS_ALLOW_METHODS", nil),
+					AllowHeaders:        getCSV("HTTP_MIDDLEWARE_CORS_ALLOW_HEADERS", nil),
+					ExposeHeaders:       getCSV("HTTP_MIDDLEWARE_CORS_EXPOSE_HEADERS", nil),
+					AllowCredentials:    getBool("HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS", false),
+					MaxAge:              getDuration("HTTP_MIDDLEWARE_CORS_MAX_AGE", 0),
+					AllowPrivateNetwork: getBool("HTTP_MIDDLEWARE_CORS_ALLOW_PRIVATE_NETWORK", false),
+				},
 			},
 		},
 		Log: LogConfig{
@@ -221,7 +255,7 @@ func (c *Config) Lint() error {
 	if c.ServiceName == "" {
 		return errors.New("service name cannot be empty")
 	}
-	if c.HTTP.Addr == "" {
+	if strings.TrimSpace(c.HTTP.Addr) == "" {
 		return errors.New("http addr cannot be empty")
 	}
 	if c.HTTP.ReadHeaderTimeout <= 0 {
@@ -253,6 +287,30 @@ func (c *Config) Lint() error {
 	}
 	if c.HTTP.Middleware.AccessLog.SlowThreshold < 0 {
 		return fmt.Errorf("http middleware access log slow threshold must be >= 0")
+	}
+	if c.HTTP.Middleware.CORS.MaxAge < 0 {
+		return fmt.Errorf("http middleware cors max age must be >= 0")
+	}
+	if c.HTTP.Middleware.CORS.AllowCredentials && containsWildcard(c.HTTP.Middleware.CORS.AllowOrigins) {
+		return fmt.Errorf("http middleware cors allow credentials cannot be used with wildcard allow origins")
+	}
+	if err := validateOrigins("http middleware cors allow origins", c.HTTP.Middleware.CORS.AllowOrigins); err != nil {
+		return err
+	}
+	if err := validateOrigins("http middleware cors deny origins", c.HTTP.Middleware.CORS.DenyOrigins); err != nil {
+		return err
+	}
+	if err := validateTokens("http middleware cors allow methods", c.HTTP.Middleware.CORS.AllowMethods); err != nil {
+		return err
+	}
+	if err := validateTokens("http middleware cors allow headers", c.HTTP.Middleware.CORS.AllowHeaders); err != nil {
+		return err
+	}
+	if err := validateTokens("http middleware cors expose headers", c.HTTP.Middleware.CORS.ExposeHeaders); err != nil {
+		return err
+	}
+	if err := validateTrustedProxies(c.HTTP.Middleware.ClientIP.TrustedProxies); err != nil {
+		return err
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.Auth.Mode)) {
@@ -395,11 +453,6 @@ func (c *Config) Lint() error {
 			return fmt.Errorf("invalid HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED: %q", v)
 		}
 	}
-	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_MAX_BODY_BYTES"); ok {
-		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
-			return fmt.Errorf("invalid HTTP_MIDDLEWARE_MAX_BODY_BYTES: %q", v)
-		}
-	}
 	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_REQUEST_TIMEOUT"); ok {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -409,7 +462,21 @@ func (c *Config) Lint() error {
 			return fmt.Errorf("http middleware request timeout must be >= 0")
 		}
 	}
+	if v, ok := os.LookupEnv("HTTP_ADDR"); ok {
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("http addr cannot be empty")
+		}
+	}
 	if err := lintBoolEnv("HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_CORS_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_CORS_ALLOW_PRIVATE_NETWORK"); err != nil {
 		return err
 	}
 	if err := lintBoolEnv("AUTH_ENABLED"); err != nil {
@@ -425,6 +492,30 @@ func (c *Config) Lint() error {
 		return err
 	}
 	if err := lintDurationEnv("RATELIMIT_DEFAULT_WINDOW"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("HTTP_MAX_HEADER_BYTES"); err != nil {
+		return err
+	}
+	if err := lintInt64Env("HTTP_MIDDLEWARE_MAX_BODY_BYTES"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_READ_HEADER_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_READ_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_WRITE_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_IDLE_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_SHUTDOWN_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_MIDDLEWARE_CORS_MAX_AGE"); err != nil {
 		return err
 	}
 	if err := lintFloat64Env("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE"); err != nil {
@@ -648,6 +739,79 @@ func lintFloat64Env(key string) error {
 	}
 	if _, err := strconv.ParseFloat(v, 64); err != nil {
 		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func lintInt64Env(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func containsWildcard(items []string) bool {
+	for _, item := range items {
+		if strings.TrimSpace(item) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func validateOrigins(label string, origins []string) error {
+	for _, origin := range origins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "*" || strings.EqualFold(trimmed, "null") {
+			continue
+		}
+
+		u, err := url.Parse(trimmed)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("%s contains invalid origin: %q", label, origin)
+		}
+		if u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("%s origin must not include path, query, or fragment: %q", label, origin)
+		}
+	}
+	return nil
+}
+
+func validateTokens(label string, items []string) error {
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if strings.ContainsAny(trimmed, " \t\r\n") || strings.Contains(trimmed, ",") {
+			return fmt.Errorf("%s contains invalid token: %q", label, item)
+		}
+	}
+	return nil
+}
+
+func validateTrustedProxies(items []string) error {
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if strings.Contains(trimmed, "/") {
+			if _, _, err := net.ParseCIDR(trimmed); err != nil {
+				return fmt.Errorf("http trusted proxy is invalid cidr: %q", item)
+			}
+			continue
+		}
+		if ip := net.ParseIP(trimmed); ip == nil {
+			return fmt.Errorf("http trusted proxy is invalid ip: %q", item)
+		}
 	}
 	return nil
 }

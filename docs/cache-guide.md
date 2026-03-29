@@ -31,11 +31,12 @@ REDIS_ENABLED=true    # Cache requires Redis
 
 | Env var | Default | Description |
 |---|---|---|
-| `CACHE_DEFAULT_TTL` | `30s` | Default TTL when not set in config |
 | `CACHE_DEFAULT_MAX_BYTES` | `262144` (256 KiB) | Max response body size to store |
-| `CACHE_KEY_PREFIX` | `cache` | Redis key prefix |
-| `CACHE_TAG_PREFIX` | `cver` | Tag version key prefix |
 | `CACHE_FAIL_OPEN` | `true` | Pass through on Redis errors |
+
+Notes:
+- Route TTL is configured per-route via `CacheReadConfig.TTL` (there is no global `CACHE_DEFAULT_TTL` env var).
+- Key prefixes are currently fixed in code as `cache` (read keys) and `cver` (tag version keys).
 
 ---
 
@@ -46,7 +47,7 @@ Every cached response has a unique Redis key built from the route pattern and va
 ### Key format
 
 ```
-{prefix}:{env}:{route_pattern}:{content_hash}
+cache:{env}:{route_pattern}:{content_hash}
 ```
 
 Example:
@@ -102,7 +103,7 @@ Do NOT use route-specific tags like `"project-list"` or `"project-detail"`. The 
 ### Tag version key format
 
 ```
-{tag_prefix}:{env}:{tag_name}
+cver:{env}:{tag_name}
 ```
 
 Example: `cver:prod:project`
@@ -128,7 +129,7 @@ Example: `cver:prod:project`
 | `GET /api/v1/settings` (global) | `{}` (empty) | Same response for everyone |
 | `GET /api/v1/projects` (tenant list) | `TenantID: true, QueryParams: ["limit","cursor"]` | Different data per tenant, paginated |
 | `GET /api/v1/projects/{id}` (detail) | `TenantID: true, PathParams: ["id"]` | Specific item per tenant |
-| `GET /api/v1/tenants/self` (self) | `TenantID: true` | Tenant's own data |
+| `GET /api/v1/projects/self` (self) | `TenantID: true` | Tenant's own scoped data |
 | `GET /api/v1/users/me` (self) | `UserID: true` | User's own data |
 | `GET /api/v1/projects?status=active` | `TenantID: true, QueryParams: ["status","limit","cursor"]` | Filtered + paginated |
 

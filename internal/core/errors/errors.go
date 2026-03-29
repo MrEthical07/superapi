@@ -7,6 +7,7 @@ type Code string
 const (
 	CodeInternal          Code = "internal_error"
 	CodeBadRequest        Code = "bad_request"
+	CodeUnsupportedMedia  Code = "unsupported_media_type"
 	CodeNotFound          Code = "not_found"
 	CodeMethodNotAllowed  Code = "method_not_allowed"
 	CodeUnauthorized      Code = "unauthorized"

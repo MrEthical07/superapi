@@ -86,15 +86,17 @@ go run ./cmd/api
 | Response caching | `CACHE_ENABLED` | `false` | Redis |
 | Prometheus metrics | `METRICS_ENABLED` | `true` | — |
 | OpenTelemetry tracing | `TRACING_ENABLED` | `false` | OTLP endpoint |
-| Security headers | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `false` | — |
+| Security headers | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `true` in `prod`, otherwise `false` | — |
 | Request timeout | `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` | `0` (disabled) | — |
-| Max body bytes | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | `0` (disabled) | — |
+| Max body bytes | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | `1048576` (1 MiB) | — |
 | CORS middleware | `HTTP_MIDDLEWARE_CORS_ENABLED` | `false` | — |
 | Trusted proxies | `HTTP_TRUSTED_PROXIES` | empty | — |
 
 Notes:
+- `APP_ENV` defaults to `dev`; `prod`/`production` changes some defaults (for example, security headers enabled and tracing insecure transport disabled).
 - Client IP resolution trusts `Forwarded` / `X-Forwarded-For` only when `HTTP_TRUSTED_PROXIES` is configured.
 - `HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS=true` cannot be used with `HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS=*`.
+- See [docs/environment-variables.md](environment-variables.md) for the full env matrix.
 
 ## Key endpoints (built-in)
 
@@ -105,10 +107,6 @@ Notes:
 | GET | `/metrics` | Prometheus metrics |
 | POST | `/system/parse-duration` | Typed JSON handler example |
 | GET | `/api/v1/system/whoami` | Auth-protected principal info |
-| POST | `/api/v1/tenants` | Create tenant |
-| GET | `/api/v1/tenants` | List tenants |
-| GET | `/api/v1/tenants/{id}` | Get tenant by ID (cached) |
-| GET | `/api/v1/tenants/self` | Get own tenant (auth + tenant required) |
 
 ## Where to start
 

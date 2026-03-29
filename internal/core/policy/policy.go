@@ -1,6 +1,14 @@
 package policy
 
-import "net/http"
+import (
+	"mime"
+	"net/http"
+	"strings"
+
+	apperr "github.com/MrEthical07/superapi/internal/core/errors"
+	"github.com/MrEthical07/superapi/internal/core/requestid"
+	"github.com/MrEthical07/superapi/internal/core/response"
+)
 
 type Policy func(http.Handler) http.Handler
 
@@ -31,7 +39,8 @@ func RequireJSON() Policy {
 			}
 
 			if !isJSONContentType(r.Header.Get("Content-Type")) {
-				http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+				rid := requestid.FromContext(r.Context())
+				response.Error(w, apperr.New(apperr.CodeUnsupportedMedia, http.StatusUnsupportedMediaType, "content type must be application/json"), rid)
 				return
 			}
 
@@ -59,11 +68,10 @@ func requiresJSONBody(r *http.Request) bool {
 }
 
 func isJSONContentType(contentType string) bool {
-	if contentType == "application/json" {
-		return true
+	trimmed := strings.TrimSpace(contentType)
+	if trimmed == "" {
+		return false
 	}
-	if len(contentType) > len("application/json") && contentType[:len("application/json")] == "application/json" {
-		return true
-	}
-	return false
+	mediaType, _, err := mime.ParseMediaType(trimmed)
+	return err == nil && strings.EqualFold(mediaType, "application/json")
 }
