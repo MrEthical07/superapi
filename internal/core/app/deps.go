@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	goauth "github.com/MrEthical07/goAuth"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -18,18 +19,18 @@ import (
 )
 
 type Dependencies struct {
-	Postgres  *pgxpool.Pool
-	Redis     *redis.Client
-	Readiness *readiness.Service
-	Metrics   *metrics.Service
-	Tracing   *tracing.Service
-	Auth      auth.Provider
-	AuthMode  auth.Mode
-	RateLimit config.RateLimitConfig
-	Cache     config.CacheConfig
-	Limiter   ratelimit.Limiter
-	CacheMgr  *cache.Manager
-	authClose func()
+	Postgres   *pgxpool.Pool
+	Redis      *redis.Client
+	Readiness  *readiness.Service
+	Metrics    *metrics.Service
+	Tracing    *tracing.Service
+	AuthEngine *goauth.Engine
+	AuthMode   auth.Mode
+	RateLimit  config.RateLimitConfig
+	Cache      config.CacheConfig
+	Limiter    ratelimit.Limiter
+	CacheMgr   *cache.Manager
+	authClose  func()
 }
 
 type DependencyBinder interface {
@@ -95,10 +96,10 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 		return nil, fmt.Errorf("init auth mode: %w", err)
 	}
 	deps.AuthMode = authMode
-	deps.Auth = auth.NewDisabledProvider()
+	deps.AuthEngine = nil
 
 	if cfg.Auth.Enabled {
-		provider, closeFn, err := auth.NewGoAuthEngineProvider(deps.Redis, authMode, auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres)))
+		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres)))
 		if err != nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()
@@ -108,7 +109,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			}
 			return nil, fmt.Errorf("init auth provider: %w", err)
 		}
-		deps.Auth = provider
+		deps.AuthEngine = engine
 		deps.authClose = closeFn
 	}
 

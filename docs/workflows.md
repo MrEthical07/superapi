@@ -12,7 +12,22 @@ For the full runtime environment variable matrix (defaults, behavior, and constr
 go run ./cmd/api
 ```
 
-Server starts on `:8080`. Postgres and Redis features are disabled. Health, system, and tenant endpoints (non-DB ones) are available.
+Server starts on `:8080`. Postgres and Redis features are disabled. Built-in health and system endpoints are available.
+
+### Using config profiles
+
+```bash
+# Minimal local mode (no Redis/Postgres wiring)
+APP_PROFILE=minimal go run ./cmd/api
+
+# Dev profile (auth/cache/ratelimit/postgres/redis enabled defaults)
+APP_PROFILE=dev go run ./cmd/api
+
+# Prod-like profile (strict auth + fail-closed cache/ratelimit defaults)
+APP_PROFILE=prod go run ./cmd/api
+```
+
+Explicit env vars still override profile defaults.
 
 ### With all features
 
@@ -105,8 +120,9 @@ Requirements:
 
 1. Verify: `go build ./...`
 2. Run tests: `go test ./...`
-3. Start server and test the ping endpoint: `curl http://localhost:8080/api/v1/projects/ping`
-4. Begin adding real routes, handlers, services, and repos
+3. Run static policy checks: `make verify`
+4. Start server and test the ping endpoint: `curl http://localhost:8080/api/v1/projects/ping`
+5. Begin adding real routes, handlers, services, and repos
 
 ### Bootstrapping auth schema/provider (optional)
 
@@ -348,6 +364,18 @@ go test ./internal/modules/system/ -run TestWhoamiRequiresAuth
 go build ./...
 ```
 
+### Policy static verification
+
+```bash
+go run ./cmd/superapi-verify ./...
+
+# JSON output for CI tooling
+go run ./cmd/superapi-verify -format json ./...
+
+# Using make
+make verify
+```
+
 ### Format and vet
 
 ```bash
@@ -361,7 +389,36 @@ make vet
 make fmt
 make vet
 make test
+make verify
 go build ./...
+```
+
+### Load testing for 10K RPS readiness
+
+Generate an auth token for `GET /api/v1/system/whoami` traffic:
+
+```bash
+go run ./cmd/perftoken --output json
+```
+
+Run k6 (10m ramp + 30m sustain by default):
+
+```bash
+make load-k6-10k PERF_AUTH_TOKEN="<token>"
+```
+
+Run Vegeta (same profile):
+
+```bash
+make load-vegeta-10k PERF_AUTH_TOKEN="<token>"
+```
+
+For complete setup, pass/fail criteria, and tuning guidance, see [docs/performance-testing.md](performance-testing.md).
+
+### Hot-path benchmarks
+
+```bash
+make bench-hotpath
 ```
 
 ---

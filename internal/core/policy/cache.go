@@ -22,11 +22,14 @@ const (
 )
 
 func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
-	if manager == nil || cfg.TTL <= 0 {
-		return Noop()
+	if manager == nil {
+		panicInvalidRouteConfigf("%s requires a non-nil cache manager", PolicyTypeCacheRead)
+	}
+	if cfg.TTL <= 0 {
+		panicInvalidRouteConfigf("%s requires a TTL greater than zero", PolicyTypeCacheRead)
 	}
 
-	return func(next http.Handler) http.Handler {
+	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rid := requestid.FromContext(r.Context())
 			route := routePattern(r)
@@ -38,11 +41,7 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 				return
 			}
 
-			if shouldBypassAuthCaching(r, cfg) {
-				manager.Observe(route, cacheOutcomeBypass)
-				next.ServeHTTP(w, r)
-				return
-			}
+			ensureAuthCacheSafety(r, cfg)
 
 			key, err := manager.BuildReadKey(r.Context(), r, route, cfg)
 			if err != nil {
@@ -99,14 +98,27 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 			manager.Observe(route, cacheOutcomeSet)
 		})
 	}
+
+	return annotatePolicy(p, Metadata{
+		Type: PolicyTypeCacheRead,
+		Name: "CacheRead",
+		CacheRead: CacheReadMetadata{
+			AllowAuthenticated: cfg.AllowAuthenticated,
+			VaryByUserID:       cfg.VaryBy.UserID,
+			VaryByTenantID:     cfg.VaryBy.TenantID,
+		},
+	})
 }
 
 func CacheInvalidate(manager *cache.Manager, cfg cache.CacheInvalidateConfig) Policy {
-	if manager == nil || len(cfg.Tags) == 0 {
-		return Noop()
+	if manager == nil {
+		panicInvalidRouteConfigf("%s requires a non-nil cache manager", PolicyTypeCacheInvalidate)
+	}
+	if len(cfg.Tags) == 0 {
+		panicInvalidRouteConfigf("%s requires at least one cache tag", PolicyTypeCacheInvalidate)
 	}
 
-	return func(next http.Handler) http.Handler {
+	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			route := routePattern(r)
 			recorder := &statusCodeRecorder{ResponseWriter: w, statusCode: http.StatusOK}
@@ -120,6 +132,14 @@ func CacheInvalidate(manager *cache.Manager, cfg cache.CacheInvalidateConfig) Po
 			}
 		})
 	}
+
+	return annotatePolicy(p, Metadata{
+		Type: PolicyTypeCacheInvalidate,
+		Name: "CacheInvalidate",
+		CacheInvalidate: CacheInvalidateMetadata{
+			TagCount: len(cfg.Tags),
+		},
+	})
 }
 
 type statusCodeRecorder struct {
@@ -223,19 +243,22 @@ func (w *cachingResponseWriter) Cacheable(cfg cache.CacheReadConfig) bool {
 	return false
 }
 
-func shouldBypassAuthCaching(r *http.Request, cfg cache.CacheReadConfig) bool {
+func hasAuthPrincipal(r *http.Request) bool {
 	principal, ok := auth.FromContext(r.Context())
 	if !ok {
 		return false
 	}
-	hasAuth := strings.TrimSpace(principal.UserID) != "" || strings.TrimSpace(principal.TenantID) != "" || strings.TrimSpace(principal.Role) != ""
-	if !hasAuth {
-		return false
+	return strings.TrimSpace(principal.UserID) != "" || strings.TrimSpace(principal.TenantID) != "" || strings.TrimSpace(principal.Role) != ""
+}
+
+func ensureAuthCacheSafety(r *http.Request, cfg cache.CacheReadConfig) {
+	if !hasAuthPrincipal(r) {
+		return
 	}
-	if cfg.AllowAuthenticated {
-		return false
+	if cfg.VaryBy.UserID || cfg.VaryBy.TenantID {
+		return
 	}
-	return !cfg.VaryBy.UserID && !cfg.VaryBy.TenantID
+	panicInvalidRouteConfigf("%s on authenticated routes requires VaryBy.UserID or VaryBy.TenantID", PolicyTypeCacheRead)
 }
 
 func methodAllowed(method string, configured []string) bool {

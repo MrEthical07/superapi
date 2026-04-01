@@ -1,17 +1,16 @@
 # Auth & goAuth Integration
 
-How authentication works in SuperAPI — the provider interface, goAuth engine integration, auth modes, token flow, and local development setup.
+How authentication works in SuperAPI with direct goAuth engine integration: auth modes, token flow, route protection, and local development setup.
 
 ---
 
 ## Architecture
 
-Authentication is a pluggable subsystem with three layers:
+Authentication uses goAuth as the single engine with a thin SuperAPI integration layer:
 
 | Layer | File | Role |
 |---|---|---|
-| **Provider interface** | `internal/core/auth/provider.go` | Abstraction for any auth backend |
-| **GoAuth provider** | `internal/core/auth/goauth_provider.go` | Concrete implementation using goAuth engine |
+| **goAuth engine builder** | `internal/core/auth/goauth_provider.go` | Builds `*goauth.Engine` from config + Redis + SQLC user provider |
 | **AuthContext** | `internal/core/auth/context.go` | Authenticated user data injected into request context |
 | **AuthRequired policy** | `internal/core/policy/auth.go` | Per-route middleware that enforces authentication |
 
@@ -37,7 +36,7 @@ POSTGRES_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
 
 Notes:
 - In this template, startup config exposed via `internal/core/config/config.go` is currently `AUTH_ENABLED` + `AUTH_MODE`.
-- The provider itself is built from goAuth defaults inside `internal/core/auth/goauth_provider.go`.
+- The goAuth engine is built from defaults inside `internal/core/auth/goauth_provider.go`.
 
 ---
 
@@ -85,13 +84,13 @@ AUTH_MODE=strict
 ```go
 // Module binds the default mode from config
 func (m *Module) BindDependencies(d *app.Dependencies) {
-    m.auth = d.Auth
-    m.mode = d.AuthMode  // Global default from AUTH_MODE
+    m.authEngine = d.AuthEngine
+    m.authMode = d.AuthMode  // Global default from AUTH_MODE
 }
 
 // Override for a specific sensitive route
 r.Handle(http.MethodPost, "/api/v1/payments", handler,
-    policy.AuthRequired(m.auth, auth.ModeStrict),  // Override to strict
+    policy.AuthRequired(m.authEngine, auth.ModeStrict),  // Override to strict
 )
 ```
 
@@ -135,7 +134,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1N...
 
 ### AuthContext injection
 
-On successful validation, the provider returns an `AuthContext` which is injected into the request context:
+On successful validation, goAuth middleware returns an auth result and SuperAPI injects `AuthContext` into the request context:
 
 ```go
 type AuthContext struct {
@@ -185,37 +184,11 @@ This reads from the same `AuthContext` — it's a shortcut that extracts only th
 
 ---
 
-## Provider interface
-
-```go
-type Provider interface {
-    Authenticate(ctx context.Context, token string, mode Mode) (AuthContext, error)
-}
-```
-
-The interface is intentionally minimal. Any auth backend that can validate a token and return user metadata can implement it.
-
-### Disabled provider
-
-When `AUTH_ENABLED=false`, the app uses `DisabledProvider`:
-
-```go
-type DisabledProvider struct{}
-
-func (DisabledProvider) Authenticate(ctx context.Context, token string, mode Mode) (AuthContext, error) {
-    return AuthContext{}, errors.New("auth is not enabled")
-}
-```
-
-This means `AuthRequired` policy will always return 401 when auth is disabled. If you have routes that require auth, you must enable auth.
-
----
-
 ## goAuth engine integration
 
 ### What goAuth provides
 
-goAuth is a standalone auth engine library (`github.com/MrEthical07/goAuth`) that handles:
+goAuth is the auth and RBAC engine (`github.com/MrEthical07/goAuth`) and handles:
 
 - JWT creation and validation
 - Session management in Redis
@@ -223,14 +196,12 @@ goAuth is a standalone auth engine library (`github.com/MrEthical07/goAuth`) tha
 - Session revocation
 - Multi-session tracking
 
-SuperAPI wraps goAuth via `GoAuthProvider` which implements the `Provider` interface.
-
 ### Engine initialization
 
 The goAuth engine is initialized in `internal/core/auth/goauth_provider.go`:
 
 ```go
-func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (Provider, func(), error)
+func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (*goauth.Engine, func(), error)
 ```
 
 Runtime wiring details in this template:
@@ -239,22 +210,7 @@ Runtime wiring details in this template:
 - Wires Redis client + SQL-backed user provider (`auth.NewSQLCUserProvider(...)`).
 - Enables role and permission extraction in auth results.
 
-### Validate call
-
-```go
-func (p *GoAuthProvider) Authenticate(ctx context.Context, token string, mode Mode) (AuthContext, error) {
-    result, err := p.engine.Validate(ctx, token, toGoAuthMode(mode))
-    if err != nil {
-        return AuthContext{}, err
-    }
-    return AuthContext{
-        UserID:      result.UserID,
-        TenantID:    result.TenantID,
-        Role:        result.Role,
-        Permissions: result.Permissions,
-    }, nil
-}
-```
+`policy.AuthRequired(engine, mode)` now calls goAuth middleware guard directly and stores both goAuth auth result and `auth.AuthContext` on request context for downstream handlers.
 
 ### User provider
 
@@ -273,7 +229,7 @@ This is why `AUTH_ENABLED=true` requires both Redis and Postgres at startup.
 
 ```go
 r.Handle(http.MethodGet, "/api/v1/profile", handler,
-    policy.AuthRequired(m.auth, m.mode),
+    policy.AuthRequired(m.authEngine, m.authMode),
 )
 ```
 
@@ -281,8 +237,8 @@ r.Handle(http.MethodGet, "/api/v1/profile", handler,
 
 ```go
 r.Handle(http.MethodPost, "/api/v1/admin/users", handler,
-    policy.AuthRequired(m.auth, auth.ModeStrict),
-    policy.RequireRole("admin"),
+    policy.AuthRequired(m.authEngine, auth.ModeStrict),
+    policy.RequirePerm("admin.users.write"),
 )
 ```
 
@@ -290,7 +246,7 @@ r.Handle(http.MethodPost, "/api/v1/admin/users", handler,
 
 ```go
 r.Handle(http.MethodPost, "/api/v1/projects", handler,
-    policy.AuthRequired(m.auth, m.mode),
+    policy.AuthRequired(m.authEngine, m.authMode),
     policy.RequirePerm("project.write"),
 )
 ```
@@ -299,7 +255,7 @@ r.Handle(http.MethodPost, "/api/v1/projects", handler,
 
 ```go
 r.Handle(http.MethodGet, "/api/v1/tenants/{tenant_id}/projects", handler,
-    policy.AuthRequired(m.auth, auth.ModeStrict),
+    policy.AuthRequired(m.authEngine, auth.ModeStrict),
     policy.TenantRequired(),
     policy.TenantMatchFromPath("tenant_id"),
 )

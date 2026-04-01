@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"errors"
 	"strings"
 )
@@ -19,10 +18,6 @@ const (
 	ModeStrict  Mode = "strict"
 )
 
-type Provider interface {
-	Authenticate(ctx context.Context, token string, mode Mode) (AuthContext, error)
-}
-
 func ParseMode(mode string) (Mode, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "jwt_only", "jwt-only", "jwtonly":
@@ -34,14 +29,4 @@ func ParseMode(mode string) (Mode, error) {
 	default:
 		return "", errors.New("invalid auth mode")
 	}
-}
-
-type DisabledProvider struct{}
-
-func NewDisabledProvider() Provider {
-	return DisabledProvider{}
-}
-
-func (DisabledProvider) Authenticate(context.Context, string, Mode) (AuthContext, error) {
-	return AuthContext{}, ErrUnauthenticated
 }

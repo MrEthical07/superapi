@@ -18,7 +18,7 @@ func RateLimit(limiter ratelimit.Limiter, rule ratelimit.Rule) Policy {
 
 func RateLimitWithKeyer(limiter ratelimit.Limiter, name string, rule ratelimit.Rule, keyer ratelimit.Keyer) Policy {
 	if limiter == nil {
-		return Noop()
+		panicInvalidRouteConfigf("%s requires a non-nil limiter", PolicyTypeRateLimit)
 	}
 
 	if keyer != nil {
@@ -26,10 +26,10 @@ func RateLimitWithKeyer(limiter ratelimit.Limiter, name string, rule ratelimit.R
 	}
 
 	if err := rule.Validate(); err != nil {
-		return Noop()
+		panicInvalidRouteConfigf("%s rule is invalid: %v", PolicyTypeRateLimit, err)
 	}
 
-	return func(next http.Handler) http.Handler {
+	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rid := requestid.FromContext(r.Context())
 			route := routePattern(r)
@@ -63,6 +63,8 @@ func RateLimitWithKeyer(limiter ratelimit.Limiter, name string, rule ratelimit.R
 			next.ServeHTTP(w, r)
 		})
 	}
+
+	return annotatePolicy(p, Metadata{Type: PolicyTypeRateLimit, Name: "RateLimit"})
 }
 
 func routePattern(r *http.Request) string {

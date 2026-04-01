@@ -1,6 +1,7 @@
 package modulekit
 
 import (
+	goauth "github.com/MrEthical07/goAuth"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -53,11 +54,11 @@ func (r Runtime) CacheConfig() config.CacheConfig {
 	return r.deps.Cache
 }
 
-func (r Runtime) AuthProvider() auth.Provider {
-	if r.deps == nil || r.deps.Auth == nil {
-		return auth.NewDisabledProvider()
+func (r Runtime) AuthEngine() *goauth.Engine {
+	if r.deps == nil {
+		return nil
 	}
-	return r.deps.Auth
+	return r.deps.AuthEngine
 }
 
 func (r Runtime) AuthMode(overrides ...auth.Mode) auth.Mode {

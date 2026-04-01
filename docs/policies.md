@@ -6,6 +6,15 @@ Policies are per-route middleware functions applied during route registration. T
 
 **File:** `internal/core/policy/policy.go`
 
+## Strict guarantees (fail-fast)
+
+SuperAPI enforces policy invariants at registration time.
+
+- Every `r.Handle(...)` call is validated via `policy.MustValidateRoute(...)`.
+- Invalid policy order/dependencies panic immediately with `invalid route config: ...`.
+- No warning-only mode and no compatibility fallback paths.
+- `go run ./cmd/superapi-verify ./...` (or `make verify`) applies the same checks statically.
+
 ---
 
 ## 1. Policy chaining order
@@ -22,7 +31,7 @@ If P2 short-circuits (writes a response without calling next), P3 and handler ne
 ```go
 r.Handle(method, pattern, handler,
     // 1. Authentication (outermost — reject unauthenticated early, add auth context for downstream policies)
-    policy.AuthRequired(provider, mode),
+    policy.AuthRequired(authEngine, mode),
 
     // 2. Tenant scope (after auth — needs AuthContext)
     policy.TenantRequired(),
@@ -31,8 +40,7 @@ r.Handle(method, pattern, handler,
     policy.TenantMatchFromPath("tenant_id"),
 
     // 4. RBAC (after tenant — needs AuthContext)
-    policy.RequireRole("admin"),
-    // or: policy.RequirePerm("project.write"),
+    policy.RequirePerm("project.write"),
     // or: policy.RequireAnyPerm("project.write", "project.admin"),
 
     // 5. Rate limit (after auth — so user/tenant scope is available for keying)
@@ -51,21 +59,21 @@ r.Handle(method, pattern, handler,
 
 File: `internal/core/policy/auth.go`
 
-### AuthRequired(provider, mode)
+### AuthRequired(engine, mode)
 
-Extracts Bearer token from `Authorization` header, validates it using the auth provider, and injects `AuthContext` into the request context.
+Extracts Bearer token from `Authorization` header, validates it using goAuth middleware guard, and injects `AuthContext` into the request context.
 
 ```go
-policy.AuthRequired(m.auth, m.mode)
+policy.AuthRequired(m.authEngine, m.authMode)
 ```
 
 **Behavior:**
 - Missing/empty `Authorization` header → 401 `unauthorized`
 - Invalid or non-`Bearer` format → 401 `unauthorized`
-- Provider validation failure → 401 `unauthorized`
+- goAuth validation failure → 401 `unauthorized`
 - Success: `auth.AuthContext` injected into context via `auth.WithContext()`
 
-**Auth modes** (passed to provider):
+**Auth modes** (passed to goAuth guard):
 
 | Mode | Constant | Behavior |
 |---|---|---|
@@ -93,19 +101,6 @@ if !ok {
 }
 ```
 
-### RequireRole(roles...)
-
-Checks that the authenticated user has one of the specified roles.
-
-```go
-policy.RequireRole("admin", "super_admin")
-```
-
-**Behavior:**
-- No AuthContext in context → 401 `unauthorized`
-- Role not in allowed set → 403 `forbidden`
-- Role matches any → passes through
-
 ### RequirePerm(perms...)
 
 Checks that the authenticated user has **all** of the specified permissions.
@@ -131,7 +126,7 @@ policy.RequireAnyPerm("project.write", "project.admin")
 - No AuthContext → 401 `unauthorized`
 - No matching permission → 403 `forbidden`
 - Any permission matches → passes through
-- Empty perms list → Noop (passes through)
+- Empty perms list → startup panic (`invalid route config`)
 
 ---
 
@@ -258,8 +253,7 @@ When a request is rate-limited (429), the `Retry-After` header is set with the n
 
 - Rate limit keys use low-cardinality values. Route patterns (not raw URLs), scopes, and sanitized identifiers.
 - Bearer tokens are never stored in keys — only a SHA-256 hash prefix (16 hex chars by default).
-- If the limiter is nil (rate limiting disabled), the policy becomes a noop.
-- Invalid rules (limit <= 0 or window <= 0) result in a noop policy.
+- `RateLimit(...)` and `RateLimitWithKeyer(...)` require a non-nil limiter and a valid rule; invalid config panics at registration.
 
 ---
 
@@ -295,7 +289,7 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 | `CacheStatuses` | `[]int` | `[200]` | HTTP status codes to cache |
 | `VaryBy` | `CacheVaryBy` | — | Dimensions that differentiate cache entries |
 | `FailOpen` | `*bool` | Global `CACHE_FAIL_OPEN` | Per-route fail-open override |
-| `AllowAuthenticated` | `bool` | `false` | Allow caching responses for authenticated requests |
+| `AllowAuthenticated` | `bool` | `false` | Enables authenticated caching behavior in the cache layer; does not override validator safety rules |
 
 **CacheVaryBy fields:**
 
@@ -312,7 +306,7 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 **Behavior flow:**
 
 1. Check if HTTP method is allowed (default: GET/HEAD only)
-2. Check if authenticated caching should be bypassed (see below)
+2. Enforce authenticated cache safety rules (see below)
 3. Build cache key from route pattern + vary-by dimensions + tag versions
 4. Attempt cache GET
    - **Hit:** Serve cached response directly, return
@@ -320,13 +314,14 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 5. Capture handler response
 6. If response is cacheable, store in Redis with TTL
 
-**Authenticated caching bypass:**
+**Authenticated caching safety (strict):**
 
-Responses for authenticated users are **not cached** unless:
-- `AllowAuthenticated: true` is set, OR
-- `VaryBy.UserID` or `VaryBy.TenantID` is set
+For authenticated routes (those with `AuthRequired`), `CacheRead` must include at least one identity boundary:
 
-This prevents accidentally serving one user's data to another.
+- `VaryBy.UserID = true`, or
+- `VaryBy.TenantID = true`
+
+If neither is set, validation fails and route registration panics. `AllowAuthenticated` does not bypass this requirement.
 
 **Not cached:**
 - Streaming responses (flushed or hijacked)
@@ -353,7 +348,7 @@ policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
 - Invalidation uses `INCR` on tag version keys (`cver:{env}:{tag}`), which is O(1)
 - This is NOT mass key deletion — it's cheap and fast
 - Multiple tags can be invalidated in a single Redis pipeline
-- If the manager is nil or tags are empty, the policy becomes a noop
+- `CacheInvalidate(...)` requires a non-nil manager and at least one tag; invalid config panics at registration
 
 ### Safe defaults summary
 
@@ -363,7 +358,7 @@ policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
 | Only cache 200 | Prevent caching error responses | |
 | Skip Set-Cookie responses | Prevent session leaks | |
 | Skip oversized responses | Prevent Redis memory abuse | |
-| Skip authenticated (unless opted in) | Prevent cross-user data leaks | |
+| Authenticated cache keys must vary by user or tenant | Prevent cross-user data leaks | |
 | Fail-open on Redis error | Availability over cache | |
 
 ---
@@ -401,7 +396,50 @@ policy.Noop()
 
 ---
 
-## 7. Recommended policy stacks by endpoint type
+## 7. Validator and preset usage
+
+### Runtime validator rules
+
+The strict validator enforces:
+
+- Policy order: auth -> tenant -> RBAC -> rate-limit -> cache.
+- Auth dependency: RBAC and tenant policies require `AuthRequired`.
+- Tenant path safety: routes containing `{tenant_id}` must include `TenantRequired` and `TenantMatchFromPath("tenant_id")`.
+- Cache safety: authenticated routes using `CacheRead` must vary by user or tenant.
+
+### Static verification
+
+```bash
+go run ./cmd/superapi-verify ./...
+# or
+make verify
+```
+
+### Presets
+
+Use built-in validated presets when possible:
+
+- `policy.TenantRead(...)`
+- `policy.TenantWrite(...)`
+- `policy.PublicRead(...)`
+
+Example:
+
+```go
+r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
+    policy.TenantRead(
+        policy.WithAuthEngine(authEngine, auth.ModeStrict),
+        policy.WithLimiter(limiter),
+        policy.WithCacheManager(cacheMgr),
+        policy.WithCache(30*time.Second, "project"),
+        policy.WithCacheVaryBy(cache.CacheVaryBy{TenantID: true, PathParams: []string{"id"}}),
+    )...,
+)
+```
+
+---
+
+## 8. Recommended policy stacks by endpoint type
 
 ### Public route (no auth)
 
@@ -429,7 +467,7 @@ Example: `GET /api/v1/system/whoami`
 
 ```go
 r.Handle(http.MethodGet, "/api/v1/system/whoami", handler,
-    policy.AuthRequired(provider, mode),
+    policy.AuthRequired(authEngine, mode),
     policy.RateLimitWithKeyer(limiter, "whoami", ratelimit.Rule{
         Limit: 30, Window: time.Minute, Scope: ratelimit.ScopeUser,
     }, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
@@ -439,7 +477,7 @@ r.Handle(http.MethodGet, "/api/v1/system/whoami", handler,
 Policies:
 - AuthRequired (hybrid or strict)
 - Rate limit by user/token (auth context available after AuthRequired)
-- CacheRead only if response is truly user-specific and you set `VaryBy.UserID` or `AllowAuthenticated`
+- CacheRead only when `VaryBy.UserID` or `VaryBy.TenantID` is set
 
 ### Tenant-scoped read route
 
@@ -447,13 +485,12 @@ Example: `GET /api/v1/projects/{id}`
 
 ```go
 r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
-    policy.AuthRequired(provider, auth.ModeStrict),
+    policy.AuthRequired(authEngine, auth.ModeStrict),
     policy.TenantRequired(),
     policy.RateLimitWithKeyer(limiter, "projects.get", rule, ratelimit.KeyByTenant()),
     policy.CacheRead(cacheMgr, cache.CacheReadConfig{
         TTL:                30 * time.Second,
         Tags:               []string{"project"},
-        AllowAuthenticated: true,
         VaryBy: cache.CacheVaryBy{
             TenantID:   true,
             PathParams: []string{"id"},
@@ -474,7 +511,7 @@ Example: `POST /api/v1/projects`
 
 ```go
 r.Handle(http.MethodPost, "/api/v1/projects", handler,
-    policy.AuthRequired(provider, auth.ModeStrict),
+    policy.AuthRequired(authEngine, auth.ModeStrict),
     policy.TenantRequired(),
     policy.RequirePerm("project.write"),
     policy.RateLimitWithKeyer(limiter, "projects.create", rule, ratelimit.KeyByTenant()),
@@ -497,7 +534,7 @@ Example: `DELETE /api/v1/projects/{id}`
 
 ```go
 r.Handle(http.MethodDelete, "/api/v1/projects/{id}", handler,
-    policy.AuthRequired(provider, auth.ModeStrict),
+    policy.AuthRequired(authEngine, auth.ModeStrict),
     policy.TenantRequired(),
     policy.RequirePerm("project.delete"),
     policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
@@ -508,7 +545,7 @@ r.Handle(http.MethodDelete, "/api/v1/projects/{id}", handler,
 
 ---
 
-## 8. Common mistakes and how to avoid them
+## 9. Common mistakes and how to avoid them
 
 ### Putting CacheRead before AuthRequired
 
@@ -516,7 +553,7 @@ r.Handle(http.MethodDelete, "/api/v1/projects/{id}", handler,
 // BAD — cache is checked before auth, could serve cached data to unauthenticated users
 r.Handle(method, pattern, handler,
     policy.CacheRead(cacheMgr, cfg),
-    policy.AuthRequired(provider, mode),
+    policy.AuthRequired(authEngine, mode),
 )
 ```
 
@@ -529,11 +566,10 @@ r.Handle(method, pattern, handler,
 policy.CacheRead(cacheMgr, cache.CacheReadConfig{
     TTL: 30 * time.Second,
     // No VaryBy.TenantID or VaryBy.UserID!
-    // No AllowAuthenticated!
 })
 ```
 
-The cache policy will **bypass** (not cache) authenticated responses in this case, which is safe but wasteful. If you want caching for authenticated endpoints, either set `AllowAuthenticated: true` or set `VaryBy.TenantID`/`VaryBy.UserID`.
+This is now a fail-fast configuration error. Authenticated routes require `VaryBy.TenantID` or `VaryBy.UserID`.
 
 ### Rate limiting before auth on user-scoped routes
 
@@ -541,7 +577,7 @@ The cache policy will **bypass** (not cache) authenticated responses in this cas
 // BAD — rate limit uses anon scope because auth hasn't run yet
 r.Handle(method, pattern, handler,
     policy.RateLimit(limiter, ratelimit.Rule{Scope: ratelimit.ScopeUser}),
-    policy.AuthRequired(provider, mode),
+    policy.AuthRequired(authEngine, mode),
 )
 ```
 
@@ -563,15 +599,14 @@ policy.TenantMatchFromPath("tenant_id")  // WRONG — param is "id", not "tenant
 ### Empty permission lists
 
 ```go
-policy.RequirePerm()  // No permissions — still enforces auth (returns 401 if not authenticated)
-policy.RequireAnyPerm()  // Empty list — becomes Noop (passes through!)
+policy.RequirePerm()
+policy.RequireAnyPerm()
 ```
 
-`RequirePerm()` with no args: checks auth context exists but doesn't check any specific permission.
-`RequireAnyPerm()` with no args: returns `Noop()` — no check at all.
+Both constructors require at least one non-empty permission and panic on invalid input.
 
 
-## 9. Required configuration by policy
+## 10. Required configuration by policy
 
 ### 9.1 Auth / Tenant / RBAC
 
@@ -609,7 +644,7 @@ Optional tuning:
 - `CACHE_FAIL_OPEN` (default `true`)
 - `CACHE_DEFAULT_MAX_BYTES`
 
-## 10. Extensibility guidelines
+## 11. Extensibility guidelines
 
 When adding a new policy:
 

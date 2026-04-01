@@ -23,15 +23,16 @@ func Chain(h http.Handler, policies ...Policy) http.Handler {
 }
 
 func Noop() Policy {
-	return func(next http.Handler) http.Handler {
+	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, r)
 		})
 	}
+	return annotatePolicy(p, Metadata{Type: PolicyTypeNoop, Name: "Noop"})
 }
 
 func RequireJSON() Policy {
-	return func(next http.Handler) http.Handler {
+	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !requiresJSONBody(r) {
 				next.ServeHTTP(w, r)
@@ -47,15 +48,17 @@ func RequireJSON() Policy {
 			next.ServeHTTP(w, r)
 		})
 	}
+	return annotatePolicy(p, Metadata{Type: PolicyTypeRequireJSON, Name: "RequireJSON"})
 }
 
 func WithHeader(key, value string) Policy {
-	return func(next http.Handler) http.Handler {
+	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(key, value)
 			next.ServeHTTP(w, r)
 		})
 	}
+	return annotatePolicy(p, Metadata{Type: PolicyTypeWithHeader, Name: "WithHeader"})
 }
 
 func requiresJSONBody(r *http.Request) bool {

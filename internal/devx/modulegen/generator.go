@@ -265,12 +265,12 @@ func renderRoutesFile(cfg TemplateConfig) string {
 	b.WriteString("\t\tm.handler = NewHandler(NewService(NewRepo()))\n")
 	b.WriteString("\t}\n\n")
 	if len(policies) == 0 {
-		b.WriteString("\tr.Handle(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", http.HandlerFunc(m.handler.Ping))\n")
+		b.WriteString("\tr.Handle(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", httpx.Adapter(m.handler.Ping))\n")
 	} else {
 		b.WriteString("\tr.Handle(\n")
 		b.WriteString("\t\thttp.MethodGet,\n")
 		b.WriteString("\t\t\"/api/v1/" + spec.RoutePath + "/ping\",\n")
-		b.WriteString("\t\thttp.HandlerFunc(m.handler.Ping),\n")
+		b.WriteString("\t\thttpx.Adapter(m.handler.Ping),\n")
 		for _, line := range policies {
 			b.WriteString(line + "\n")
 		}
@@ -285,7 +285,7 @@ func routePolicies(cfg TemplateConfig) []string {
 	opt := cfg.Options
 	policies := make([]string, 0, 4)
 	if opt.UseAuth {
-		policies = append(policies, "\t\tpolicy.AuthRequired(m.runtime.AuthProvider(), m.runtime.AuthMode()),")
+		policies = append(policies, "\t\tpolicy.AuthRequired(m.runtime.AuthEngine(), m.runtime.AuthMode()),")
 	}
 	if opt.UseTenant {
 		policies = append(policies, "\t\tpolicy.TenantRequired(),")
@@ -320,11 +320,11 @@ func renderDTOFile(spec ModuleSpec) string {
 
 func renderHandlerFile(spec ModuleSpec) string {
 	return "package " + spec.Package + "\n\n" +
-		"import (\n\t\"net/http\"\n\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n\t\"github.com/MrEthical07/superapi/internal/core/response\"\n)\n\n" +
+		"import (\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n)\n\n" +
 		"type Handler struct {\n\tsvc Service\n}\n\n" +
 		"func NewHandler(svc Service) *Handler {\n\treturn &Handler{svc: svc}\n}\n\n" +
-		"func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {\n" +
-		"\tresponse.OK(w, h.svc.Ping(), httpx.RequestIDFromContext(r.Context()))\n}\n"
+		"func (h *Handler) Ping(ctx *httpx.Context, req httpx.NoBody) (pingResponse, error) {\n" +
+		"\treturn h.svc.Ping(), nil\n}\n"
 }
 
 func renderServiceFile(spec ModuleSpec) string {
@@ -337,10 +337,10 @@ func renderServiceFile(spec ModuleSpec) string {
 
 func renderHandlerTestFile(spec ModuleSpec) string {
 	return "package " + spec.Package + "\n\n" +
-		"import (\n\t\"encoding/json\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n)\n\n" +
+		"import (\n\t\"encoding/json\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n)\n\n" +
 		"func TestPingHandler(t *testing.T) {\n" +
 		"\th := NewHandler(NewService(NewRepo()))\n\trr := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", nil)\n\n" +
-		"\th.Ping(rr, req)\n\n" +
+		"\thandler := httpx.Adapter(h.Ping)\n\thandler.ServeHTTP(rr, req)\n\n" +
 		"\tif rr.Code != http.StatusOK {\n\t\tt.Fatalf(\"status=%d want=%d\", rr.Code, http.StatusOK)\n\t}\n\n" +
 		"\tvar body struct {\n\t\tOK   bool `json:\"ok\"`\n\t\tData pingResponse `json:\"data\"`\n\t}\n" +
 		"\tif err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {\n\t\tt.Fatalf(\"unmarshal response: %v\", err)\n\t}\n" +
