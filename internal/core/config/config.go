@@ -11,36 +11,64 @@ import (
 	"time"
 )
 
+// Config contains all runtime configuration used to bootstrap the API process.
+//
+// The struct is populated by Load from environment variables and then validated
+// by Lint before the HTTP server starts.
 type Config struct {
-	Env         string
-	Profile     string
+	// Env identifies the runtime environment, such as dev or prod.
+	Env string
+	// Profile selects preset defaults before explicit env overrides are applied.
+	Profile string
+	// ServiceName is used for structured logs and tracing service identity.
 	ServiceName string
-	HTTP        HTTPConfig
-	Log         LogConfig
-	Auth        AuthConfig
-	RateLimit   RateLimitConfig
-	Cache       CacheConfig
-	Postgres    PostgresConfig
-	Redis       RedisConfig
-	Metrics     MetricsConfig
-	Tracing     TracingConfig
+	// HTTP controls server socket, transport timeouts, and global middleware.
+	HTTP HTTPConfig
+	// Log configures log level and output format.
+	Log LogConfig
+	// Auth toggles authentication integration and route auth mode.
+	Auth AuthConfig
+	// RateLimit configures default route-level throttling behavior.
+	RateLimit RateLimitConfig
+	// Cache configures default route-level response caching behavior.
+	Cache CacheConfig
+	// Postgres controls primary SQL dependency wiring.
+	Postgres PostgresConfig
+	// Redis controls cache/session/rate-limit dependency wiring.
+	Redis RedisConfig
+	// Metrics controls Prometheus endpoint exposure.
+	Metrics MetricsConfig
+	// Tracing controls OpenTelemetry exporter setup.
+	Tracing TracingConfig
 }
 
+// AuthConfig configures route authentication behavior.
 type AuthConfig struct {
+	// Enabled enables goAuth-backed auth provider wiring.
 	Enabled bool
-	Mode    string
+	// Mode selects validation strategy: jwt_only, hybrid, or strict.
+	Mode string
 }
 
+// RateLimitConfig defines default policy values for route rate limiting.
 type RateLimitConfig struct {
-	Enabled       bool
-	FailOpen      bool
-	DefaultLimit  int
+	// Enabled enables Redis-backed route throttling middleware.
+	Enabled bool
+	// FailOpen allows requests when limiter dependencies are unavailable.
+	FailOpen bool
+	// DefaultLimit is the baseline request budget per window.
+	DefaultLimit int
+	// DefaultWindow is the baseline rate-limit window duration.
 	DefaultWindow time.Duration
 }
 
+// CacheConfig defines default policy values for route response caching.
 type CacheConfig struct {
-	Enabled         bool
-	FailOpen        bool
+	// Enabled enables Redis-backed response cache middleware.
+	Enabled bool
+	// FailOpen bypasses caching when Redis is unavailable.
+	FailOpen bool
+	// DefaultMaxBytes caps cached payload size per response.
 	DefaultMaxBytes int
 }
 
@@ -52,94 +80,176 @@ type LogConfig struct {
 	Format string
 }
 
+// HTTPConfig defines server transport settings and middleware configuration.
 type HTTPConfig struct {
-	Addr              string
+	// Addr is the HTTP listen address, for example :8080.
+	Addr string
+	// ReadHeaderTimeout bounds time allowed to read request headers.
 	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	ShutdownTimeout   time.Duration
-	MaxHeaderBytes    int
-	Middleware        HTTPMiddlewareConfig
+	// ReadTimeout bounds total request read time.
+	ReadTimeout time.Duration
+	// WriteTimeout bounds total response write time.
+	WriteTimeout time.Duration
+	// IdleTimeout bounds keep-alive connection idle time.
+	IdleTimeout time.Duration
+	// ShutdownTimeout bounds graceful shutdown drain time.
+	ShutdownTimeout time.Duration
+	// MaxHeaderBytes caps request header size.
+	MaxHeaderBytes int
+	// Middleware configures process-wide HTTP middleware behavior.
+	Middleware HTTPMiddlewareConfig
 }
 
+// HTTPMiddlewareConfig controls global middleware toggles and options.
 type HTTPMiddlewareConfig struct {
-	RequestIDEnabled       bool
-	RecovererEnabled       bool
-	MaxBodyBytes           int64
+	// RequestIDEnabled enables request-id propagation middleware.
+	RequestIDEnabled bool
+	// RecovererEnabled enables panic recovery middleware.
+	RecovererEnabled bool
+	// MaxBodyBytes caps request bodies for methods that accept payloads.
+	MaxBodyBytes int64
+	// SecurityHeadersEnabled toggles defensive response headers.
 	SecurityHeadersEnabled bool
-	RequestTimeout         time.Duration
-	AccessLog              AccessLogConfig
-	ClientIP               ClientIPConfig
-	CORS                   CORSConfig
+	// RequestTimeout applies context cancellation to downstream handlers.
+	RequestTimeout time.Duration
+	// AccessLog configures structured access logging behavior.
+	AccessLog AccessLogConfig
+	// ClientIP configures trusted proxy behavior for client IP extraction.
+	ClientIP ClientIPConfig
+	// CORS configures cross-origin handling.
+	CORS CORSConfig
 }
 
+// AccessLogConfig controls structured request logging.
 type AccessLogConfig struct {
-	Enabled          bool
-	SampleRate       float64
-	ExcludePaths     []string
-	SlowThreshold    time.Duration
+	// Enabled toggles access log middleware.
+	Enabled bool
+	// SampleRate is a deterministic sample fraction in [0,1].
+	SampleRate float64
+	// ExcludePaths skips access logging for selected paths.
+	ExcludePaths []string
+	// SlowThreshold forces logging for requests above this duration.
+	SlowThreshold time.Duration
+	// IncludeUserAgent adds user agent to log records when true.
 	IncludeUserAgent bool
-	IncludeRemoteIP  bool
+	// IncludeRemoteIP adds resolved client IP to log records when true.
+	IncludeRemoteIP bool
 }
 
+// ClientIPConfig configures trusted forwarding headers.
 type ClientIPConfig struct {
+	// TrustedProxies lists trusted proxy CIDRs/IPs used for forwarded header parsing.
 	TrustedProxies []string
 }
 
+// CORSConfig configures CORS behavior for browser callers.
 type CORSConfig struct {
-	Enabled             bool
-	AllowOrigins        []string
-	DenyOrigins         []string
-	AllowMethods        []string
-	AllowHeaders        []string
-	ExposeHeaders       []string
-	AllowCredentials    bool
-	MaxAge              time.Duration
+	// Enabled toggles CORS middleware.
+	Enabled bool
+	// AllowOrigins lists allowed origins.
+	AllowOrigins []string
+	// DenyOrigins lists blocked origins evaluated before allow list.
+	DenyOrigins []string
+	// AllowMethods lists allowed cross-origin methods.
+	AllowMethods []string
+	// AllowHeaders lists allowed request headers.
+	AllowHeaders []string
+	// ExposeHeaders lists response headers visible to browsers.
+	ExposeHeaders []string
+	// AllowCredentials controls Access-Control-Allow-Credentials.
+	AllowCredentials bool
+	// MaxAge configures preflight cache duration.
+	MaxAge time.Duration
+	// AllowPrivateNetwork controls PNA preflight acceptance.
 	AllowPrivateNetwork bool
 }
 
+// PostgresConfig configures Postgres connectivity and pool behavior.
 type PostgresConfig struct {
-	Enabled            bool
-	URL                string
-	MaxConns           int32
-	MinConns           int32
-	ConnMaxLifetime    time.Duration
-	ConnMaxIdleTime    time.Duration
+	// Enabled toggles Postgres dependency wiring.
+	Enabled bool
+	// URL is the Postgres DSN used by pgxpool.
+	URL string
+	// MaxConns bounds maximum pool size.
+	MaxConns int32
+	// MinConns sets minimum maintained pool connections.
+	MinConns int32
+	// ConnMaxLifetime bounds connection reuse lifetime.
+	ConnMaxLifetime time.Duration
+	// ConnMaxIdleTime bounds idle connection lifetime.
+	ConnMaxIdleTime time.Duration
+	// StartupPingTimeout bounds startup ping during dependency init.
 	StartupPingTimeout time.Duration
+	// HealthCheckTimeout bounds readiness health checks.
 	HealthCheckTimeout time.Duration
 }
 
+// RedisConfig configures Redis connectivity and pool behavior.
 type RedisConfig struct {
-	Enabled            bool
-	Addr               string
-	Password           string
-	DB                 int
-	DialTimeout        time.Duration
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	PoolSize           int
-	MinIdleConns       int
+	// Enabled toggles Redis dependency wiring.
+	Enabled bool
+	// Addr is the Redis host:port.
+	Addr string
+	// Password is optional Redis auth password.
+	Password string
+	// DB selects Redis logical database.
+	DB int
+	// DialTimeout bounds initial connection dialing.
+	DialTimeout time.Duration
+	// ReadTimeout bounds Redis read calls.
+	ReadTimeout time.Duration
+	// WriteTimeout bounds Redis write calls.
+	WriteTimeout time.Duration
+	// PoolSize bounds Redis connection pool size.
+	PoolSize int
+	// MinIdleConns sets minimum idle redis connections.
+	MinIdleConns int
+	// StartupPingTimeout bounds startup ping during dependency init.
 	StartupPingTimeout time.Duration
+	// HealthCheckTimeout bounds readiness health checks.
 	HealthCheckTimeout time.Duration
 }
 
+// MetricsConfig controls Prometheus endpoint wiring.
 type MetricsConfig struct {
-	Enabled   bool
-	Path      string
+	// Enabled toggles metrics endpoint registration.
+	Enabled bool
+	// Path is the HTTP route used for metrics scraping.
+	Path string
+	// AuthToken is an optional bearer token required to scrape metrics.
 	AuthToken string
 }
 
+// TracingConfig controls OpenTelemetry export behavior.
 type TracingConfig struct {
-	Enabled      bool
-	ServiceName  string
-	Exporter     string
+	// Enabled toggles tracing provider initialization.
+	Enabled bool
+	// ServiceName identifies service name in telemetry backends.
+	ServiceName string
+	// Exporter selects tracing exporter implementation.
+	Exporter string
+	// OTLPEndpoint sets destination for OTLP exporter.
 	OTLPEndpoint string
-	Sampler      string
-	SampleRatio  float64
-	Insecure     bool
+	// Sampler controls sampling strategy.
+	Sampler string
+	// SampleRatio controls traceidratio sampling fraction.
+	SampleRatio float64
+	// Insecure toggles insecure transport to tracer backend.
+	Insecure bool
 }
 
+// Load reads configuration from environment variables and profile defaults.
+//
+// Usage:
+//
+//	cfg, err := config.Load()
+//	if err != nil {
+//	    // handle startup config error
+//	}
+//
+// Notes:
+// - Explicit env variables override APP_PROFILE defaults
+// - Run cfg.Lint() before constructing app dependencies
 func Load() (*Config, error) {
 	profile := strings.TrimSpace(os.Getenv("APP_PROFILE"))
 	restoreProfileDefaults, err := activateProfile(profile)
@@ -260,6 +370,12 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// Lint validates configuration constraints and cross-feature dependencies.
+//
+// Behavior:
+// - Validates env value formats and timeout ranges
+// - Enforces dependency rules (for example auth requires Redis and Postgres)
+// - Enforces production-only constraints such as metrics auth token
 func (c *Config) Lint() error {
 	if profile := strings.TrimSpace(os.Getenv("APP_PROFILE")); profile != "" {
 		if _, err := resolveProfileDefaults(profile); err != nil {

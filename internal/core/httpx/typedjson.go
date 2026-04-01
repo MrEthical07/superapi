@@ -13,6 +13,7 @@ import (
 
 const defaultJSONBodyLimit int64 = 1 << 20 // 1 MiB
 
+// Validatable is implemented by DTOs that perform semantic validation.
 type Validatable interface {
 	Validate() error
 }

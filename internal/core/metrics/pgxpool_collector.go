@@ -44,6 +44,7 @@ func newPGXPoolCollector(pool *pgxpool.Pool) prometheus.Collector {
 	}
 }
 
+// Describe sends collector metric descriptors to Prometheus.
 func (c *pgxPoolCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.acquiredConns
 	ch <- c.idleConns
@@ -51,6 +52,7 @@ func (c *pgxPoolCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.maxConns
 }
 
+// Collect samples pool stats and emits Prometheus metrics.
 func (c *pgxPoolCollector) Collect(ch chan<- prometheus.Metric) {
 	if c.pool == nil {
 		return

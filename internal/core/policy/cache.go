@@ -21,6 +21,26 @@ const (
 	cacheOutcomeError  = "error"
 )
 
+// CacheRead enables route-level response caching backed by cache.Manager.
+//
+// Behavior:
+// - Builds deterministic cache keys using route and selected vary dimensions
+// - Serves cached responses on hit
+// - Writes successful cacheable responses on miss
+//
+// Usage:
+//
+//	r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
+//	    policy.CacheRead(cacheMgr, cache.CacheReadConfig{
+//	        TTL: 30 * time.Second,
+//	        Tags: []string{"projects"},
+//	        VaryBy: cache.CacheVaryBy{TenantID: true, UserID: true},
+//	    }),
+//	)
+//
+// Notes:
+// - TTL must be > 0
+// - Authenticated cache usage requires VaryBy.UserID or VaryBy.TenantID
 func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 	if manager == nil {
 		panicInvalidRouteConfigf("%s requires a non-nil cache manager", PolicyTypeCacheRead)
@@ -110,6 +130,13 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 	})
 }
 
+// CacheInvalidate bumps cache tag versions after successful write operations.
+//
+// Usage:
+//
+//	r.Handle(http.MethodPost, "/api/v1/projects", handler,
+//	    policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{Tags: []string{"projects"}}),
+//	)
 func CacheInvalidate(manager *cache.Manager, cfg cache.CacheInvalidateConfig) Policy {
 	if manager == nil {
 		panicInvalidRouteConfigf("%s requires a non-nil cache manager", PolicyTypeCacheInvalidate)
@@ -147,6 +174,7 @@ type statusCodeRecorder struct {
 	statusCode int
 }
 
+// WriteHeader records response status for cache invalidation decisions.
 func (w *statusCodeRecorder) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)
@@ -170,11 +198,13 @@ func newCachingResponseWriter(w http.ResponseWriter, maxBytes int) *cachingRespo
 	}
 }
 
+// WriteHeader captures status code before forwarding to wrapped writer.
 func (w *cachingResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
+// Write buffers response bytes up to maxBytes for potential cache storage.
 func (w *cachingResponseWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
 	if w.maxBytes <= 0 || w.tooLarge {
@@ -188,6 +218,7 @@ func (w *cachingResponseWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// Flush marks response as streaming and forwards flush to wrapped writer.
 func (w *cachingResponseWriter) Flush() {
 	w.streaming = true
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
@@ -195,6 +226,7 @@ func (w *cachingResponseWriter) Flush() {
 	}
 }
 
+// Hijack marks response as streaming and delegates connection hijacking.
 func (w *cachingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hijacker, ok := w.ResponseWriter.(http.Hijacker)
 	if !ok {
@@ -204,6 +236,7 @@ func (w *cachingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hijacker.Hijack()
 }
 
+// Push forwards HTTP/2 server push requests when supported.
 func (w *cachingResponseWriter) Push(target string, opts *http.PushOptions) error {
 	pusher, ok := w.ResponseWriter.(http.Pusher)
 	if !ok {
@@ -212,14 +245,17 @@ func (w *cachingResponseWriter) Push(target string, opts *http.PushOptions) erro
 	return pusher.Push(target, opts)
 }
 
+// Status returns the captured response status code.
 func (w *cachingResponseWriter) Status() int {
 	return w.statusCode
 }
 
+// Body returns a copy of the buffered response body.
 func (w *cachingResponseWriter) Body() []byte {
 	return append([]byte(nil), w.body...)
 }
 
+// Cacheable reports whether response satisfies cache policy constraints.
 func (w *cachingResponseWriter) Cacheable(cfg cache.CacheReadConfig) bool {
 	if w.streaming {
 		return false

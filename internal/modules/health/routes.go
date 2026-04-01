@@ -7,6 +7,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/readiness"
 )
 
+// Register mounts health and readiness routes for process monitoring.
 func (m *Module) Register(r httpx.Router) error {
 	r.Handle(http.MethodGet, "/healthz", httpx.Adapter(m.healthz))
 	r.Handle(http.MethodGet, "/readyz", httpx.Adapter(m.readyz))
@@ -40,7 +41,7 @@ func (m *Module) readyz(ctx *httpx.Context, _ httpx.NoBody) (httpx.Result[readin
 
 	return httpx.Result[readiness.Report]{
 		Status: status,
-		OK:     httpx.Bool(ok),
+		OK:     httpx.BoolPtr(ok),
 		Data:   report,
 	}, nil
 }

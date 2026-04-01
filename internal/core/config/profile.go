@@ -8,9 +8,12 @@ import (
 )
 
 const (
+	// ProfileMinimal enables a single-process local API baseline.
 	ProfileMinimal = "minimal"
-	ProfileDev     = "dev"
-	ProfileProd    = "prod"
+	// ProfileDev enables a developer-friendly local stack.
+	ProfileDev = "dev"
+	// ProfileProd enables production-style defaults.
+	ProfileProd = "prod"
 )
 
 var profileDefaults = map[string]map[string]string{

@@ -532,21 +532,36 @@ func parseAccountStatus(s string) goauth.AccountStatus {
 
 // ProviderTemplateData holds the data for the provider template.
 type ProviderTemplateData struct {
-	IDIsUUID        bool
-	IDIsBigint      bool
-	IDIsEmail       bool
-	IDFieldName     string
+	// IDIsUUID indicates UUID primary key mode.
+	IDIsUUID bool
+	// IDIsBigint indicates BIGINT primary key mode.
+	IDIsBigint bool
+	// IDIsEmail indicates email-as-primary-key mode.
+	IDIsEmail bool
+	// IDFieldName is the generated sqlc struct field used as logical id.
+	IDFieldName string
+	// HasPasswordHash indicates password hash persistence is enabled.
 	HasPasswordHash bool
-	HasStatus       bool
-	HasRole         bool
-	HasPermissions  bool
-	PermsBitmask    bool
-	PermsTextArray  bool
-	PermsJSONB      bool
-	HasTenant       bool
-	MapFunc         string
-	CreateParams    []string
-	ModelName       string
+	// HasStatus indicates account status column is enabled.
+	HasStatus bool
+	// HasRole indicates role column is enabled.
+	HasRole bool
+	// HasPermissions indicates permissions column is enabled.
+	HasPermissions bool
+	// PermsBitmask indicates BIGINT permission storage mode.
+	PermsBitmask bool
+	// PermsTextArray indicates TEXT[] permission storage mode.
+	PermsTextArray bool
+	// PermsJSONB indicates JSONB permission storage mode.
+	PermsJSONB bool
+	// HasTenant indicates tenant_id support is enabled.
+	HasTenant bool
+	// MapFunc is generated mapper source from sqlc row to goAuth record.
+	MapFunc string
+	// CreateParams is generated CreateAuthUser parameter mapping source.
+	CreateParams []string
+	// ModelName is the sqlc model type name for the users table.
+	ModelName string
 }
 
 func buildProviderTemplateData(cfg AuthGenConfig) ProviderTemplateData {

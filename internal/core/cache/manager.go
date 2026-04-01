@@ -19,48 +19,80 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/auth"
 )
 
+// ObserveFunc records cache operation outcomes for metrics integration.
 type ObserveFunc func(route, outcome string)
 
+// CacheVaryBy controls which request dimensions participate in cache key generation.
 type CacheVaryBy struct {
-	Method      bool
-	TenantID    bool
-	UserID      bool
-	Role        bool
-	PathParams  []string
+	// Method includes HTTP method in cache key.
+	Method bool
+	// TenantID includes principal tenant in cache key.
+	TenantID bool
+	// UserID includes principal user in cache key.
+	UserID bool
+	// Role includes principal role in cache key.
+	Role bool
+	// PathParams includes selected route params in cache key.
+	PathParams []string
+	// QueryParams includes selected query params in cache key.
 	QueryParams []string
-	Headers     []string
+	// Headers includes selected request headers in cache key.
+	Headers []string
 }
 
+// CacheReadConfig defines route-level read-cache behavior.
 type CacheReadConfig struct {
-	Key                string
-	TTL                time.Duration
-	MaxBytes           int
-	Tags               []string
-	Methods            []string
-	CacheStatuses      []int
-	VaryBy             CacheVaryBy
-	FailOpen           *bool
+	// Key optionally overrides route pattern as cache key route segment.
+	Key string
+	// TTL defines cache entry lifetime and must be greater than zero.
+	TTL time.Duration
+	// MaxBytes limits cacheable response body bytes for this route.
+	MaxBytes int
+	// Tags identifies invalidation groups used by CacheInvalidate.
+	Tags []string
+	// Methods limits cache reads to selected methods (GET/HEAD by default).
+	Methods []string
+	// CacheStatuses limits cache writes to selected HTTP statuses (200 by default).
+	CacheStatuses []int
+	// VaryBy defines dynamic cache key dimensions.
+	VaryBy CacheVaryBy
+	// FailOpen overrides manager-level fail-open policy when set.
+	FailOpen *bool
+	// AllowAuthenticated marks authenticated responses as cache-eligible when safely varied.
 	AllowAuthenticated bool
 }
 
+// CacheInvalidateConfig defines route-level cache invalidation behavior.
 type CacheInvalidateConfig struct {
-	Tags     []string
+	// Tags identifies invalidation groups to bump on successful writes.
+	Tags []string
+	// FailOpen overrides manager-level fail-open policy when set.
 	FailOpen *bool
 }
 
+// ManagerConfig configures cache manager defaults.
 type ManagerConfig struct {
-	Env             string
-	FailOpen        bool
+	// Env namespaces cache keys by environment.
+	Env string
+	// FailOpen controls whether read/write failures should bypass instead of failing requests.
+	FailOpen bool
+	// DefaultMaxBytes sets fallback response size cap when route does not override MaxBytes.
 	DefaultMaxBytes int
-	Observe         ObserveFunc
+	// Observe receives cache outcome signals for metrics.
+	Observe ObserveFunc
 }
 
+// CachedResponse stores serialized HTTP response data in Redis.
 type CachedResponse struct {
-	Status      int    `json:"status"`
-	Body        []byte `json:"body"`
+	// Status is the cached HTTP status code.
+	Status int `json:"status"`
+	// Body is the cached HTTP response body.
+	Body []byte `json:"body"`
+	// ContentType is the cached Content-Type header value.
 	ContentType string `json:"content_type,omitempty"`
 }
 
+// Manager encapsulates Redis-backed cache operations and key building.
 type Manager struct {
 	client          redis.UniversalClient
 	env             string
@@ -69,6 +101,7 @@ type Manager struct {
 	observe         ObserveFunc
 }
 
+// NewManager constructs a cache manager with validated defaults.
 func NewManager(client redis.UniversalClient, cfg ManagerConfig) (*Manager, error) {
 	if client == nil {
 		return nil, fmt.Errorf("cache manager requires redis client")
@@ -89,6 +122,7 @@ func NewManager(client redis.UniversalClient, cfg ManagerConfig) (*Manager, erro
 	}, nil
 }
 
+// ResolveFailOpen resolves route override or manager default fail-open policy.
 func (m *Manager) ResolveFailOpen(override *bool) bool {
 	if override != nil {
 		return *override
@@ -96,6 +130,7 @@ func (m *Manager) ResolveFailOpen(override *bool) bool {
 	return m != nil && m.failOpen
 }
 
+// DefaultMaxBytes returns manager-level fallback cache size cap.
 func (m *Manager) DefaultMaxBytes() int {
 	if m == nil {
 		return 0
@@ -103,6 +138,7 @@ func (m *Manager) DefaultMaxBytes() int {
 	return m.defaultMaxBytes
 }
 
+// Observe emits cache operation signals to configured observer.
 func (m *Manager) Observe(route, outcome string) {
 	if m == nil || m.observe == nil {
 		return
@@ -118,6 +154,12 @@ func (m *Manager) Observe(route, outcome string) {
 	m.observe(r, o)
 }
 
+// BuildReadKey builds a deterministic read key for route cache lookup.
+//
+// Notes:
+// - Uses low-cardinality route patterns
+// - Supports selected vary dimensions only
+// - Includes tag version token for O(1) invalidation
 func (m *Manager) BuildReadKey(ctx context.Context, r *http.Request, route string, cfg CacheReadConfig) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("cache manager is nil")
@@ -179,6 +221,7 @@ func (m *Manager) BuildReadKey(ctx context.Context, r *http.Request, route strin
 	return fmt.Sprintf("cache:%s:%s:%s", m.env, routePart, shortHash), nil
 }
 
+// TagVersionToken returns a stable token representing current tag versions.
 func (m *Manager) TagVersionToken(ctx context.Context, tags []string) (string, error) {
 	tags = normalizedNames(tags)
 	if len(tags) == 0 {
@@ -215,6 +258,7 @@ func (m *Manager) TagVersionToken(ctx context.Context, tags []string) (string, e
 	return strings.Join(parts, ","), nil
 }
 
+// Get fetches and decodes a cached response by key.
 func (m *Manager) Get(ctx context.Context, key string) (CachedResponse, bool, error) {
 	if m == nil {
 		return CachedResponse{}, false, fmt.Errorf("cache manager is nil")
@@ -236,6 +280,7 @@ func (m *Manager) Get(ctx context.Context, key string) (CachedResponse, bool, er
 	return item, true, nil
 }
 
+// Set stores a cached response for the given key and TTL.
 func (m *Manager) Set(ctx context.Context, key string, value CachedResponse, ttl time.Duration) error {
 	if m == nil {
 		return fmt.Errorf("cache manager is nil")
@@ -250,6 +295,7 @@ func (m *Manager) Set(ctx context.Context, key string, value CachedResponse, ttl
 	return m.client.Set(ctx, key, payload, ttl).Err()
 }
 
+// BumpTags increments tag versions used for cache invalidation.
 func (m *Manager) BumpTags(ctx context.Context, tags []string) error {
 	if m == nil {
 		return fmt.Errorf("cache manager is nil")

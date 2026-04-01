@@ -8,18 +8,22 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
 
+// Module provides system utility and auth demonstration routes.
 type Module struct {
 	runtime  modulekit.Runtime
 	rateRule ratelimit.Rule
 }
 
+// New constructs the system module.
 func New() *Module { return &Module{} }
 
 var _ app.Module = (*Module)(nil)
 var _ app.DependencyBinder = (*Module)(nil)
 
+// Name returns module registry name.
 func (m *Module) Name() string { return "system" }
 
+// BindDependencies captures runtime dependencies and derives default rate-limit rule.
 func (m *Module) BindDependencies(deps *app.Dependencies) {
 	m.runtime = modulekit.New(deps)
 	if deps == nil {

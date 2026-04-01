@@ -19,6 +19,7 @@ type parseDurationRequest struct {
 	Duration string `json:"duration"`
 }
 
+// Validate ensures duration string is provided for parsing.
 func (r parseDurationRequest) Validate() error {
 	if strings.TrimSpace(r.Duration) == "" {
 		return apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, "duration is required")
@@ -37,6 +38,7 @@ type authLoginRequest struct {
 	Password   string `json:"password"`
 }
 
+// Validate ensures login credentials are present.
 func (r authLoginRequest) Validate() error {
 	if strings.TrimSpace(r.Identifier) == "" {
 		return apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, "identifier is required")
@@ -51,6 +53,7 @@ type authRefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// Validate ensures refresh token is provided.
 func (r authRefreshRequest) Validate() error {
 	if strings.TrimSpace(r.RefreshToken) == "" {
 		return apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, "refresh_token is required")
@@ -65,6 +68,9 @@ type authTokenResponse struct {
 	AccessExpiresUnix int64  `json:"access_expires_unix"`
 }
 
+// Register mounts system and auth demonstration routes.
+//
+// For policy behavior, see docs/policies.md.
 func (m *Module) Register(r httpx.Router) error {
 	r.Handle(http.MethodPost, "/system/parse-duration", httpx.Adapter(m.parseDuration))
 	r.Handle(http.MethodPost, "/api/v1/system/auth/login", httpx.Adapter(m.login))

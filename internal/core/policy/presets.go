@@ -8,6 +8,15 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
 
+// TenantRead returns a validated policy chain for tenant-scoped read routes.
+//
+// Usage:
+//
+//	policies := policy.TenantRead(
+//	    policy.WithAuthEngine(engine, auth.ModeStrict),
+//	    policy.WithLimiter(limiter),
+//	    policy.WithCacheManager(cacheMgr),
+//	)
 func TenantRead(opts ...PresetOption) []Policy {
 	cfg := applyPresetOptions(opts...)
 	requireAuthEngine("TenantRead", cfg)
@@ -33,6 +42,7 @@ func TenantRead(opts ...PresetOption) []Policy {
 	return policies
 }
 
+// TenantWrite returns a validated policy chain for tenant-scoped write routes.
 func TenantWrite(opts ...PresetOption) []Policy {
 	cfg := applyPresetOptions(opts...)
 	requireAuthEngine("TenantWrite", cfg)
@@ -57,6 +67,7 @@ func TenantWrite(opts ...PresetOption) []Policy {
 	return policies
 }
 
+// PublicRead returns a validated policy chain for unauthenticated read routes.
 func PublicRead(opts ...PresetOption) []Policy {
 	cfg := applyPresetOptions(opts...)
 	requireLimiter("PublicRead", cfg)

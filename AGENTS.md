@@ -1,59 +1,143 @@
-# Project Guidelines
+# AGENTS.md
 
-Use these for every task in this workspace.
+## 1. Overview
 
-## Engineering Rules
+This repository is a production-grade Go API template for SaaS backends.
 
-- Production-ready from day 1 (no demo shortcuts).
-- No over-engineering.
-- Keep hot path lean.
-- No hidden magic/global state where avoidable.
-- Backward-compatible refactors where possible.
-- Prefer explicit interfaces over premature abstractions.
+It is structured around explicit modules, explicit dependency wiring, and policy-based route behavior.
 
-## Code Style
+How agents should interact with this repo:
+- Follow existing patterns before introducing new abstractions.
+- Prefer small, explicit changes in module scope.
+- Treat policy validation and startup linting as hard constraints.
 
-- Language: Go 1.26+ (`go.mod`).
-- Keep handlers/services explicit and small; follow constructor + method patterns in `internal/core/app/app.go` and `internal/core/db/tx.go`.
-- Reuse typed app errors from `internal/core/errors/errors.go`; return API errors through `internal/core/response/response.go`.
-- For JSON endpoints, use `httpx.JSON` (`internal/core/httpx/typedjson.go`) for strict decoding and validation.
-- Do not edit generated sqlc files in `internal/core/db/sqlcgen/`.
+## 2. Core Architecture Rules
 
-## Architecture
+- The runtime bootstrap entrypoint is `cmd/api/main.go`.
+- App wiring lives in `internal/core/app`.
+- Modules are registered in `internal/modules/modules.go`.
+- Module internals must follow handler/service/repo separation.
+- Policies are mandatory for behavioral guarantees (auth, tenant, RBAC, rate-limit, cache).
 
-- Real server bootstrap is `cmd/api/main.go` (config load/lint, logger init, app run). Root `main.go` is a placeholder.
-- Modules implement `app.Module` and register routes via `httpx.Router` (`internal/core/app/app.go`, `internal/core/httpx/router.go`).
-- Module registry is centralized in `internal/modules/modules.go`.
-- Dependencies (Postgres, Redis, readiness) are wired in `internal/core/app/deps.go`; modules may bind via `DependencyBinder`.
+## 3. How to Add a New Feature (PRIMARY WORKFLOW)
 
-## Build and Test
+1. Create a new module.
+2. Define DTOs.
+3. Implement handler.
+4. Implement service logic.
+5. Implement repo queries.
+6. Register routes with proper policies.
 
-- Primary checks: `go test ./...` and `go build ./...`.
-- Make targets: `make fmt`, `make vet`, `make test`, `make sqlc-generate`, `make migrate-*`.
-- For running the API, prefer `go run ./cmd/api`.
-- sqlc generation: `sqlc generate` (or `go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate`).
+Implementation references:
+- `docs/modules.md`
+- `docs/crud-examples.md`
+- `docs/module_guide.md`
 
-## Project Conventions
+## 4. Route Creation Rules (VERY IMPORTANT)
 
-- Readiness model: `/healthz` is liveness; `/readyz` reports dependency readiness and may return 503 (`internal/modules/health/routes.go`, `internal/core/readiness/service.go`).
-- Middleware behavior is env-driven (`internal/core/config/config.go` and `internal/core/httpx/globalmiddleware.go`).
-- Keep config validation through `config.Lint` during startup (`cmd/api/main.go`).
-- DB workflow baseline:
-	1. Add migration in `db/migrations/`
-	2. Mirror schema in `db/schema/`
-	3. Add queries in `db/queries/`
-	4. Regenerate sqlc
-- Keep transaction boundaries in service layer (see `docs/module_guide.md` and `internal/core/db/tx.go`).
+Always attach policies explicitly when route behavior requires auth/isolation/control.
 
-## Integration Points
+Required policy order:
+1. auth
+2. tenant
+3. rbac
+4. rate limit
+5. cache
 
-- Postgres: `internal/core/db/postgres.go`, enabled by `POSTGRES_ENABLED` and validated at startup.
-- Redis: `internal/core/cache/redis.go`, enabled by `REDIS_ENABLED` and validated at startup.
-- Query access should go through `internal/core/db/queries.go` wrappers.
+Do not bypass `policy.MustValidateRoute` / validator-backed route checks.
 
-## Security
+Reference:
+- `internal/core/policy`
+- `docs/policies.md`
 
-- Keep recoverer/request-id middleware enabled by default (`internal/core/httpx/recover.go`, `internal/core/httpx/requestid.go`).
-- Use `MaxBodyBytes` and strict typed JSON decode to reduce input abuse (`internal/core/httpx/maxbody.go`, `internal/core/httpx/typedjson.go`).
-- Do not leak internal errors to clients; preserve centralized sanitization in `internal/core/response/response.go`.
-- Security headers are optional but supported via middleware toggles (`internal/core/httpx/securityheaders.go`).
+## 5. Policy Usage Guidelines
+
+- Use `AuthRequired` for all protected routes.
+- Use tenant policies (`TenantRequired`, `TenantMatchFromPath`) for tenant-scoped endpoints.
+- Use `RequirePerm` / `RequireAnyPerm` for RBAC constraints.
+- Use rate limits on abuse-prone endpoints (auth, write-heavy, expensive reads).
+- Use cache only with safe vary dimensions (`VaryBy.UserID` or `VaryBy.TenantID` when authenticated).
+
+References:
+- `docs/policies.md`
+- `docs/cache-guide.md`
+
+## 6. Auth Integration Rules
+
+- Use the goAuth provider integration in `internal/core/auth`.
+- Do not reimplement token parsing/validation in modules.
+- Keep auth mode behavior explicit (`jwt_only`, `hybrid`, `strict`).
+
+Reference:
+- `docs/auth-goauth.md`
+- `docs/authDocs/`
+
+## 7. Cache Usage Rules
+
+- Define route tags and TTL intentionally.
+- Use `VaryBy` explicitly for identity-sensitive responses.
+- Never cache authenticated responses without identity-safe key variation.
+- Invalidate tags on successful writes.
+
+Reference:
+- `docs/cache-guide.md`
+- `docs/policies.md`
+
+## 8. Data Layer Rules
+
+- Use sqlc-generated query access from `internal/core/db/sqlcgen` via wrappers.
+- Do not write raw SQL in handlers.
+- Keep DB access in repo/service layer, not transport layer.
+- Follow migration + schema + queries + generate workflow.
+
+Reference:
+- `docs/workflows.md`
+- `docs/module_guide.md`
+
+## 9. Performance Rules
+
+- Keep hot path lean (middleware and policy execution).
+- Avoid unnecessary Redis calls and high-cardinality keys.
+- Avoid heavy middleware for routes that do not need it.
+- Validate hot-path changes with benchmarks and load scripts.
+
+Reference:
+- `docs/performance-testing.md`
+
+## 10. What NOT to Do
+
+- Do not bypass policy layers for protected routes.
+- Do not put business logic in handlers.
+- Do not duplicate authentication logic.
+- Do not modify core infrastructure without a clear need and validation.
+- Do not edit generated sqlc files under `internal/core/db/sqlcgen/`.
+
+## 11. Where to Look for Docs
+
+- auth: `docs/auth-goauth.md`, `docs/authDocs/`
+- cache: `docs/cache-guide.md`
+- modules: `docs/modules.md`, `docs/crud-examples.md`, `docs/module_guide.md`
+- performance: `docs/performance-testing.md`
+- environment/runtime: `docs/environment-variables.md`
+- workflows: `docs/workflows.md`
+
+## 12. Modification Rules
+
+- Prefer extending modules over changing core.
+- If core must change, keep changes explicit and minimal.
+- Preserve constructor + method patterns and existing public contracts.
+- Update docs when behavior or configuration changes.
+
+Always prefer:
+- existing patterns over new abstractions
+- policy-based solutions over custom logic
+
+Never:
+- duplicate authentication logic
+- bypass validation layers
+- introduce global state
+
+Decision rules:
+- If task involves authentication, refer auth docs.
+- If task involves caching, refer cache guide.
+- If task involves database changes, use sqlc patterns.

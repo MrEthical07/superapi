@@ -16,6 +16,7 @@ type txHandle interface {
 	Rollback(context.Context) error
 }
 
+// WithTx runs a callback in a transaction and discards callback return values.
 func WithTx(ctx context.Context, pool *pgxpool.Pool, fn func(*sqlcgen.Queries) error) error {
 	if pool == nil {
 		return fmt.Errorf("nil pool")
@@ -30,6 +31,7 @@ func WithTx(ctx context.Context, pool *pgxpool.Pool, fn func(*sqlcgen.Queries) e
 	return err
 }
 
+// WithTxResult runs a callback in a transaction and returns a typed result.
 func WithTxResult[T any](ctx context.Context, pool *pgxpool.Pool, fn func(*sqlcgen.Queries) (T, error)) (T, error) {
 	var zero T
 	if pool == nil {

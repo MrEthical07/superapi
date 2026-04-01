@@ -23,6 +23,9 @@ import (
 //
 // This order keeps request_id available in recover logs, and keeps recoverer
 // around downstream middleware/handlers.
+//
+// For cache and rate-limit route policy behavior, see docs/cache-guide.md and
+// docs/policies.md.
 func AssembleGlobalMiddleware(base http.Handler, cfg config.HTTPMiddlewareConfig, log *logx.Logger, tracingSvc *tracing.Service) http.Handler {
 	handler := base
 

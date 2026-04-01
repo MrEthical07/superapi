@@ -14,12 +14,17 @@ import (
 	corepolicy "github.com/MrEthical07/superapi/internal/core/policy"
 )
 
+// Diagnostic reports one static route-policy validation issue.
 type Diagnostic struct {
-	File    string `json:"file"`
-	Line    int    `json:"line"`
+	// File is source file containing the issue.
+	File string `json:"file"`
+	// Line is source line for the route declaration.
+	Line int `json:"line"`
+	// Message describes violated validation rule.
 	Message string `json:"message"`
 }
 
+// AnalyzePaths scans Go files and validates route policy wiring statically.
 func AnalyzePaths(paths []string) ([]Diagnostic, error) {
 	if len(paths) == 0 {
 		paths = []string{"./..."}

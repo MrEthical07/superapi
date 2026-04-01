@@ -9,20 +9,31 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 )
 
+// ErrorBody is the API error payload embedded in response envelope.
 type ErrorBody struct {
-	Code    string `json:"code"`
+	// Code is stable machine-readable error code.
+	Code string `json:"code"`
+	// Message is client-facing error summary.
 	Message string `json:"message"`
-	Details any    `json:"details,omitempty"`
+	// Details contains optional structured diagnostics safe for clients.
+	Details any `json:"details,omitempty"`
 }
 
+// Envelope is the standard API response shape for all endpoints.
 type Envelope struct {
-	OK        bool       `json:"ok"`
-	Data      any        `json:"data,omitempty"`
-	Error     *ErrorBody `json:"error,omitempty"`
-	RequestID string     `json:"request_id,omitempty"`
-	Meta      any        `json:"meta,omitempty"`
+	// OK indicates whether request completed successfully.
+	OK bool `json:"ok"`
+	// Data contains success payload.
+	Data any `json:"data,omitempty"`
+	// Error contains error payload for failed responses.
+	Error *ErrorBody `json:"error,omitempty"`
+	// RequestID propagates request correlation identifier.
+	RequestID string `json:"request_id,omitempty"`
+	// Meta contains optional non-primary payload metadata.
+	Meta any `json:"meta,omitempty"`
 }
 
+// JSON writes a response envelope as JSON with explicit HTTP status code.
 func JSON(w http.ResponseWriter, status int, payload Envelope) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -32,6 +43,7 @@ func JSON(w http.ResponseWriter, status int, payload Envelope) {
 	_ = enc.Encode(payload) // best effort; status already written
 }
 
+// OK writes a 200 success envelope.
 func OK(w http.ResponseWriter, data any, requestID string) {
 	JSON(w, http.StatusOK, Envelope{
 		OK:        true,
@@ -40,6 +52,7 @@ func OK(w http.ResponseWriter, data any, requestID string) {
 	})
 }
 
+// Created writes a 201 success envelope.
 func Created(w http.ResponseWriter, data any, requestID string) {
 	JSON(w, http.StatusCreated, Envelope{
 		OK:        true,
@@ -48,6 +61,12 @@ func Created(w http.ResponseWriter, data any, requestID string) {
 	})
 }
 
+// Error writes sanitized error envelope based on typed app errors.
+//
+// Behavior:
+// - Deadline exceeded maps to timeout response
+// - AppError maps to configured status/code/message/details
+// - Unknown errors map to generic internal error response
 func Error(w http.ResponseWriter, err error, requestID string) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		JSON(w, http.StatusGatewayTimeout, Envelope{

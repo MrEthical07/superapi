@@ -25,6 +25,7 @@ func NewSQLCUserProvider(queries *sqlcgen.Queries) *SQLCUserProvider {
 	return &SQLCUserProvider{queries: queries}
 }
 
+// GetUserByIdentifier looks up a user by login identifier.
 func (p *SQLCUserProvider) GetUserByIdentifier(identifier string) (goauth.UserRecord, error) {
 	if p == nil || p.queries == nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -43,6 +44,7 @@ func (p *SQLCUserProvider) GetUserByIdentifier(identifier string) (goauth.UserRe
 	return mapUserToRecord(row), nil
 }
 
+// GetUserByID looks up a user by canonical user id.
 func (p *SQLCUserProvider) GetUserByID(userID string) (goauth.UserRecord, error) {
 	if p == nil || p.queries == nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -66,6 +68,7 @@ func (p *SQLCUserProvider) GetUserByID(userID string) (goauth.UserRecord, error)
 	return mapUserToRecord(row), nil
 }
 
+// UpdatePasswordHash persists a new password hash for the given user.
 func (p *SQLCUserProvider) UpdatePasswordHash(userID string, newHash string) error {
 	if p == nil || p.queries == nil {
 		return goauth.ErrUserNotFound
@@ -89,6 +92,7 @@ func lookupContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), defaultLookupTimeout)
 }
 
+// CreateUser inserts a new auth user record.
 func (p *SQLCUserProvider) CreateUser(ctx context.Context, input goauth.CreateUserInput) (goauth.UserRecord, error) {
 	row, err := p.queries.CreateAuthUser(ctx, sqlcgen.CreateAuthUserParams{
 		Email:        input.Identifier,
@@ -103,6 +107,7 @@ func (p *SQLCUserProvider) CreateUser(ctx context.Context, input goauth.CreateUs
 	return mapUserToRecord(row), nil
 }
 
+// UpdateAccountStatus updates account status and returns latest user record.
 func (p *SQLCUserProvider) UpdateAccountStatus(ctx context.Context, userID string, status goauth.AccountStatus) (goauth.UserRecord, error) {
 	var pgID pgtype.UUID
 	if err := pgID.Scan(userID); err != nil {
@@ -125,15 +130,23 @@ func (p *SQLCUserProvider) UpdateAccountStatus(ctx context.Context, userID strin
 func (p *SQLCUserProvider) GetTOTPSecret(_ context.Context, _ string) (*goauth.TOTPRecord, error) {
 	return nil, goauth.ErrUnauthorized
 }
+
+// EnableTOTP is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) EnableTOTP(_ context.Context, _ string, _ []byte) error {
 	return goauth.ErrUnauthorized
 }
+
+// DisableTOTP is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) DisableTOTP(_ context.Context, _ string) error {
 	return goauth.ErrUnauthorized
 }
+
+// MarkTOTPVerified is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) MarkTOTPVerified(_ context.Context, _ string) error {
 	return goauth.ErrUnauthorized
 }
+
+// UpdateTOTPLastUsedCounter is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) UpdateTOTPLastUsedCounter(_ context.Context, _ string, _ int64) error {
 	return goauth.ErrUnauthorized
 }
@@ -142,9 +155,13 @@ func (p *SQLCUserProvider) UpdateTOTPLastUsedCounter(_ context.Context, _ string
 func (p *SQLCUserProvider) GetBackupCodes(_ context.Context, _ string) ([]goauth.BackupCodeRecord, error) {
 	return nil, goauth.ErrUnauthorized
 }
+
+// ReplaceBackupCodes is a stub until backup-code persistence is implemented.
 func (p *SQLCUserProvider) ReplaceBackupCodes(_ context.Context, _ string, _ []goauth.BackupCodeRecord) error {
 	return goauth.ErrUnauthorized
 }
+
+// ConsumeBackupCode is a stub until backup-code persistence is implemented.
 func (p *SQLCUserProvider) ConsumeBackupCode(_ context.Context, _ string, _ [32]byte) (bool, error) {
 	return false, goauth.ErrUnauthorized
 }

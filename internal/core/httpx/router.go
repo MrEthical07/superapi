@@ -58,6 +58,7 @@ func (m *Mux) Handle(method string, pattern string, h http.Handler, policies ...
 	m.r.Method(method, pattern, final)
 }
 
+// Use attaches global middlewares to the underlying router.
 func (m *Mux) Use(middlewares ...func(http.Handler) http.Handler) {
 	m.r.Use(middlewares...)
 }

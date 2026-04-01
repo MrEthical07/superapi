@@ -12,10 +12,16 @@ import (
 
 const maxRequestIDLen = 64
 
+// RequestIDFromContext returns request id stored by RequestID middleware.
 func RequestIDFromContext(ctx context.Context) string {
 	return requestid.FromContext(ctx)
 }
 
+// RequestID injects X-Request-Id header and request context value.
+//
+// Behavior:
+// - Accepts incoming X-Request-Id when format is valid
+// - Generates cryptographically random ID when missing/invalid
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rid := normalizeRequestID(r.Header.Get("X-Request-Id"))

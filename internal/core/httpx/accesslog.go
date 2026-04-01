@@ -19,6 +19,12 @@ const (
 	fnv64Prime  = 1099511628211
 )
 
+// AccessLog emits structured request logs with sampling and slow/error overrides.
+//
+// Notes:
+// - Always logs 5xx responses
+// - Always logs requests above SlowThreshold
+// - Uses route patterns to keep log cardinality stable
 func AccessLog(cfg config.AccessLogConfig, log *logx.Logger) func(http.Handler) http.Handler {
 	if !cfg.Enabled || log == nil {
 		return func(next http.Handler) http.Handler { return next }
@@ -131,12 +137,14 @@ type accessLogResponseWriter struct {
 	wroteHeader  bool
 }
 
+// WriteHeader captures status code and forwards header write.
 func (w *accessLogResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.wroteHeader = true
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
+// Write captures bytes written and forwards response body.
 func (w *accessLogResponseWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
@@ -146,6 +154,7 @@ func (w *accessLogResponseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// SetRoutePattern stores current route pattern for low-cardinality logging.
 func (w *accessLogResponseWriter) SetRoutePattern(pattern string) {
 	w.routePattern = pattern
 	if setter, ok := w.ResponseWriter.(interface{ SetRoutePattern(string) }); ok {
@@ -153,12 +162,14 @@ func (w *accessLogResponseWriter) SetRoutePattern(pattern string) {
 	}
 }
 
+// Flush forwards flush capability when supported by underlying writer.
 func (w *accessLogResponseWriter) Flush() {
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
 }
 
+// Hijack forwards connection hijack when supported.
 func (w *accessLogResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hijacker, ok := w.ResponseWriter.(http.Hijacker)
 	if !ok {
@@ -167,6 +178,7 @@ func (w *accessLogResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) 
 	return hijacker.Hijack()
 }
 
+// Push forwards HTTP/2 server push when supported.
 func (w *accessLogResponseWriter) Push(target string, opts *http.PushOptions) error {
 	pusher, ok := w.ResponseWriter.(http.Pusher)
 	if !ok {

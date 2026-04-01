@@ -18,26 +18,41 @@ const (
 
 var validInputName = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
+// ModuleSpec is the normalized module naming information.
 type ModuleSpec struct {
-	RawName   string
-	Package   string
+	// RawName is the original user-provided module name.
+	RawName string
+	// Package is the normalized Go package name.
+	Package string
+	// RoutePath is the normalized URL path segment.
 	RoutePath string
 }
 
+// TemplateOptions toggles optional scaffolding features.
 type TemplateOptions struct {
-	UseDB           bool
-	UseAuth         bool
-	UseTenant       bool
-	UseRateLimit    bool
-	UseCache        bool
+	// UseDB includes SQL scaffold files.
+	UseDB bool
+	// UseAuth includes AuthRequired policy wiring.
+	UseAuth bool
+	// UseTenant includes tenant policy wiring.
+	UseTenant bool
+	// UseRateLimit includes default rate-limit policy wiring.
+	UseRateLimit bool
+	// UseCache includes default cache-read policy wiring.
+	UseCache bool
+	// CreateMigration creates an initial migration scaffold.
 	CreateMigration bool
 }
 
+// TemplateConfig combines normalized spec and generation options.
 type TemplateConfig struct {
-	Spec    ModuleSpec
+	// Spec contains normalized naming fields.
+	Spec ModuleSpec
+	// Options contains feature toggles for generated files.
 	Options TemplateOptions
 }
 
+// NormalizeName validates and normalizes a module name into spec fields.
 func NormalizeName(name string) (ModuleSpec, error) {
 	input := strings.TrimSpace(name)
 	raw := strings.ToLower(input)
@@ -79,6 +94,7 @@ func splitParts(raw string) []string {
 	return out
 }
 
+// UpdateRegistry inserts module import and constructor entries in modules registry.
 func UpdateRegistry(content, moduleImportPath, packageName string) (string, bool, error) {
 	lines := strings.Split(content, "\n")
 	importLine := fmt.Sprintf("\t\"%s\"", moduleImportPath)
@@ -169,6 +185,7 @@ func sortRegion(lines []string, marker string, predicate func(string) bool) []st
 	return lines
 }
 
+// RenderFiles renders module source files keyed by relative path.
 func RenderFiles(cfg TemplateConfig) map[string]string {
 	spec := cfg.Spec
 	files := map[string]string{
@@ -381,6 +398,7 @@ func renderRepoFile(pkg string) string {
 		"func NewRepo() *Repo {\n\treturn &Repo{}\n}\n"
 }
 
+// GenerateModule materializes a module scaffold and updates registry wiring.
 func GenerateModule(workspaceRoot string, cfg TemplateConfig, force bool) error {
 	spec := cfg.Spec
 	moduleDir := filepath.Join(workspaceRoot, "internal", "modules", spec.Package)

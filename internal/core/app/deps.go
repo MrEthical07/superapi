@@ -18,21 +18,42 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/tracing"
 )
 
+// START HERE:
+// - This file wires process dependencies (Postgres, Redis, auth, cache, tracing).
+// - Module routes should consume these via app.DependencyBinder or modulekit.Runtime.
+//
+// WARNING:
+// This is core infrastructure code.
+// Avoid modifying dependency ordering unless you understand startup and readiness behavior.
+
+// Dependencies stores initialized process-level services shared with modules.
 type Dependencies struct {
-	Postgres   *pgxpool.Pool
-	Redis      *redis.Client
-	Readiness  *readiness.Service
-	Metrics    *metrics.Service
-	Tracing    *tracing.Service
+	// Postgres is the optional pgx pool initialized from config.
+	Postgres *pgxpool.Pool
+	// Redis is the optional Redis client used by auth/cache/ratelimit.
+	Redis *redis.Client
+	// Readiness aggregates health checks for readiness responses.
+	Readiness *readiness.Service
+	// Metrics is the Prometheus instrumentation service.
+	Metrics *metrics.Service
+	// Tracing is the OpenTelemetry lifecycle service.
+	Tracing *tracing.Service
+	// AuthEngine is the optional goAuth engine.
 	AuthEngine *goauth.Engine
-	AuthMode   auth.Mode
-	RateLimit  config.RateLimitConfig
-	Cache      config.CacheConfig
-	Limiter    ratelimit.Limiter
-	CacheMgr   *cache.Manager
-	authClose  func()
+	// AuthMode is the normalized auth mode used by auth policies.
+	AuthMode auth.Mode
+	// RateLimit is the resolved rate-limit config snapshot.
+	RateLimit config.RateLimitConfig
+	// Cache is the resolved cache config snapshot.
+	Cache config.CacheConfig
+	// Limiter is the optional route rate limiter.
+	Limiter ratelimit.Limiter
+	// CacheMgr is the optional response cache manager.
+	CacheMgr  *cache.Manager
+	authClose func()
 }
 
+// DependencyBinder allows modules to receive initialized Dependencies.
 type DependencyBinder interface {
 	BindDependencies(*Dependencies)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/config"
 )
 
+// NewPool creates and verifies a pgx connection pool from config.
 func NewPool(ctx context.Context, cfg config.PostgresConfig) (*pgxpool.Pool, error) {
 	pcfg, err := pgxpool.ParseConfig(cfg.URL)
 	if err != nil {
@@ -34,6 +35,7 @@ func NewPool(ctx context.Context, cfg config.PostgresConfig) (*pgxpool.Pool, err
 	return pool, nil
 }
 
+// CheckHealth performs a bounded ping against the Postgres pool.
 func CheckHealth(ctx context.Context, pool *pgxpool.Pool, timeout time.Duration) error {
 	if pool == nil {
 		return fmt.Errorf("postgres pool is nil")

@@ -12,10 +12,19 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
+// RateLimit applies route-level throttling using default rule key resolution.
+//
+// Use RateLimitWithKeyer when you need custom identity key extraction.
 func RateLimit(limiter ratelimit.Limiter, rule ratelimit.Rule) Policy {
 	return RateLimitWithKeyer(limiter, "", rule, nil)
 }
 
+// RateLimitWithKeyer applies route-level throttling with optional custom keyer.
+//
+// Behavior:
+// - Returns 429 when budget is exceeded
+// - Returns 503 when limiter fails in fail-closed mode
+// - Emits Retry-After header when retry delay is known
 func RateLimitWithKeyer(limiter ratelimit.Limiter, name string, rule ratelimit.Rule, keyer ratelimit.Keyer) Policy {
 	if limiter == nil {
 		panicInvalidRouteConfigf("%s requires a non-nil limiter", PolicyTypeRateLimit)

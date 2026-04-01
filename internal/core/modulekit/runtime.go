@@ -18,14 +18,17 @@ type Runtime struct {
 	deps *app.Dependencies
 }
 
+// New creates a module runtime wrapper around app dependencies.
 func New(deps *app.Dependencies) Runtime {
 	return Runtime{deps: deps}
 }
 
+// Dependencies returns raw dependency bag for advanced module wiring.
 func (r Runtime) Dependencies() *app.Dependencies {
 	return r.deps
 }
 
+// Postgres returns configured pgx pool when Postgres is enabled.
 func (r Runtime) Postgres() *pgxpool.Pool {
 	if r.deps == nil {
 		return nil
@@ -33,6 +36,7 @@ func (r Runtime) Postgres() *pgxpool.Pool {
 	return r.deps.Postgres
 }
 
+// Redis returns configured redis client when Redis is enabled.
 func (r Runtime) Redis() *redis.Client {
 	if r.deps == nil {
 		return nil
@@ -40,6 +44,7 @@ func (r Runtime) Redis() *redis.Client {
 	return r.deps.Redis
 }
 
+// RateLimitConfig returns resolved rate-limit configuration snapshot.
 func (r Runtime) RateLimitConfig() config.RateLimitConfig {
 	if r.deps == nil {
 		return config.RateLimitConfig{}
@@ -47,6 +52,7 @@ func (r Runtime) RateLimitConfig() config.RateLimitConfig {
 	return r.deps.RateLimit
 }
 
+// CacheConfig returns resolved cache configuration snapshot.
 func (r Runtime) CacheConfig() config.CacheConfig {
 	if r.deps == nil {
 		return config.CacheConfig{}
@@ -54,6 +60,7 @@ func (r Runtime) CacheConfig() config.CacheConfig {
 	return r.deps.Cache
 }
 
+// AuthEngine returns configured goAuth engine when auth is enabled.
 func (r Runtime) AuthEngine() *goauth.Engine {
 	if r.deps == nil {
 		return nil
@@ -61,6 +68,7 @@ func (r Runtime) AuthEngine() *goauth.Engine {
 	return r.deps.AuthEngine
 }
 
+// AuthMode returns resolved auth mode, optionally overridden per route.
 func (r Runtime) AuthMode(overrides ...auth.Mode) auth.Mode {
 	if len(overrides) > 0 && overrides[0] != "" {
 		return overrides[0]
@@ -71,6 +79,7 @@ func (r Runtime) AuthMode(overrides ...auth.Mode) auth.Mode {
 	return r.deps.AuthMode
 }
 
+// Limiter returns configured route limiter when rate limiting is enabled.
 func (r Runtime) Limiter() ratelimit.Limiter {
 	if r.deps == nil {
 		return nil
@@ -78,6 +87,7 @@ func (r Runtime) Limiter() ratelimit.Limiter {
 	return r.deps.Limiter
 }
 
+// CacheManager returns configured cache manager when caching is enabled.
 func (r Runtime) CacheManager() *cache.Manager {
 	if r.deps == nil {
 		return nil

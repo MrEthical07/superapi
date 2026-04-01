@@ -14,18 +14,25 @@ import (
 type PermissionsMode string
 
 const (
-	PermsBitmask   PermissionsMode = "bitmask"
+	// PermsBitmask stores permissions as a BIGINT bitmask.
+	PermsBitmask PermissionsMode = "bitmask"
+	// PermsTextArray stores permissions as a Postgres TEXT[] list.
 	PermsTextArray PermissionsMode = "text_array"
-	PermsJSONB     PermissionsMode = "jsonb"
+	// PermsJSONB stores permissions as a Postgres JSONB array.
+	PermsJSONB PermissionsMode = "jsonb"
 )
 
 // IDType defines the primary key format for the users table.
 type IDType string
 
 const (
-	IDTypeUUID      IDType = "uuid"
-	IDTypeBigint    IDType = "bigint"
-	IDTypeEmail     IDType = "email"
+	// IDTypeUUID uses UUID primary keys.
+	IDTypeUUID IDType = "uuid"
+	// IDTypeBigint uses BIGINT identity primary keys.
+	IDTypeBigint IDType = "bigint"
+	// IDTypeEmail uses the email column as the primary key.
+	IDTypeEmail IDType = "email"
+	// IDTypeCustomStr uses caller-managed string ids.
 	IDTypeCustomStr IDType = "custom_string"
 )
 
@@ -33,27 +40,44 @@ const (
 type LoginMethod string
 
 const (
-	LoginEmail    LoginMethod = "email"
+	// LoginEmail authenticates with email and password.
+	LoginEmail LoginMethod = "email"
+	// LoginUsername authenticates with username and password.
 	LoginUsername LoginMethod = "username"
-	LoginPhone    LoginMethod = "phone"
-	LoginCustom   LoginMethod = "custom"
+	// LoginPhone authenticates with phone and password.
+	LoginPhone LoginMethod = "phone"
+	// LoginCustom authenticates with a custom identifier and password.
+	LoginCustom LoginMethod = "custom"
 )
 
 // AuthGenConfig holds all wizard/config-driven choices.
 type AuthGenConfig struct {
-	TenantEnabled      bool            `yaml:"tenant_enabled"`
-	RoleEnabled        bool            `yaml:"role_enabled"`
-	PermissionsEnabled bool            `yaml:"permissions_enabled"`
-	PermissionsMode    PermissionsMode `yaml:"permissions_mode"`
-	IDType             IDType          `yaml:"id_type"`
-	LoginMethod        LoginMethod     `yaml:"login_method"`
-	TableName          string          `yaml:"table_name"`
-	PasswordHash       bool            `yaml:"password_hash"`
-	StatusEnabled      bool            `yaml:"status_enabled"`
-	VerificationFlag   bool            `yaml:"verification_flag"`
-	Timestamps         bool            `yaml:"timestamps"`
-	SoftDelete         bool            `yaml:"soft_delete"`
-	LastLogin          bool            `yaml:"last_login"`
+	// TenantEnabled adds optional tenant_id support.
+	TenantEnabled bool `yaml:"tenant_enabled"`
+	// RoleEnabled includes a role column.
+	RoleEnabled bool `yaml:"role_enabled"`
+	// PermissionsEnabled includes a permissions column.
+	PermissionsEnabled bool `yaml:"permissions_enabled"`
+	// PermissionsMode selects permission storage format.
+	PermissionsMode PermissionsMode `yaml:"permissions_mode"`
+	// IDType selects primary key strategy.
+	IDType IDType `yaml:"id_type"`
+	// LoginMethod selects login identifier column.
+	LoginMethod LoginMethod `yaml:"login_method"`
+	// TableName is the auth users table name.
+	TableName string `yaml:"table_name"`
+	// PasswordHash enables password hash persistence.
+	PasswordHash bool `yaml:"password_hash"`
+	// StatusEnabled adds account status column.
+	StatusEnabled bool `yaml:"status_enabled"`
+	// VerificationFlag adds is_verified column.
+	VerificationFlag bool `yaml:"verification_flag"`
+	// Timestamps adds created_at and updated_at columns.
+	Timestamps bool `yaml:"timestamps"`
+	// SoftDelete adds deleted_at column.
+	SoftDelete bool `yaml:"soft_delete"`
+	// LastLogin adds last_login_at column.
+	LastLogin bool `yaml:"last_login"`
 }
 
 // DefaultConfig returns the goAuth-aligned default configuration.

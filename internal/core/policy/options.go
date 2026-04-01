@@ -10,6 +10,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
 
+// PresetOption mutates preset behavior used by TenantRead/TenantWrite/PublicRead.
 type PresetOption func(*presetConfig)
 
 type presetConfig struct {
@@ -62,6 +63,7 @@ func applyPresetOptions(opts ...PresetOption) presetConfig {
 	return cfg
 }
 
+// WithAuthEngine sets auth engine and mode for preset-generated auth policies.
 func WithAuthEngine(engine *goauth.Engine, mode auth.Mode) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.authEngine = engine
@@ -71,18 +73,21 @@ func WithAuthEngine(engine *goauth.Engine, mode auth.Mode) PresetOption {
 	}
 }
 
+// WithLimiter sets the limiter used by preset-generated rate limit policies.
 func WithLimiter(limiter ratelimit.Limiter) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.limiter = limiter
 	}
 }
 
+// WithCacheManager sets the cache manager used by preset-generated cache policies.
 func WithCacheManager(manager *cache.Manager) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.cacheManager = manager
 	}
 }
 
+// WithCache configures cache TTL and tags used by preset-generated cache read policy.
 func WithCache(ttl time.Duration, tags ...string) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.cacheConfigured = true
@@ -95,6 +100,7 @@ func WithCache(ttl time.Duration, tags ...string) PresetOption {
 	}
 }
 
+// WithRateLimit configures default limit/window for preset-generated rate limit policy.
 func WithRateLimit(limit int, window time.Duration) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.rateLimitSet = true
@@ -107,12 +113,14 @@ func WithRateLimit(limit int, window time.Duration) PresetOption {
 	}
 }
 
+// WithStrictAuth forces auth mode strict regardless of previous mode options.
 func WithStrictAuth() PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.strictAuth = true
 	}
 }
 
+// WithInvalidateTags sets tags used by preset-generated cache invalidation policy.
 func WithInvalidateTags(tags ...string) PresetOption {
 	return func(cfg *presetConfig) {
 		if len(tags) == 0 {
@@ -123,6 +131,7 @@ func WithInvalidateTags(tags ...string) PresetOption {
 	}
 }
 
+// WithTenantMatchParam overrides tenant path parameter name used by presets.
 func WithTenantMatchParam(param string) PresetOption {
 	return func(cfg *presetConfig) {
 		trimmed := strings.TrimSpace(param)
@@ -132,6 +141,7 @@ func WithTenantMatchParam(param string) PresetOption {
 	}
 }
 
+// WithCacheVaryBy overrides vary dimensions for preset-generated cache reads.
 func WithCacheVaryBy(varyBy cache.CacheVaryBy) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.cacheVaryBy = varyBy

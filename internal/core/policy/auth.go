@@ -16,11 +16,34 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/tenant"
 )
 
+// AuthRequired enforces authentication on a route.
+//
+// It validates bearer token claims using the configured goAuth engine and
+// injects auth.AuthContext into request context for downstream policies.
+//
+// Behavior:
+// - Returns 401 if token is missing or invalid
+// - Uses selected mode (jwt_only, hybrid, strict)
+//
+// Usage:
+//
+//	r.Handle(http.MethodGet, "/api/v1/system/whoami", httpx.Adapter(handler),
+//	    policy.AuthRequired(engine, mode),
+//	)
+//
+// Notes:
+// - Place before RBAC and tenant policies
+// - Requires a non-nil engine when route is expected to be protected
 func AuthRequired(engine *goauth.Engine, mode auth.Mode) Policy {
 	p := authRequiredWithEngine(engine, mode)
 	return annotatePolicy(p, Metadata{Type: PolicyTypeAuthRequired, Name: "AuthRequired"})
 }
 
+// RequirePerm enforces all-of permission checks for authenticated users.
+//
+// Behavior:
+// - Returns 401 if auth context is missing
+// - Returns 403 if any required permission is missing
 func RequirePerm(perms ...string) Policy {
 	required := make([]string, 0, len(perms))
 	for _, p := range perms {
@@ -57,6 +80,11 @@ func RequirePerm(perms ...string) Policy {
 	return annotatePolicy(p, Metadata{Type: PolicyTypeRequirePerm, Name: "RequirePerm"})
 }
 
+// RequireAnyPerm enforces any-of permission checks for authenticated users.
+//
+// Behavior:
+// - Returns 401 if auth context is missing
+// - Returns 403 if none of the permissions match
 func RequireAnyPerm(perms ...string) Policy {
 	required := make([]string, 0, len(perms))
 	for _, p := range perms {
@@ -101,6 +129,7 @@ type authGuardResponseWriter struct {
 	suppressUnauthorized func() bool
 }
 
+// WriteHeader suppresses premature 401 writes when guard short-circuits.
 func (w *authGuardResponseWriter) WriteHeader(statusCode int) {
 	if statusCode == http.StatusUnauthorized && w.shouldSuppressUnauthorized() {
 		w.unauthorized = true
@@ -109,6 +138,7 @@ func (w *authGuardResponseWriter) WriteHeader(statusCode int) {
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
+// Write discards body bytes for suppressed unauthorized responses.
 func (w *authGuardResponseWriter) Write(data []byte) (int, error) {
 	if w.unauthorized && w.shouldSuppressUnauthorized() {
 		return len(data), nil
@@ -181,6 +211,15 @@ func goAuthEngineFromContext(ctx context.Context) (*goauth.Engine, bool) {
 	return engine, true
 }
 
+// TenantRequired ensures authenticated requests carry tenant scope.
+//
+// Behavior:
+// - Returns 401 when authentication context is absent
+// - Returns 403 when tenant scope is missing
+//
+// Notes:
+// - Required for tenant-isolated routes
+// - Place after AuthRequired
 func TenantRequired() Policy {
 	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +239,20 @@ func TenantRequired() Policy {
 	return annotatePolicy(p, Metadata{Type: PolicyTypeTenantRequired, Name: "TenantRequired"})
 }
 
+// TenantMatchFromPath enforces tenant isolation using a route path parameter.
+//
+// Behavior:
+// - Returns 400 when route tenant parameter is missing
+// - Returns 401 when auth context is missing
+// - Returns 404 when principal tenant and route tenant mismatch
+//
+// Usage:
+//
+//	r.Handle(http.MethodGet, "/api/v1/tenants/{tenant_id}/projects", handler,
+//	    policy.AuthRequired(engine, mode),
+//	    policy.TenantRequired(),
+//	    policy.TenantMatchFromPath("tenant_id"),
+//	)
 func TenantMatchFromPath(paramName string) Policy {
 	paramName = strings.TrimSpace(paramName)
 	if paramName == "" {

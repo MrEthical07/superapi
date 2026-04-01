@@ -13,16 +13,22 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
+// MigrationVersion describes the current migration state.
 type MigrationVersion struct {
-	Version    uint
-	Dirty      bool
+	// Version is the applied migration version when HasVersion is true.
+	Version uint
+	// Dirty indicates the database is marked dirty by migrate.
+	Dirty bool
+	// HasVersion reports whether any migration version is set.
 	HasVersion bool
 }
 
+// MigrationRunner wraps golang-migrate operations for CLI and app tooling.
 type MigrationRunner struct {
 	m *migrate.Migrate
 }
 
+// NewMigrationRunner creates a migrate runner for a source and database URL.
 func NewMigrationRunner(databaseURL, sourceURL string) (*MigrationRunner, error) {
 	m, err := migrate.New(sourceURL, databaseURL)
 	if err != nil {
@@ -31,6 +37,7 @@ func NewMigrationRunner(databaseURL, sourceURL string) (*MigrationRunner, error)
 	return &MigrationRunner{m: m}, nil
 }
 
+// Close closes migrate source and database handles.
 func (r *MigrationRunner) Close() error {
 	if r == nil || r.m == nil {
 		return nil
@@ -42,6 +49,7 @@ func (r *MigrationRunner) Close() error {
 	return errors.Join(srcErr, dbErr)
 }
 
+// Up applies all pending migrations.
 func (r *MigrationRunner) Up() (bool, error) {
 	err := r.m.Up()
 	if errors.Is(err, migrate.ErrNoChange) {
@@ -53,6 +61,7 @@ func (r *MigrationRunner) Up() (bool, error) {
 	return false, nil
 }
 
+// Down rolls back the requested number of migration steps.
 func (r *MigrationRunner) Down(steps int) (bool, error) {
 	if steps <= 0 {
 		return false, fmt.Errorf("steps must be > 0")
@@ -67,6 +76,7 @@ func (r *MigrationRunner) Down(steps int) (bool, error) {
 	return false, nil
 }
 
+// Version returns current migration version and dirty state.
 func (r *MigrationRunner) Version() (MigrationVersion, error) {
 	v, dirty, err := r.m.Version()
 	if errors.Is(err, migrate.ErrNilVersion) {
@@ -78,6 +88,7 @@ func (r *MigrationRunner) Version() (MigrationVersion, error) {
 	return MigrationVersion{Version: v, Dirty: dirty, HasVersion: true}, nil
 }
 
+// Force sets migrate state to a specific version.
 func (r *MigrationRunner) Force(version int) error {
 	if version < 0 {
 		return fmt.Errorf("version must be >= 0")
@@ -88,6 +99,7 @@ func (r *MigrationRunner) Force(version int) error {
 	return nil
 }
 
+// MigrationSourceURL converts a filesystem path to a migrate file:// URL.
 func MigrationSourceURL(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("migration path cannot be empty")

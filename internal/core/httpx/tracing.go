@@ -16,6 +16,12 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/tracing"
 )
 
+// Tracing wraps requests in OpenTelemetry server spans when tracing is enabled.
+//
+// Behavior:
+// - Extracts incoming trace context from headers
+// - Names spans with low-cardinality route patterns
+// - Records status code and request metadata attributes
 func Tracing(svc *tracing.Service) func(http.Handler) http.Handler {
 	if svc == nil || !svc.Enabled() {
 		return func(next http.Handler) http.Handler { return next }
@@ -102,11 +108,13 @@ type tracingResponseWriter struct {
 	routePattern string
 }
 
+// WriteHeader captures status code and forwards header write.
 func (w *tracingResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
+// SetRoutePattern stores route pattern used to name tracing spans.
 func (w *tracingResponseWriter) SetRoutePattern(pattern string) {
 	w.routePattern = pattern
 	if setter, ok := w.ResponseWriter.(interface{ SetRoutePattern(string) }); ok {

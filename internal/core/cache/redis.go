@@ -10,6 +10,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/config"
 )
 
+// NewRedisClient builds and validates a Redis client from runtime config.
 func NewRedisClient(ctx context.Context, cfg config.RedisConfig) (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
 		Addr:         cfg.Addr,
@@ -30,6 +31,7 @@ func NewRedisClient(ctx context.Context, cfg config.RedisConfig) (*redis.Client,
 	return client, nil
 }
 
+// CheckHealth performs a bounded Redis ping health check.
 func CheckHealth(ctx context.Context, client *redis.Client, timeout time.Duration) error {
 	if client == nil {
 		return fmt.Errorf("redis client is nil")

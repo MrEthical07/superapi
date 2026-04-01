@@ -13,11 +13,20 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/logx"
 )
 
+// START HERE:
+// - This file builds the runtime HTTP server and module registration flow.
+// - For dependency wiring details, see deps.go in this package.
+// - For route registration, see module implementations under internal/modules.
+
+// Module is the runtime contract every API module must satisfy.
+//
+// A module declares a stable name and registers routes on the shared router.
 type Module interface {
 	Name() string
 	Register(r httpx.Router) error
 }
 
+// App owns the HTTP server, registered modules, and bootstrapped dependencies.
 type App struct {
 	cfg     *config.Config
 	log     *logx.Logger
@@ -27,6 +36,15 @@ type App struct {
 	deps    *Dependencies
 }
 
+// New builds an App instance, wires dependencies, and registers all modules.
+//
+// Usage:
+//
+//	a, err := app.New(cfg, logger, modules.All())
+//
+// Notes:
+// - DependencyBinder modules receive initialized dependencies before Register
+// - Any registration failure aborts startup and closes allocated resources
 func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	if cfg == nil {
 		return nil, errors.New("nil config")
@@ -115,6 +133,12 @@ func requireBearerToken(next http.Handler, token string) http.Handler {
 	})
 }
 
+// Run starts the HTTP server and blocks until shutdown or fatal server error.
+//
+// Side effects:
+// - Listens on cfg.HTTP.Addr
+// - Closes dependencies during shutdown
+// - Uses cfg.HTTP.ShutdownTimeout for graceful stop
 func (a *App) Run(ctx context.Context) error {
 	defer a.closeDependencies()
 

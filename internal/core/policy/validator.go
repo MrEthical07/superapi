@@ -5,12 +5,21 @@ import (
 	"strings"
 )
 
+// WARNING:
+// This is core infrastructure code.
+// Avoid modifying validation order/rules unless you understand policy execution semantics.
+// For policy behavior, see docs/policies.md and docs/cache-guide.md.
+
+// MustValidateRoute validates route policy wiring and panics on invalid config.
+//
+// Use this during route registration to fail fast on unsafe policy combinations.
 func MustValidateRoute(method, pattern string, policies ...Policy) {
 	if err := ValidateRoute(method, pattern, policies...); err != nil {
 		panicInvalidRouteConfig(err.Error())
 	}
 }
 
+// ValidateRoute validates route policy wiring and returns descriptive validation errors.
 func ValidateRoute(method, pattern string, policies ...Policy) error {
 	trimmedMethod := strings.TrimSpace(method)
 	if trimmedMethod == "" {
@@ -29,6 +38,9 @@ func ValidateRoute(method, pattern string, policies ...Policy) error {
 	return ValidateRouteMetadata(strings.ToUpper(trimmedMethod), trimmedPattern, metas)
 }
 
+// ValidateRouteMetadata validates precomputed policy metadata.
+//
+// This entrypoint is used by both runtime route registration and static analyzers.
 func ValidateRouteMetadata(method, pattern string, metas []Metadata) error {
 	trimmedMethod := strings.ToUpper(strings.TrimSpace(method))
 	if trimmedMethod == "" {
