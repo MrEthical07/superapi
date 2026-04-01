@@ -36,6 +36,12 @@ func register(r httpx.Router, h http.Handler) {
 	if !strings.Contains(stdout.String(), "[ERROR]") {
 		t.Fatalf("expected error output, got: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "hint:") {
+		t.Fatalf("expected hint output, got: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "docs/policies.md") {
+		t.Fatalf("expected docs hint output, got: %s", stdout.String())
+	}
 }
 
 func TestRunReturnsSuccessForValidRoutes(t *testing.T) {
@@ -70,5 +76,12 @@ func register(r httpx.Router, h http.Handler, engine *goauth.Engine, limiter rat
 	}
 	if !strings.Contains(stdout.String(), "verify: ok") {
 		t.Fatalf("expected success output, got: %s", stdout.String())
+	}
+}
+
+func TestHintForDiagnosticFallback(t *testing.T) {
+	hint := hintForDiagnostic("some unknown validator output")
+	if !strings.Contains(hint, "docs/policies.md") {
+		t.Fatalf("fallback hint must reference docs/policies.md, got: %q", hint)
 	}
 }

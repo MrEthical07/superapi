@@ -58,7 +58,7 @@ func main() {
 	}
 
 	if cfg.UseTenant && !cfg.UseAuth {
-		fmt.Fprintln(os.Stderr, "error: tenant policy requires auth policy")
+		fmt.Fprintln(os.Stderr, "error: tenant policy requires auth policy because tenant scope depends on AuthContext (rerun with --auth)")
 		os.Exit(1)
 	}
 	if cfg.CreateMigration && !cfg.UseDB {

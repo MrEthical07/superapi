@@ -52,6 +52,27 @@ r.Handle(http.MethodPost, "/api/v1/example", handler,
 )
 ```
 
+### Scaffold quick start
+
+```bash
+make module name=projects
+```
+
+Expected output:
+
+```text
+generated module "projects" (package="projects" route=/api/v1/projects)
+```
+
+Quick checks after generation:
+
+```bash
+go test ./internal/devx/modulegen ./internal/modules/projects
+go run ./cmd/superapi-verify ./internal/modules/projects
+```
+
+Or run `make module` with no `name` to use the interactive wizard. Create files manually only if you want a custom layout.
+
 Policy type:
 
 - `type Policy func(http.Handler) http.Handler`

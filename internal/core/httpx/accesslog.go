@@ -14,11 +14,6 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/netx"
 )
 
-const (
-	fnv64Offset = 14695981039346656037
-	fnv64Prime  = 1099511628211
-)
-
 // AccessLog emits structured request logs with sampling and slow/error overrides.
 //
 // Notes:
@@ -107,18 +102,67 @@ func shouldSampleRequest(requestID string, sampleRate float64) bool {
 		return false
 	}
 
-	hash := fnv64aString(requestID)
+	hash := sampleKeyFromRequestID(requestID)
 	threshold := uint64(sampleRate * float64(^uint64(0)))
 	return hash <= threshold
 }
 
-func fnv64aString(s string) uint64 {
-	h := uint64(fnv64Offset)
-	for index := 0; index < len(s); index++ {
-		h ^= uint64(s[index])
-		h *= fnv64Prime
+func sampleKeyFromRequestID(requestID string) uint64 {
+	if key, ok := parseHexPrefix64(requestID); ok {
+		return key
 	}
-	return h
+
+	limit := len(requestID)
+	if limit > 8 {
+		limit = 8
+	}
+
+	var key uint64
+	for i := 0; i < limit; i++ {
+		key = (key << 8) | uint64(requestID[i])
+	}
+
+	key ^= uint64(len(requestID)) * 0x9e3779b97f4a7c15
+	return mixUint64(key)
+}
+
+func parseHexPrefix64(value string) (uint64, bool) {
+	if len(value) < 16 {
+		return 0, false
+	}
+
+	var out uint64
+	for i := 0; i < 16; i++ {
+		nibble, ok := hexNibble(value[i])
+		if !ok {
+			return 0, false
+		}
+		out = (out << 4) | uint64(nibble)
+	}
+
+	return out, true
+}
+
+func hexNibble(ch byte) (uint8, bool) {
+	switch {
+	case ch >= '0' && ch <= '9':
+		return ch - '0', true
+	case ch >= 'a' && ch <= 'f':
+		return ch - 'a' + 10, true
+	case ch >= 'A' && ch <= 'F':
+		return ch - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func mixUint64(value uint64) uint64 {
+	value ^= value >> 33
+	value *= 0xff51afd7ed558ccd
+	value ^= value >> 33
+	value *= 0xc4ceb9fe1a85ec53
+	value ^= value >> 33
+	return value
 }
 
 func remoteIP(remoteAddr string) string {

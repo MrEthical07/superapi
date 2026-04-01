@@ -195,6 +195,32 @@ func TestShouldSampleRequestDeterministic(t *testing.T) {
 	}
 }
 
+func TestSampleKeyFromRequestIDHexPrefix(t *testing.T) {
+	lower := "0123456789abcdef-tail"
+	upper := "0123456789ABCDEF-tail"
+
+	lowerKey := sampleKeyFromRequestID(lower)
+	upperKey := sampleKeyFromRequestID(upper)
+
+	const expected uint64 = 0x0123456789abcdef
+	if lowerKey != expected {
+		t.Fatalf("lower key=%x want=%x", lowerKey, expected)
+	}
+	if upperKey != expected {
+		t.Fatalf("upper key=%x want=%x", upperKey, expected)
+	}
+}
+
+func TestSampleKeyFromRequestIDFallbackDeterministic(t *testing.T) {
+	rid := "req-1234"
+
+	v1 := sampleKeyFromRequestID(rid)
+	v2 := sampleKeyFromRequestID(rid)
+	if v1 != v2 {
+		t.Fatalf("expected deterministic fallback key for non-hex request id")
+	}
+}
+
 func TestAccessLogTimeoutStatus(t *testing.T) {
 	l, buf := newBufferLogger(t)
 

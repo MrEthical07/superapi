@@ -60,18 +60,18 @@ func NormalizeName(name string) (ModuleSpec, error) {
 		return ModuleSpec{}, errors.New("module name is required")
 	}
 	if input != raw {
-		return ModuleSpec{}, fmt.Errorf("invalid module name %q: must be lowercase", name)
+		return ModuleSpec{}, fmt.Errorf("invalid module name %q: use lowercase only (example: %q)", name, "project_tasks")
 	}
 	if !validInputName.MatchString(raw) {
-		return ModuleSpec{}, fmt.Errorf("invalid module name %q: only lowercase letters, digits, '-' and '_' are allowed", name)
+		return ModuleSpec{}, fmt.Errorf("invalid module name %q: allowed characters are lowercase letters, digits, '-' and '_' (example: %q)", name, "project-tasks")
 	}
 
 	parts := splitParts(raw)
 	if len(parts) == 0 {
-		return ModuleSpec{}, fmt.Errorf("invalid module name %q", name)
+		return ModuleSpec{}, fmt.Errorf("invalid module name %q: include at least one alphanumeric segment (example: %q)", name, "projects")
 	}
 	if parts[0] == "" || (parts[0][0] < 'a' || parts[0][0] > 'z') {
-		return ModuleSpec{}, fmt.Errorf("invalid module name %q: must start with a letter", name)
+		return ModuleSpec{}, fmt.Errorf("invalid module name %q: must start with a letter (example: %q)", name, "projects")
 	}
 
 	pkg := strings.Join(parts, "_")

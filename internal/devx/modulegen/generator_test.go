@@ -42,6 +42,29 @@ func TestNormalizeName(t *testing.T) {
 	}
 }
 
+func TestNormalizeNameErrorMessages(t *testing.T) {
+	tests := []struct {
+		name        string
+		wantErrPart string
+	}{
+		{name: "ProjectTasks", wantErrPart: "use lowercase only"},
+		{name: "project!tasks", wantErrPart: "allowed characters are lowercase letters"},
+		{name: "123projects", wantErrPart: "must start with a letter"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NormalizeName(tc.name)
+			if err == nil {
+				t.Fatalf("expected error for %q", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErrPart) {
+				t.Fatalf("error=%q missing %q", err.Error(), tc.wantErrPart)
+			}
+		})
+	}
+}
+
 func TestUpdateRegistryAddsImportAndEntry(t *testing.T) {
 	content := `package modules
 

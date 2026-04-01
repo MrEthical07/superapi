@@ -84,9 +84,38 @@ Required full-mode toggles are already shown in `.env.example`:
 make module name=projects
 ```
 
-2. Add handlers and service logic in the generated module files under `internal/modules/projects/`.
+Expected output:
 
-3. Add routes in `routes.go` and attach policies as needed (auth, tenant, rate limit, cache).
+```text
+generated module "projects" (package="projects" route=/api/v1/projects)
+```
+
+This creates:
+
+- `internal/modules/projects/module.go`
+- `internal/modules/projects/routes.go`
+- `internal/modules/projects/dto.go`
+- `internal/modules/projects/handler.go`
+- `internal/modules/projects/service.go`
+- `internal/modules/projects/repo.go`
+- `internal/modules/projects/handler_test.go`
+- `internal/modules/projects/service_test.go`
+
+2. Confirm module wiring
+
+`internal/modules/modules.go` is updated automatically with import + `projects.New()` entry.
+
+3. Verify and run
+
+```bash
+go test ./internal/devx/modulegen ./internal/modules/projects
+go run ./cmd/superapi-verify ./internal/modules/projects
+go run ./cmd/api
+```
+
+4. Add handlers and service logic in the generated module files under `internal/modules/projects/`.
+
+5. Add routes in `routes.go` and attach policies as needed (auth, tenant, rate limit, cache).
 
 Guides:
 - Module guide: [docs/modules.md](docs/modules.md)

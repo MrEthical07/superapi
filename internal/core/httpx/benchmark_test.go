@@ -99,3 +99,14 @@ func BenchmarkJSONWithRequest_ParseDuration(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkShouldSampleRequest(b *testing.B) {
+	requestID := "9f95bd04f36f4f77ba2f2f2e6988db7f"
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = shouldSampleRequest(requestID, 0.10)
+	}
+}

@@ -63,7 +63,33 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	for _, diagnostic := range diagnostics {
 		fmt.Fprintf(stdout, "[ERROR] %s:%d\n%s\n", diagnostic.File, diagnostic.Line, diagnostic.Message)
+		if hint := hintForDiagnostic(diagnostic.Message); hint != "" {
+			fmt.Fprintf(stdout, "hint: %s\n", hint)
+		}
 	}
 
 	return 1
+}
+
+func hintForDiagnostic(message string) string {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+
+	switch {
+	case strings.Contains(normalized, "cannot appear after"):
+		return "reorder route policies as auth -> tenant -> rbac -> rate limit -> cache. See docs/policies.md"
+	case strings.Contains(normalized, "authrequired is required when rbac or tenant policies are configured"):
+		return "add policy.AuthRequired(...) before RBAC/tenant policies. See docs/policies.md"
+	case strings.Contains(normalized, "tenantmatchfrompath requires tenantrequired"):
+		return "add policy.TenantRequired() before policy.TenantMatchFromPath(...). See docs/policies.md"
+	case strings.Contains(normalized, "requires tenantrequired"):
+		return "route path includes {tenant_id}; add policy.TenantRequired() and policy.TenantMatchFromPath(\"tenant_id\"). See docs/policies.md"
+	case strings.Contains(normalized, "requires varyby.userid or varyby.tenantid"):
+		return "CacheRead on authenticated routes must vary by identity. Add VaryBy.UserID or VaryBy.TenantID. See docs/cache-guide.md"
+	case strings.Contains(normalized, "unsupported policy constructor"):
+		return "use supported policy constructors from internal/core/policy or extend static validator support first"
+	case strings.Contains(normalized, "variadic spread policies are not supported"):
+		return "pass policies directly in r.Handle(...) so static verify can analyze ordering and dependencies"
+	default:
+		return "see docs/policies.md for policy rules and troubleshooting"
+	}
 }
