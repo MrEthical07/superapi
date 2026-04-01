@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	goauth "github.com/MrEthical07/goAuth"
 	"github.com/MrEthical07/superapi/internal/core/db/sqlcgen"
@@ -17,13 +18,23 @@ type SQLCUserProvider struct {
 	queries *sqlcgen.Queries
 }
 
+const defaultLookupTimeout = 3 * time.Second
+
 // NewSQLCUserProvider creates a DB-backed user provider.
 func NewSQLCUserProvider(queries *sqlcgen.Queries) *SQLCUserProvider {
 	return &SQLCUserProvider{queries: queries}
 }
 
+// GetUserByIdentifier looks up a user by login identifier.
 func (p *SQLCUserProvider) GetUserByIdentifier(identifier string) (goauth.UserRecord, error) {
-	row, err := p.queries.GetAuthUserByLogin(context.Background(), identifier)
+	if p == nil || p.queries == nil {
+		return goauth.UserRecord{}, goauth.ErrUserNotFound
+	}
+
+	ctx, cancel := lookupContext()
+	defer cancel()
+
+	row, err := p.queries.GetAuthUserByLogin(ctx, identifier)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -33,12 +44,21 @@ func (p *SQLCUserProvider) GetUserByIdentifier(identifier string) (goauth.UserRe
 	return mapUserToRecord(row), nil
 }
 
+// GetUserByID looks up a user by canonical user id.
 func (p *SQLCUserProvider) GetUserByID(userID string) (goauth.UserRecord, error) {
+	if p == nil || p.queries == nil {
+		return goauth.UserRecord{}, goauth.ErrUserNotFound
+	}
+
 	var pgID pgtype.UUID
 	if err := pgID.Scan(userID); err != nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
 	}
-	row, err := p.queries.GetAuthUserByID(context.Background(), pgID)
+
+	ctx, cancel := lookupContext()
+	defer cancel()
+
+	row, err := p.queries.GetAuthUserByID(ctx, pgID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -48,24 +68,38 @@ func (p *SQLCUserProvider) GetUserByID(userID string) (goauth.UserRecord, error)
 	return mapUserToRecord(row), nil
 }
 
+// UpdatePasswordHash persists a new password hash for the given user.
 func (p *SQLCUserProvider) UpdatePasswordHash(userID string, newHash string) error {
+	if p == nil || p.queries == nil {
+		return goauth.ErrUserNotFound
+	}
+
 	var pgID pgtype.UUID
 	if err := pgID.Scan(userID); err != nil {
 		return goauth.ErrUserNotFound
 	}
-	return p.queries.UpdateAuthUserPasswordHash(context.Background(), sqlcgen.UpdateAuthUserPasswordHashParams{
-		ID: pgID,
+
+	ctx, cancel := lookupContext()
+	defer cancel()
+
+	return p.queries.UpdateAuthUserPasswordHash(ctx, sqlcgen.UpdateAuthUserPasswordHashParams{
+		ID:           pgID,
 		PasswordHash: newHash,
 	})
 }
 
+func lookupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), defaultLookupTimeout)
+}
+
+// CreateUser inserts a new auth user record.
 func (p *SQLCUserProvider) CreateUser(ctx context.Context, input goauth.CreateUserInput) (goauth.UserRecord, error) {
 	row, err := p.queries.CreateAuthUser(ctx, sqlcgen.CreateAuthUserParams{
-		Email: input.Identifier,
+		Email:        input.Identifier,
 		PasswordHash: input.PasswordHash,
-		Role: pgtype.Text{String: input.Role, Valid: input.Role != ""},
-		Permissions: 0,
-		Status: mapAccountStatusToString(input.Status),
+		Role:         pgtype.Text{String: input.Role, Valid: input.Role != ""},
+		Permissions:  0,
+		Status:       mapAccountStatusToString(input.Status),
 	})
 	if err != nil {
 		return goauth.UserRecord{}, fmt.Errorf("create user: %w", err)
@@ -73,13 +107,14 @@ func (p *SQLCUserProvider) CreateUser(ctx context.Context, input goauth.CreateUs
 	return mapUserToRecord(row), nil
 }
 
+// UpdateAccountStatus updates account status and returns latest user record.
 func (p *SQLCUserProvider) UpdateAccountStatus(ctx context.Context, userID string, status goauth.AccountStatus) (goauth.UserRecord, error) {
 	var pgID pgtype.UUID
 	if err := pgID.Scan(userID); err != nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
 	}
 	row, err := p.queries.UpdateAuthUserStatus(ctx, sqlcgen.UpdateAuthUserStatusParams{
-		ID: pgID,
+		ID:     pgID,
 		Status: mapAccountStatusToString(status),
 	})
 	if err != nil {
@@ -95,15 +130,23 @@ func (p *SQLCUserProvider) UpdateAccountStatus(ctx context.Context, userID strin
 func (p *SQLCUserProvider) GetTOTPSecret(_ context.Context, _ string) (*goauth.TOTPRecord, error) {
 	return nil, goauth.ErrUnauthorized
 }
+
+// EnableTOTP is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) EnableTOTP(_ context.Context, _ string, _ []byte) error {
 	return goauth.ErrUnauthorized
 }
+
+// DisableTOTP is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) DisableTOTP(_ context.Context, _ string) error {
 	return goauth.ErrUnauthorized
 }
+
+// MarkTOTPVerified is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) MarkTOTPVerified(_ context.Context, _ string) error {
 	return goauth.ErrUnauthorized
 }
+
+// UpdateTOTPLastUsedCounter is a stub until MFA persistence is implemented.
 func (p *SQLCUserProvider) UpdateTOTPLastUsedCounter(_ context.Context, _ string, _ int64) error {
 	return goauth.ErrUnauthorized
 }
@@ -112,9 +155,13 @@ func (p *SQLCUserProvider) UpdateTOTPLastUsedCounter(_ context.Context, _ string
 func (p *SQLCUserProvider) GetBackupCodes(_ context.Context, _ string) ([]goauth.BackupCodeRecord, error) {
 	return nil, goauth.ErrUnauthorized
 }
+
+// ReplaceBackupCodes is a stub until backup-code persistence is implemented.
 func (p *SQLCUserProvider) ReplaceBackupCodes(_ context.Context, _ string, _ []goauth.BackupCodeRecord) error {
 	return goauth.ErrUnauthorized
 }
+
+// ConsumeBackupCode is a stub until backup-code persistence is implemented.
 func (p *SQLCUserProvider) ConsumeBackupCode(_ context.Context, _ string, _ [32]byte) (bool, error) {
 	return false, goauth.ErrUnauthorized
 }
@@ -123,8 +170,8 @@ func (p *SQLCUserProvider) ConsumeBackupCode(_ context.Context, _ string, _ [32]
 
 func mapUserToRecord(row sqlcgen.User) goauth.UserRecord {
 	return goauth.UserRecord{
-		UserID:     formatUUID(row.ID),
-		Identifier: row.Email,
+		UserID:       formatUUID(row.ID),
+		Identifier:   row.Email,
 		PasswordHash: row.PasswordHash,
 		Role:         row.Role.String,
 		Status:       parseAccountStatus(row.Status),
@@ -139,7 +186,6 @@ func formatUUID(u pgtype.UUID) string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
-
 
 func mapAccountStatusToString(s goauth.AccountStatus) string {
 	switch s {

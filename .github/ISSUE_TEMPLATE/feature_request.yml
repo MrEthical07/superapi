@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose an improvement or new capability.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the problem first, then the proposed solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user/developer pain point are you trying to solve?
+      placeholder: The current behavior makes it hard to ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: What change do you want?
+      placeholder: Add a module-level policy option that ...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any alternatives or workarounds you evaluated?
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and compatibility
+      description: Note any API or behavior changes and whether this is breaking.
+      placeholder: Non-breaking / Breaking with migration plan ...

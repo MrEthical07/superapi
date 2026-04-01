@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -17,12 +18,41 @@ const (
 
 var validInputName = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
+// ModuleSpec is the normalized module naming information.
 type ModuleSpec struct {
-	RawName   string
-	Package   string
+	// RawName is the original user-provided module name.
+	RawName string
+	// Package is the normalized Go package name.
+	Package string
+	// RoutePath is the normalized URL path segment.
 	RoutePath string
 }
 
+// TemplateOptions toggles optional scaffolding features.
+type TemplateOptions struct {
+	// UseDB includes SQL scaffold files.
+	UseDB bool
+	// UseAuth includes AuthRequired policy wiring.
+	UseAuth bool
+	// UseTenant includes tenant policy wiring.
+	UseTenant bool
+	// UseRateLimit includes default rate-limit policy wiring.
+	UseRateLimit bool
+	// UseCache includes default cache-read policy wiring.
+	UseCache bool
+	// CreateMigration creates an initial migration scaffold.
+	CreateMigration bool
+}
+
+// TemplateConfig combines normalized spec and generation options.
+type TemplateConfig struct {
+	// Spec contains normalized naming fields.
+	Spec ModuleSpec
+	// Options contains feature toggles for generated files.
+	Options TemplateOptions
+}
+
+// NormalizeName validates and normalizes a module name into spec fields.
 func NormalizeName(name string) (ModuleSpec, error) {
 	input := strings.TrimSpace(name)
 	raw := strings.ToLower(input)
@@ -64,6 +94,7 @@ func splitParts(raw string) []string {
 	return out
 }
 
+// UpdateRegistry inserts module import and constructor entries in modules registry.
 func UpdateRegistry(content, moduleImportPath, packageName string) (string, bool, error) {
 	lines := strings.Split(content, "\n")
 	importLine := fmt.Sprintf("\t\"%s\"", moduleImportPath)
@@ -154,99 +185,222 @@ func sortRegion(lines []string, marker string, predicate func(string) bool) []st
 	return lines
 }
 
-func RenderFiles(spec ModuleSpec) map[string]string {
-	moduleName := spec.Package
-	route := spec.RoutePath
-	pascalName := toPascalCase(moduleName)
+// RenderFiles renders module source files keyed by relative path.
+func RenderFiles(cfg TemplateConfig) map[string]string {
+	spec := cfg.Spec
+	files := map[string]string{
+		"module.go":       renderModuleFile(cfg),
+		"routes.go":       renderRoutesFile(cfg),
+		"dto.go":          renderDTOFile(spec),
+		"handler.go":      renderHandlerFile(spec),
+		"service.go":      renderServiceFile(spec),
+		"repo.go":         renderRepoFile(spec.Package),
+		"handler_test.go": renderHandlerTestFile(spec),
+		"service_test.go": renderServiceTestFile(spec),
+	}
+	if cfg.Options.UseDB {
+		files[filepath.Join("db", "schema.sql")] = renderModuleSchema(spec)
+		files[filepath.Join("db", "queries.sql")] = renderModuleQueries(spec)
+	}
+	return files
+}
 
-	moduleFile := "package " + moduleName + "\n\n" +
-		"import \"github.com/MrEthical07/superapi/internal/core/app\"\n\n" +
-		"type Module struct {\n\thandler *Handler\n}\n\n" +
-		"func New() *Module { return &Module{} }\n\n" +
-		"var _ app.Module = (*Module)(nil)\n\n" +
-		"func (m *Module) Name() string { return \"" + moduleName + "\" }\n"
+func renderModuleFile(cfg TemplateConfig) string {
+	spec := cfg.Spec
+	imports := []string{
+		`"github.com/MrEthical07/superapi/internal/core/app"`,
+		`"github.com/MrEthical07/superapi/internal/core/modulekit"`,
+	}
+	if cfg.Options.UseDB {
+		imports = append(imports, `"github.com/jackc/pgx/v5/pgxpool"`)
+	}
 
-	routesFile := "package " + moduleName + "\n\n" +
-		"import (\n\t\"net/http\"\n\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n\t\"github.com/MrEthical07/superapi/internal/core/policy\"\n)\n\n" +
-		"func (m *Module) Register(r httpx.Router) error {\n" +
-		"\tif m.handler == nil {\n\t\tm.handler = NewHandler(NewService(NewRepo()))\n\t}\n\n" +
-		"\tr.Handle(\n\t\thttp.MethodGet,\n\t\t\"/api/v1/" + route + "/ping\",\n\t\thttp.HandlerFunc(m.handler.Ping),\n\t\tpolicy.Noop(),\n\t)\n\n" +
-		"\t// Example policy hooks:\n" +
-		"\t// r.Handle(http.MethodGet, \"/api/v1/" + route + "\", http.HandlerFunc(m.handler.List),\n" +
-		"\t// \tpolicy.AuthRequired(authProvider, authMode),\n" +
-		"\t// \tpolicy.RateLimit(limiter, rule),\n" +
-		"\t// \tpolicy.CacheRead(cacheMgr, cache.CacheReadConfig{TTL: 30 * time.Second}),\n" +
-		"\t// )\n\n" +
-		"\treturn nil\n}\n"
+	var b strings.Builder
+	b.WriteString("package " + spec.Package + "\n\n")
+	b.WriteString("import (\n")
+	for _, imp := range imports {
+		b.WriteString("\t" + imp + "\n")
+	}
+	b.WriteString(")\n\n")
+	b.WriteString("type Module struct {\n")
+	b.WriteString("\thandler *Handler\n")
+	b.WriteString("\truntime modulekit.Runtime\n")
+	if cfg.Options.UseDB {
+		b.WriteString("\tpool    *pgxpool.Pool\n")
+	}
+	b.WriteString("}\n\n")
+	b.WriteString("func New() *Module {\n")
+	b.WriteString("\treturn &Module{handler: NewHandler(NewService(NewRepo()))}\n")
+	b.WriteString("}\n\n")
+	b.WriteString("var _ app.Module = (*Module)(nil)\n")
+	b.WriteString("var _ app.DependencyBinder = (*Module)(nil)\n\n")
+	b.WriteString("func (m *Module) Name() string { return \"" + spec.Package + "\" }\n\n")
+	b.WriteString("func (m *Module) BindDependencies(deps *app.Dependencies) {\n")
+	b.WriteString("\tm.runtime = modulekit.New(deps)\n")
+	b.WriteString("\tif m.handler == nil {\n")
+	b.WriteString("\t\tm.handler = NewHandler(NewService(NewRepo()))\n")
+	b.WriteString("\t}\n")
+	if cfg.Options.UseDB {
+		b.WriteString("\tif deps != nil {\n")
+		b.WriteString("\t\tm.pool = deps.Postgres\n")
+		b.WriteString("\t}\n")
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
 
-	dtoFile := "package " + moduleName + "\n\n" +
-		"import \"github.com/MrEthical07/superapi/internal/core/errors\"\n\n" +
-		"type pingResponse struct {\n\tStatus string `json:\"status\"`\n\tModule string `json:\"module\"`\n}\n\n" +
-		"type create" + pascalName + "Request struct {\n\tName string `json:\"name\"`\n}\n\n" +
-		"func (r create" + pascalName + "Request) Validate() error {\n\tif r.Name == \"\" {\n\t\treturn errors.New(errors.CodeBadRequest, 400, \"name is required\")\n\t}\n\treturn nil\n}\n"
+func renderRoutesFile(cfg TemplateConfig) string {
+	spec := cfg.Spec
+	imports := []string{
+		`"net/http"`,
+		`"github.com/MrEthical07/superapi/internal/core/httpx"`,
+	}
+	if cfg.Options.UseAuth || cfg.Options.UseTenant || cfg.Options.UseRateLimit || cfg.Options.UseCache {
+		imports = append(imports, `"github.com/MrEthical07/superapi/internal/core/policy"`)
+	}
+	if cfg.Options.UseCache || cfg.Options.UseRateLimit {
+		imports = append(imports, `"time"`)
+	}
+	if cfg.Options.UseCache {
+		imports = append(imports, `"github.com/MrEthical07/superapi/internal/core/cache"`)
+	}
+	if cfg.Options.UseRateLimit {
+		imports = append(imports, `"github.com/MrEthical07/superapi/internal/core/ratelimit"`)
+	}
 
-	handlerFile := "package " + moduleName + "\n\n" +
-		"import (\n\t\"net/http\"\n\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n\t\"github.com/MrEthical07/superapi/internal/core/response\"\n)\n\n" +
-		"type Handler struct {\n\tsvc *Service\n}\n\n" +
-		"func NewHandler(svc *Service) *Handler {\n\treturn &Handler{svc: svc}\n}\n\n" +
-		"func (h *Handler) Ping(w http.ResponseWriter, r *http.Request) {\n" +
-		"\tresult := h.svc.Ping()\n" +
-		"\tresponse.OK(w, result, httpx.RequestIDFromContext(r.Context()))\n}\n"
+	policies := routePolicies(cfg)
 
-	serviceFile := "package " + moduleName + "\n\n" +
-		"type Service struct {\n\trepo *Repo\n}\n\n" +
-		"func NewService(repo *Repo) *Service {\n\treturn &Service{repo: repo}\n}\n\n" +
-		"func (s *Service) Ping() pingResponse {\n\treturn pingResponse{Status: \"ok\", Module: \"" + moduleName + "\"}\n}\n"
+	var b strings.Builder
+	b.WriteString("package " + spec.Package + "\n\n")
+	b.WriteString("import (\n")
+	for _, imp := range imports {
+		b.WriteString("\t" + imp + "\n")
+	}
+	b.WriteString(")\n\n")
+	b.WriteString("func (m *Module) Register(r httpx.Router) error {\n")
+	b.WriteString("\tif m.handler == nil {\n")
+	b.WriteString("\t\tm.handler = NewHandler(NewService(NewRepo()))\n")
+	b.WriteString("\t}\n\n")
+	if len(policies) == 0 {
+		b.WriteString("\tr.Handle(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", httpx.Adapter(m.handler.Ping))\n")
+	} else {
+		b.WriteString("\tr.Handle(\n")
+		b.WriteString("\t\thttp.MethodGet,\n")
+		b.WriteString("\t\t\"/api/v1/" + spec.RoutePath + "/ping\",\n")
+		b.WriteString("\t\thttpx.Adapter(m.handler.Ping),\n")
+		for _, line := range policies {
+			b.WriteString(line + "\n")
+		}
+		b.WriteString("\t)\n")
+	}
+	b.WriteString("\n\treturn nil\n}\n")
+	return b.String()
+}
 
-	repoFile := "package " + moduleName + "\n\n" +
-		"type Repo struct{}\n\n" +
-		"func NewRepo() *Repo {\n\treturn &Repo{}\n}\n"
+func routePolicies(cfg TemplateConfig) []string {
+	spec := cfg.Spec
+	opt := cfg.Options
+	policies := make([]string, 0, 4)
+	if opt.UseAuth {
+		policies = append(policies, "\t\tpolicy.AuthRequired(m.runtime.AuthEngine(), m.runtime.AuthMode()),")
+	}
+	if opt.UseTenant {
+		policies = append(policies, "\t\tpolicy.TenantRequired(),")
+	}
+	if opt.UseRateLimit {
+		policies = append(policies, "\t\tpolicy.RateLimit(m.runtime.Limiter(), ratelimit.Rule{Limit: 30, Window: time.Minute, Scope: ratelimit.ScopeAuto}),")
+	}
+	if opt.UseCache {
+		var cacheCfg strings.Builder
+		cacheCfg.WriteString("cache.CacheReadConfig{")
+		cacheCfg.WriteString("Key: \"" + spec.Package + ".ping\", ")
+		cacheCfg.WriteString("TTL: 30 * time.Second")
+		if opt.UseAuth || opt.UseTenant {
+			cacheCfg.WriteString(", AllowAuthenticated: true, VaryBy: cache.CacheVaryBy{")
+			if opt.UseTenant {
+				cacheCfg.WriteString("TenantID: true")
+			} else {
+				cacheCfg.WriteString("UserID: true")
+			}
+			cacheCfg.WriteString("}")
+		}
+		cacheCfg.WriteString("}")
+		policies = append(policies, "\t\tpolicy.CacheRead(m.runtime.CacheManager(), "+cacheCfg.String()+"),")
+	}
+	return policies
+}
 
-	handlerTestFile := "package " + moduleName + "\n\n" +
-		"import (\n\t\"encoding/json\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n)\n\n" +
+func renderDTOFile(spec ModuleSpec) string {
+	return "package " + spec.Package + "\n\n" +
+		"type pingResponse struct {\n\tStatus string `json:\"status\"`\n\tModule string `json:\"module\"`\n}\n"
+}
+
+func renderHandlerFile(spec ModuleSpec) string {
+	return "package " + spec.Package + "\n\n" +
+		"import (\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n)\n\n" +
+		"type Handler struct {\n\tsvc Service\n}\n\n" +
+		"func NewHandler(svc Service) *Handler {\n\treturn &Handler{svc: svc}\n}\n\n" +
+		"func (h *Handler) Ping(ctx *httpx.Context, req httpx.NoBody) (pingResponse, error) {\n" +
+		"\treturn h.svc.Ping(), nil\n}\n"
+}
+
+func renderServiceFile(spec ModuleSpec) string {
+	return "package " + spec.Package + "\n\n" +
+		"type Service interface {\n\tPing() pingResponse\n}\n\n" +
+		"type service struct {\n\trepo *Repo\n}\n\n" +
+		"func NewService(repo *Repo) Service {\n\treturn &service{repo: repo}\n}\n\n" +
+		"func (s *service) Ping() pingResponse {\n\treturn pingResponse{Status: \"ok\", Module: \"" + spec.Package + "\"}\n}\n"
+}
+
+func renderHandlerTestFile(spec ModuleSpec) string {
+	return "package " + spec.Package + "\n\n" +
+		"import (\n\t\"encoding/json\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n)\n\n" +
 		"func TestPingHandler(t *testing.T) {\n" +
-		"\th := NewHandler(NewService(NewRepo()))\n\trr := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/api/v1/" + route + "/ping\", nil)\n\n" +
-		"\th.Ping(rr, req)\n\n" +
+		"\th := NewHandler(NewService(NewRepo()))\n\trr := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", nil)\n\n" +
+		"\thandler := httpx.Adapter(h.Ping)\n\thandler.ServeHTTP(rr, req)\n\n" +
 		"\tif rr.Code != http.StatusOK {\n\t\tt.Fatalf(\"status=%d want=%d\", rr.Code, http.StatusOK)\n\t}\n\n" +
 		"\tvar body struct {\n\t\tOK   bool `json:\"ok\"`\n\t\tData pingResponse `json:\"data\"`\n\t}\n" +
 		"\tif err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {\n\t\tt.Fatalf(\"unmarshal response: %v\", err)\n\t}\n" +
-		"\tif !body.OK || body.Data.Module != \"" + moduleName + "\" || body.Data.Status != \"ok\" {\n" +
+		"\tif !body.OK || body.Data.Module != \"" + spec.Package + "\" || body.Data.Status != \"ok\" {\n" +
 		"\t\tt.Fatalf(\"unexpected response: %+v\", body)\n\t}\n}\n"
+}
 
-	serviceTestFile := "package " + moduleName + "\n\n" +
+func renderServiceTestFile(spec ModuleSpec) string {
+	return "package " + spec.Package + "\n\n" +
 		"import \"testing\"\n\n" +
 		"func TestServicePing(t *testing.T) {\n" +
 		"\ts := NewService(NewRepo())\n\tres := s.Ping()\n\tif res.Status != \"ok\" {\n\t\tt.Fatalf(\"status=%q want=%q\", res.Status, \"ok\")\n\t}\n\n" +
-		"\tif res.Module != \"" + moduleName + "\" {\n\t\tt.Fatalf(\"module=%q want=%q\", res.Module, \"" + moduleName + "\")\n\t}\n}\n"
-
-	return map[string]string{
-		"module.go":       moduleFile,
-		"routes.go":       routesFile,
-		"dto.go":          dtoFile,
-		"handler.go":      handlerFile,
-		"service.go":      serviceFile,
-		"repo.go":         repoFile,
-		"handler_test.go": handlerTestFile,
-		"service_test.go": serviceTestFile,
-	}
+		"\tif res.Module != \"" + spec.Package + "\" {\n\t\tt.Fatalf(\"module=%q want=%q\", res.Module, \"" + spec.Package + "\")\n\t}\n}\n"
 }
 
-func toPascalCase(pkg string) string {
-	parts := strings.Split(pkg, "_")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		out = append(out, strings.ToUpper(part[:1])+part[1:])
-	}
-	if len(out) == 0 {
-		return "Module"
-	}
-	return strings.Join(out, "")
+func renderModuleSchema(spec ModuleSpec) string {
+	return "-- Module-local sqlc schema source for " + spec.Package + ".\n" +
+		"-- Keep module SQL here. `make sqlc-generate` syncs this file into db/schema/" + spec.Package + ".sql.\n" +
+		"-- Example:\n" +
+		"-- CREATE TABLE IF NOT EXISTS " + spec.RoutePath + " (\n" +
+		"--     id TEXT PRIMARY KEY,\n" +
+		"--     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n" +
+		"-- );\n"
 }
 
-func GenerateModule(workspaceRoot string, spec ModuleSpec, force bool) error {
+func renderModuleQueries(spec ModuleSpec) string {
+	return "-- Module-local sqlc queries for " + spec.Package + ".\n" +
+		"-- Keep module queries here. `make sqlc-generate` syncs this file into db/queries/" + spec.Package + ".sql.\n" +
+		"-- Example:\n" +
+		"-- name: List" + toPascalCase(spec.Package) + " :many\n" +
+		"-- SELECT id, created_at\n" +
+		"-- FROM " + spec.RoutePath + ";\n"
+}
+
+func renderRepoFile(pkg string) string {
+	return "package " + pkg + "\n\n" +
+		"type Repo struct{}\n\n" +
+		"func NewRepo() *Repo {\n\treturn &Repo{}\n}\n"
+}
+
+// GenerateModule materializes a module scaffold and updates registry wiring.
+func GenerateModule(workspaceRoot string, cfg TemplateConfig, force bool) error {
+	spec := cfg.Spec
 	moduleDir := filepath.Join(workspaceRoot, "internal", "modules", spec.Package)
 	if _, err := os.Stat(moduleDir); err == nil {
 		if !force {
@@ -263,8 +417,12 @@ func GenerateModule(workspaceRoot string, spec ModuleSpec, force bool) error {
 		return fmt.Errorf("create module directory: %w", err)
 	}
 
-	for name, content := range RenderFiles(spec) {
+	files := RenderFiles(cfg)
+	for name, content := range files {
 		path := filepath.Join(moduleDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("create directory for %s: %w", path, err)
+		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
@@ -294,7 +452,115 @@ func GenerateModule(workspaceRoot string, spec ModuleSpec, force bool) error {
 		return fmt.Errorf("write module registry: %w", err)
 	}
 
+	if cfg.Options.CreateMigration {
+		if err := generateMigrationScaffold(workspaceRoot, spec, force); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func generateMigrationScaffold(workspaceRoot string, spec ModuleSpec, force bool) error {
+	migrationsDir := filepath.Join(workspaceRoot, "db", "migrations")
+	if err := os.MkdirAll(migrationsDir, 0o755); err != nil {
+		return fmt.Errorf("create migrations directory: %w", err)
+	}
+
+	existingNum := findExistingModuleMigration(migrationsDir, spec.RoutePath)
+	migrationNum := existingNum
+	if migrationNum == 0 {
+		var err error
+		migrationNum, err = nextMigrationNumber(migrationsDir)
+		if err != nil {
+			return err
+		}
+	}
+
+	prefix := fmt.Sprintf("%06d_%s", migrationNum, spec.RoutePath)
+	upPath := filepath.Join(migrationsDir, prefix+".up.sql")
+	downPath := filepath.Join(migrationsDir, prefix+".down.sql")
+
+	if !force {
+		if _, err := os.Stat(upPath); err == nil {
+			return fmt.Errorf("migration scaffold already exists: %s (re-run with force=1 to overwrite)", upPath)
+		}
+	}
+
+	upContent := "-- Migration scaffold for module " + spec.Package + ".\n" +
+		"-- Module-local sqlc files live under internal/modules/" + spec.Package + "/db/.\n" +
+		"-- Add your CREATE TABLE / ALTER TABLE statements here.\n"
+	downContent := "-- Rollback scaffold for module " + spec.Package + ".\n" +
+		"-- Add the matching DROP / rollback statements here.\n"
+
+	if err := os.WriteFile(upPath, []byte(upContent), 0o644); err != nil {
+		return fmt.Errorf("write migration scaffold: %w", err)
+	}
+	if err := os.WriteFile(downPath, []byte(downContent), 0o644); err != nil {
+		return fmt.Errorf("write migration rollback scaffold: %w", err)
+	}
+	return nil
+}
+
+func findExistingModuleMigration(migrationsDir, routePath string) int {
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		return 0
+	}
+	suffix := "_" + routePath + ".up.sql"
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		parts := strings.SplitN(name, "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		n, err := strconv.Atoi(parts[0])
+		if err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+func nextMigrationNumber(migrationsDir string) (int, error) {
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		return 0, fmt.Errorf("read migrations directory: %w", err)
+	}
+
+	maxNum := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if len(name) < 6 {
+			continue
+		}
+		n, err := strconv.Atoi(name[:6])
+		if err != nil {
+			continue
+		}
+		if n > maxNum {
+			maxNum = n
+		}
+	}
+	return maxNum + 1, nil
+}
+
+func toPascalCase(pkg string) string {
+	parts := strings.Split(pkg, "_")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		out = append(out, strings.ToUpper(part[:1])+part[1:])
+	}
+	if len(out) == 0 {
+		return "Module"
+	}
+	return strings.Join(out, "")
 }
 
 func parseModulePath(goMod string) (string, error) {

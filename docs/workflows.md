@@ -2,6 +2,8 @@
 
 ---
 
+For the full runtime environment variable matrix (defaults, behavior, and constraints), see [docs/environment-variables.md](environment-variables.md).
+
 ## 1. Running the server
 
 ### Minimal (no external dependencies)
@@ -10,7 +12,22 @@
 go run ./cmd/api
 ```
 
-Server starts on `:8080`. Postgres and Redis features are disabled. Health, system, and tenant endpoints (non-DB ones) are available.
+Server starts on `:8080`. Postgres and Redis features are disabled. Built-in health and system endpoints are available.
+
+### Using config profiles
+
+```bash
+# Minimal local mode (no Redis/Postgres wiring)
+APP_PROFILE=minimal go run ./cmd/api
+
+# Dev profile (auth/cache/ratelimit/postgres/redis enabled defaults)
+APP_PROFILE=dev go run ./cmd/api
+
+# Prod-like profile (strict auth + fail-closed cache/ratelimit defaults)
+APP_PROFILE=prod go run ./cmd/api
+```
+
+Explicit env vars still override profile defaults.
 
 ### With all features
 
@@ -69,6 +86,23 @@ It also updates `internal/modules/modules.go`:
 make module name=projects force=1
 ```
 
+### Advanced scaffolding flags
+
+```bash
+# Add module-local db/schema.sql + db/queries.sql stubs
+make module name=projects db=1
+
+# Add policy-ready route wiring examples
+make module name=projects auth=1 tenant=1 ratelimit=1 cache=1
+
+# Also create a global migration scaffold (requires db=1)
+make module name=projects db=1 migration=1
+```
+
+Generator constraints:
+- `tenant=1` requires `auth=1`
+- `migration=1` requires `db=1`
+
 ### Name normalization rules
 
 | Input | Package name | Route path |
@@ -86,8 +120,21 @@ Requirements:
 
 1. Verify: `go build ./...`
 2. Run tests: `go test ./...`
-3. Start server and test the ping endpoint: `curl http://localhost:8080/api/v1/projects/ping`
-4. Begin adding real routes, handlers, services, and repos
+3. Run static policy checks: `make verify`
+4. Start server and test the ping endpoint: `curl http://localhost:8080/api/v1/projects/ping`
+5. Begin adding real routes, handlers, services, and repos
+
+### Bootstrapping auth schema/provider (optional)
+
+```bash
+# Interactive auth bootstrap wizard
+make auth
+
+# Config-driven auth bootstrap
+make auth-config file=authgen.example.yaml
+```
+
+This generates/updates auth bootstrap outputs, including `docs/auth-bootstrap.md`.
 
 ---
 
@@ -223,7 +270,7 @@ AUTH_ENABLED=true AUTH_MODE=hybrid   # Enable with hybrid mode
 AUTH_ENABLED=false                    # Disable (default)
 ```
 
-Requires: `REDIS_ENABLED=true`
+Requires: `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`
 
 ### Rate limiting
 
@@ -302,19 +349,31 @@ make test
 ### Run a specific package
 
 ```bash
-go test ./internal/modules/tenants/...
+go test ./internal/modules/system/...
 ```
 
 ### Run a specific test
 
 ```bash
-go test ./internal/modules/tenants/ -run TestCreateTenant
+go test ./internal/modules/system/ -run TestWhoamiRequiresAuth
 ```
 
 ### Build check (no tests)
 
 ```bash
 go build ./...
+```
+
+### Policy static verification
+
+```bash
+go run ./cmd/superapi-verify ./...
+
+# JSON output for CI tooling
+go run ./cmd/superapi-verify -format json ./...
+
+# Using make
+make verify
 ```
 
 ### Format and vet
@@ -330,7 +389,36 @@ make vet
 make fmt
 make vet
 make test
+make verify
 go build ./...
+```
+
+### Load testing for 10K RPS readiness
+
+Generate an auth token for `GET /api/v1/system/whoami` traffic:
+
+```bash
+go run ./cmd/perftoken --output json
+```
+
+Run k6 (10m ramp + 30m sustain by default):
+
+```bash
+make load-k6-10k PERF_AUTH_TOKEN="<token>"
+```
+
+Run Vegeta (same profile):
+
+```bash
+make load-vegeta-10k PERF_AUTH_TOKEN="<token>"
+```
+
+For complete setup, pass/fail criteria, and tuning guidance, see [docs/performance-testing.md](performance-testing.md).
+
+### Hot-path benchmarks
+
+```bash
+make bench-hotpath
 ```
 
 ---
@@ -339,7 +427,7 @@ go build ./...
 
 ### "auth enabled requires redis enabled"
 
-Config lint enforces that `AUTH_ENABLED=true` requires `REDIS_ENABLED=true`. Same for rate limiting and caching. Enable Redis first.
+Config lint enforces that `AUTH_ENABLED=true` requires both `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`. Rate limiting and caching still require Redis only.
 
 ### "postgres url cannot be empty when enabled"
 

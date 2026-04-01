@@ -1,9 +1,10 @@
 package auth
 
 import (
-	"context"
-	"errors"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	goauth "github.com/MrEthical07/goAuth"
 	"github.com/redis/go-redis/v9"
@@ -13,52 +14,17 @@ type providerCloser interface {
 	Close()
 }
 
-type goAuthValidator interface {
-	Validate(ctx context.Context, tokenStr string, routeMode goauth.RouteMode) (*goauth.AuthResult, error)
-}
-
-type GoAuthProvider struct {
-	validator goAuthValidator
-}
-
-func NewGoAuthProvider(validator goAuthValidator) Provider {
-	if validator == nil {
-		return NewDisabledProvider()
-	}
-	return &GoAuthProvider{validator: validator}
-}
-
-func (p *GoAuthProvider) Authenticate(ctx context.Context, token string, mode Mode) (AuthContext, error) {
-	if p == nil || p.validator == nil {
-		return AuthContext{}, ErrUnauthenticated
-	}
-
-	result, err := p.validator.Validate(ctx, token, toGoAuthRouteMode(mode))
-	if err != nil {
-		if errors.Is(err, goauth.ErrUnauthorized) || errors.Is(err, goauth.ErrTokenInvalid) || errors.Is(err, goauth.ErrTokenClockSkew) {
-			return AuthContext{}, ErrUnauthenticated
-		}
-		return AuthContext{}, ErrUnauthenticated
-	}
-	if result == nil {
-		return AuthContext{}, ErrUnauthenticated
-	}
-
-	principal := AuthContext{
-		UserID:      result.UserID,
-		TenantID:    result.TenantID,
-		Role:        result.Role,
-		Permissions: append([]string(nil), result.Permissions...),
-	}
-
-	if principal.UserID == "" {
-		return AuthContext{}, ErrUnauthenticated
-	}
-
-	return principal, nil
-}
-
-func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (Provider, func(), error) {
+// NewGoAuthEngine builds a goAuth engine backed by Redis and SQLC user provider.
+//
+// Usage:
+//
+//	engine, shutdown, err := auth.NewGoAuthEngine(redisClient, mode, userProvider)
+//
+// Notes:
+// - redisClient must be non-nil
+// - shutdown should be called during application shutdown
+// - AUTH_TEST_* variables are honored for deterministic local perf scenarios
+func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (*goauth.Engine, func(), error) {
 	if redisClient == nil {
 		return nil, nil, fmt.Errorf("goAuth provider requires redis client")
 	}
@@ -67,7 +33,29 @@ func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userP
 	cfg.ValidationMode = toGoAuthValidationMode(mode)
 	cfg.Result.IncludeRole = true
 	cfg.Result.IncludePermissions = true
-	cfg.Account.Enabled = false
+	cfg.Account.Enabled = true
+	cfg.Account.DefaultRole = "user"
+
+	// Optional deterministic signer for local perf tests across multiple processes.
+	if sharedSecret := strings.TrimSpace(os.Getenv("AUTH_TEST_SHARED_SECRET")); sharedSecret != "" {
+		cfg.JWT.SigningMethod = "hs256"
+		cfg.JWT.PrivateKey = []byte(sharedSecret)
+		cfg.JWT.PublicKey = []byte(sharedSecret)
+		cfg.JWT.Issuer = "superapi-perf"
+		cfg.JWT.Audience = "superapi-perf"
+		cfg.JWT.KeyID = "superapi-perf-key"
+	}
+
+	if accessTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_ACCESS_TTL")); accessTTLRaw != "" {
+		if d, err := time.ParseDuration(accessTTLRaw); err == nil && d > 0 {
+			cfg.JWT.AccessTTL = d
+		}
+	}
+	if refreshTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_REFRESH_TTL")); refreshTTLRaw != "" {
+		if d, err := time.ParseDuration(refreshTTLRaw); err == nil && d > 0 {
+			cfg.JWT.RefreshTTL = d
+		}
+	}
 
 	engine, err := goauth.New().
 		WithConfig(cfg).
@@ -83,27 +71,13 @@ func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userP
 		return nil, nil, fmt.Errorf("build goAuth engine: %w", err)
 	}
 
-	provider := NewGoAuthProvider(engine)
 	shutdown := func() {
 		if closer, ok := any(engine).(providerCloser); ok {
 			closer.Close()
 		}
 	}
 
-	return provider, shutdown, nil
-}
-
-func toGoAuthRouteMode(mode Mode) goauth.RouteMode {
-	switch mode {
-	case ModeJWTOnly:
-		return goauth.ModeJWTOnly
-	case ModeStrict:
-		return goauth.ModeStrict
-	case ModeHybrid:
-		return goauth.ModeHybrid
-	default:
-		return goauth.ModeInherit
-	}
+	return engine, shutdown, nil
 }
 
 func toGoAuthValidationMode(mode Mode) goauth.ValidationMode {
@@ -117,58 +91,4 @@ func toGoAuthValidationMode(mode Mode) goauth.ValidationMode {
 	default:
 		return goauth.ModeHybrid
 	}
-}
-
-type noopUserProvider struct{}
-
-func (noopUserProvider) GetUserByIdentifier(string) (goauth.UserRecord, error) {
-	return goauth.UserRecord{}, goauth.ErrUserNotFound
-}
-
-func (noopUserProvider) GetUserByID(string) (goauth.UserRecord, error) {
-	return goauth.UserRecord{}, goauth.ErrUserNotFound
-}
-
-func (noopUserProvider) UpdatePasswordHash(string, string) error {
-	return goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) CreateUser(context.Context, goauth.CreateUserInput) (goauth.UserRecord, error) {
-	return goauth.UserRecord{}, goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) UpdateAccountStatus(context.Context, string, goauth.AccountStatus) (goauth.UserRecord, error) {
-	return goauth.UserRecord{}, goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) GetTOTPSecret(context.Context, string) (*goauth.TOTPRecord, error) {
-	return nil, goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) EnableTOTP(context.Context, string, []byte) error {
-	return goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) DisableTOTP(context.Context, string) error {
-	return goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) MarkTOTPVerified(context.Context, string) error {
-	return goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) UpdateTOTPLastUsedCounter(context.Context, string, int64) error {
-	return goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) GetBackupCodes(context.Context, string) ([]goauth.BackupCodeRecord, error) {
-	return nil, goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) ReplaceBackupCodes(context.Context, string, []goauth.BackupCodeRecord) error {
-	return goauth.ErrUnauthorized
-}
-
-func (noopUserProvider) ConsumeBackupCode(context.Context, string, [32]byte) (bool, error) {
-	return false, goauth.ErrUnauthorized
 }

@@ -1,7 +1,6 @@
 package httpx
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -24,7 +23,7 @@ func (r echoRequest) Validate() error {
 }
 
 func TestJSON_Success(t *testing.T) {
-	h := JSON(func(ctx context.Context, req echoRequest) (map[string]string, error) {
+	h := Adapter(func(ctx *Context, req echoRequest) (map[string]string, error) {
 		return map[string]string{"name": req.Name}, nil
 	})
 
@@ -46,7 +45,7 @@ func TestJSON_Success(t *testing.T) {
 }
 
 func TestJSON_MalformedJSON(t *testing.T) {
-	h := JSON(func(ctx context.Context, req echoRequest) (map[string]string, error) {
+	h := Adapter(func(ctx *Context, req echoRequest) (map[string]string, error) {
 		return map[string]string{"name": req.Name}, nil
 	})
 
@@ -63,7 +62,7 @@ func TestJSON_MalformedJSON(t *testing.T) {
 }
 
 func TestJSON_ValidationFailure(t *testing.T) {
-	h := JSON(func(ctx context.Context, req echoRequest) (map[string]string, error) {
+	h := Adapter(func(ctx *Context, req echoRequest) (map[string]string, error) {
 		return map[string]string{"name": req.Name}, nil
 	})
 
@@ -80,7 +79,7 @@ func TestJSON_ValidationFailure(t *testing.T) {
 }
 
 func TestJSON_AppErrorPassthrough(t *testing.T) {
-	h := JSON(func(ctx context.Context, req echoRequest) (map[string]string, error) {
+	h := Adapter(func(ctx *Context, req echoRequest) (map[string]string, error) {
 		return nil, apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, "business rule violated")
 	})
 
@@ -97,7 +96,7 @@ func TestJSON_AppErrorPassthrough(t *testing.T) {
 }
 
 func TestJSON_InternalErrorSanitized(t *testing.T) {
-	h := JSON(func(ctx context.Context, req echoRequest) (map[string]string, error) {
+	h := Adapter(func(ctx *Context, req echoRequest) (map[string]string, error) {
 		return nil, errors.New("database connection refused")
 	})
 
@@ -113,5 +112,59 @@ func TestJSON_InternalErrorSanitized(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"code":"internal_error"`) {
 		t.Fatalf("response missing internal_error code: %s", rr.Body.String())
+	}
+}
+
+func TestJSONWithRequest_ExposesRequest(t *testing.T) {
+	h := Adapter(func(ctx *Context, req echoRequest) (map[string]string, error) {
+		return map[string]string{
+			"id":   ctx.Param("id"),
+			"name": req.Name,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/projects/abc", strings.NewReader(`{"name":"alice"}`))
+	req.SetPathValue("id", "abc")
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !strings.Contains(rr.Body.String(), `"id":"abc"`) {
+		t.Fatalf("expected path value in response: %s", rr.Body.String())
+	}
+}
+
+func TestAdapter_NoBodyRequest(t *testing.T) {
+	h := Adapter(func(ctx *Context, req NoBody) (map[string]string, error) {
+		return map[string]string{"status": "ok"}, nil
+	})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestDecodeAndValidateJSON_AppErrorPassthrough(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":""}`))
+	rr := httptest.NewRecorder()
+
+	var dst echoRequest
+	err := DecodeAndValidateJSON(rr, req, &dst)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	appErr, ok := apperr.AsAppError(err)
+	if !ok {
+		t.Fatalf("expected app error, got %T", err)
+	}
+	if appErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d", appErr.StatusCode, http.StatusBadRequest)
 	}
 }

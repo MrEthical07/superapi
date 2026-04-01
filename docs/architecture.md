@@ -9,15 +9,17 @@ This document explains how SuperAPI works internally: request lifecycle, middlew
 ```
 cmd/
   api/main.go              # Real server entry point
+  authgen/main.go          # Auth bootstrap generator CLI
   migrate/main.go          # Migration CLI
   modulegen/main.go        # Module scaffolder CLI
+  modulesync/main.go       # Sync module-local SQL into db/schema + db/queries
 internal/
   core/
     app/                   # App container, lifecycle, dependency init
       app.go               # App struct, New(), Run(), module registration
       deps.go              # Dependencies struct, initDependencies(), closeDependencies()
     config/config.go       # Env-based config + Lint() validation
-    httpx/                 # Router, global middleware, typed JSON, tracing middleware
+    httpx/                 # Router, global middleware, unified handler adapter/context, tracing middleware
     response/response.go   # Response envelope + error mapping
     errors/errors.go       # Typed AppError model
     auth/                  # goAuth adapter, AuthContext, Provider interface
@@ -28,6 +30,8 @@ internal/
     tenant/tenant.go       # Tenant scope helpers
     logx/logx.go           # zerolog wrapper
     metrics/metrics.go     # Prometheus metrics service
+    netx/                  # Client IP context helpers
+    requestid/             # Request ID context helpers
     tracing/service.go     # OpenTelemetry tracing service
     readiness/service.go   # Dependency health check aggregator
     params/params.go       # URL param extraction (chi wrapper)
@@ -35,7 +39,6 @@ internal/
     modules.go             # Centralized module registry
     health/                # Liveness + readiness module
     system/                # System utilities (whoami, parse-duration)
-    tenants/               # Tenant CRUD reference module
   devx/modulegen/          # Module generator logic
 db/
   migrations/              # Versioned SQL migration files
@@ -75,7 +78,7 @@ Entry point: `cmd/api/main.go`
 2. **Postgres pool** — if `POSTGRES_ENABLED=true`; startup ping with timeout; registered in readiness
 3. **Redis client** — if `REDIS_ENABLED=true`; startup ping with timeout; registered in readiness
 4. **Metrics service** — if `METRICS_ENABLED=true`; registers Prometheus collectors (including pgxpool if Postgres enabled)
-5. **Auth provider** — parse auth mode; if `AUTH_ENABLED=true`, build goAuth engine provider (requires Redis)
+5. **Auth provider** — parse auth mode; if `AUTH_ENABLED=true`, build goAuth engine provider (requires Redis + Postgres)
 6. **Rate limiter** — if `RATELIMIT_ENABLED=true`, create Redis-backed limiter (requires Redis)
 7. **Cache manager** — if `CACHE_ENABLED=true`, create Redis-backed cache manager (requires Redis)
 8. **Tracing service** — if `TRACING_ENABLED=true`, init OTLP gRPC exporter + tracer provider
@@ -98,13 +101,15 @@ Middleware is applied in `AssembleGlobalMiddleware()` (file: `internal/core/http
 
 **Execution order (outermost → innermost):**
 
-1. **RequestID** — Reads `X-Request-Id` header or generates a 32-hex-char random ID; injects into context and response header
-2. **Recoverer** — Catches panics, logs with structured context (request_id, method, path, panic value), returns sanitized 500
-3. **SecurityHeaders** — Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (if enabled)
-4. **MaxBodyBytes** — Limits request body size for POST/PUT/PATCH requests (if configured > 0)
-5. **RequestTimeout** — Sets `context.WithTimeout` on the request context (if configured > 0); returns 504 if deadline exceeded before response
-6. **Tracing** — Extracts W3C traceparent, creates server span, records attributes and status on defer (if enabled)
-7. **AccessLog** — Logs request method, route pattern, status, duration, bytes; sampled by deterministic request-id hash
+1. **RequestID** — Accepts `X-Request-Id` only when <= 64 chars and `[A-Za-z0-9._-]`, otherwise generates a 32-hex-char ID; injects into context and response header
+2. **ClientIP** — Resolves client IP from trusted proxy headers when `HTTP_TRUSTED_PROXIES` is set; otherwise uses `RemoteAddr`
+3. **Recoverer** — Catches panics, logs with structured context (request_id, method, path, panic value), returns sanitized 500
+4. **CORS** — Applies CORS headers and preflight handling (if enabled)
+5. **SecurityHeaders** — Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (if enabled)
+6. **MaxBodyBytes** — Limits request body size for write methods and any request that carries a body (if configured > 0)
+7. **RequestTimeout** — Sets `context.WithTimeout` on the request context (if configured > 0); returns 504 if deadline exceeded before response
+8. **Tracing** — Extracts W3C traceparent, creates server span, records attributes and status on defer (if enabled)
+9. **AccessLog** — Logs request method, route pattern, status, duration, bytes; sampled by deterministic request-id hash
 
 Then: **Metrics instrumentation** wraps the entire stack (measures in-flight, total requests, duration by method/route/status).
 
@@ -114,9 +119,12 @@ Then: **Router** (chi) matches the route pattern and invokes the handler.
 
 When a route is registered with policies:
 
+- `httpx.Mux.Handle(...)` validates policy invariants via `policy.MustValidateRoute(...)` before registration.
+- Invalid policy stacks panic immediately with `invalid route config: ...` during startup.
+
 ```go
 r.Handle(http.MethodGet, "/api/v1/resource/{id}", handler,
-    policy.AuthRequired(provider, mode),      // P1 (outermost)
+    policy.AuthRequired(authEngine, mode),      // P1 (outermost)
     policy.TenantRequired(),                   // P2
     policy.RateLimit(limiter, rule),           // P3
     policy.CacheRead(cacheMgr, cfg),           // P4 (innermost before handler)
@@ -138,7 +146,9 @@ Implementation: `policy.Chain()` in `internal/core/policy/policy.go` iterates po
 Client request
   │
   ├─ RequestID middleware (assign/propagate X-Request-Id)
+  ├─ ClientIP (resolve client IP, trusted proxies optional)
   ├─ Recoverer (catch panics → 500)
+  ├─ CORS (preflight + CORS headers)
   ├─ SecurityHeaders (optional response headers)
   ├─ MaxBodyBytes (limit body size for write methods)
   ├─ RequestTimeout (context deadline → 504 on timeout)
@@ -209,9 +219,12 @@ All responses use a consistent JSON envelope:
 {
   "ok": true,
   "data": { ... },
+  "meta": { ... },
   "request_id": "abc123..."
 }
 ```
+
+`meta` is optional and can be used for envelope-level metadata (for example pagination cursors).
 
 ```json
 {
@@ -307,7 +320,7 @@ Prometheus metrics registered (namespace: `superapi`):
 | `dependency_ready` | Gauge | dependency, status | Per-dependency readiness |
 | `db_pool_*` | Gauge | — | Postgres pool stats (if enabled) |
 
-Route labels use **low-cardinality route patterns** (e.g., `/api/v1/tenants/{id}`), not raw paths. This prevents metric cardinality explosion.
+Route labels use **low-cardinality route patterns** (e.g., `/api/v1/projects/{id}`), not raw paths. This prevents metric cardinality explosion.
 
 ### 5.5 Tracing
 
@@ -332,6 +345,7 @@ File: `internal/core/httpx/accesslog.go`
 - **Route labels:** Uses captured route patterns, not raw URL paths
 - **Log level:** Info for normal, Warn for 4xx or slow, Error for 5xx
 - **Security:** Request bodies, Authorization headers, Cookie headers, and query strings are NOT logged
+- **Client IP:** Remote IP logging uses the resolved client IP (trusted proxy headers only when `HTTP_TRUSTED_PROXIES` is set)
 
 ---
 
@@ -375,7 +389,7 @@ Modules receive dependencies through `BindDependencies(*app.Dependencies)`. The 
 | `Readiness` | `*readiness.Service` | Always available |
 | `Metrics` | `*metrics.Service` | Always available (may be disabled internally) |
 | `Tracing` | `*tracing.Service` | Always available (may be disabled internally) |
-| `Auth` | `auth.Provider` | DisabledProvider if auth disabled |
+| `AuthEngine` | `*goauth.Engine` | Nil if auth disabled |
 | `AuthMode` | `auth.Mode` | Configured auth mode |
 | `RateLimit` | `config.RateLimitConfig` | Rate limit configuration values |
 | `Cache` | `config.CacheConfig` | Cache configuration values |
@@ -469,30 +483,36 @@ func (s *service) Create(ctx context.Context, req Request) (Result, error) {
 
 ---
 
-## 8. Typed JSON handler adapter
+## 8. Unified handler adapter
 
-File: `internal/core/httpx/typedjson.go`
+Files: `internal/core/httpx/adapter.go`, `internal/core/httpx/context.go`, `internal/core/httpx/typedjson.go`
 
-The `httpx.JSON[Req, Resp]()` adapter converts a typed function into an `http.Handler`:
+`httpx.Adapter[Req, Resp]()` converts a unified typed handler into an `http.Handler`:
 
 ```go
-func JSON[Req any, Resp any](fn JSONHandlerFunc[Req, Resp]) http.Handler
+func Adapter[Req any, Resp any](fn HandlerFunc[Req, Resp]) http.Handler
 ```
 
-Where `JSONHandlerFunc` is:
+Where `HandlerFunc` is:
 
 ```go
-type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp, error)
+type HandlerFunc[Req any, Resp any] func(ctx *httpx.Context, req Req) (Resp, error)
+```
+
+For routes without a request body, use `httpx.NoBody`:
+
+```go
+func (h *Handler) GetByID(ctx *httpx.Context, _ httpx.NoBody) (responseDTO, error)
 ```
 
 **What it does automatically:**
 
-1. Limits body to 1 MiB
-2. Decodes JSON with `DisallowUnknownFields()` (strict)
-3. Rejects multiple JSON values in body
-4. Calls `Validate()` if request implements `Validatable` interface
-5. On success: writes `response.OK(w, resp, requestID)`
-6. On error: maps through `response.Error()` (AppError passthrough, internal sanitized)
+1. Decodes JSON strictly (unknown fields rejected) for non-`NoBody` requests
+2. Rejects multiple JSON values in body
+3. Calls `Validate()` if request implements `Validatable`
+4. Maps errors through `response.Error()` (AppError passthrough, internal sanitized)
+5. Writes envelope responses through `response.OK()`
+6. Supports status-aware responses via `httpx.Result[T]`
 
 **Decode error mapping:**
 
@@ -526,12 +546,12 @@ type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp
 - Request bodies and auth headers are never logged
 - Cache keys never contain raw tokens, IPs, or full query strings
 - `Set-Cookie` responses are never cached
-- Authenticated responses are bypassed from cache unless explicitly configured with vary-by dimensions
+- Unsafe authenticated cache configs are rejected at route registration (`CacheRead` on authenticated routes must vary by user or tenant)
 - Tenant mismatch returns 404 (not 403) to prevent tenant enumeration
 
 ### Cardinality safety
 
-- Route labels in metrics and logs use chi route patterns (e.g., `/api/v1/tenants/{id}`), not raw paths
+- Route labels in metrics and logs use chi route patterns (e.g., `/api/v1/projects/{id}`), not raw paths
 - Rate limit keys use low-cardinality scopes (`ip`, `user`, `tenant`, `token`, `anon`)
 - Cache keys use route pattern + selected vary dimensions + query param hash — not raw URLs
 - Access logs are sampled by default (5%) with always-log exceptions for errors and slow requests

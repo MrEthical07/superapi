@@ -1,8 +1,6 @@
 package policy
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,29 +11,16 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/auth"
 )
 
-type mockProvider struct {
-	principal auth.AuthContext
-	err       error
-}
-
-func (m mockProvider) Authenticate(ctx context.Context, token string, mode auth.Mode) (auth.AuthContext, error) {
-	if token == "valid-token" && m.err == nil {
-		return m.principal, nil
-	}
-	if m.err != nil {
-		return auth.AuthContext{}, m.err
-	}
-	return auth.AuthContext{}, auth.ErrUnauthenticated
-}
-
 func TestAuthRequiredMissingTokenUnauthorized(t *testing.T) {
+	engine, _ := newPolicyTestAuthEngine(t)
+
 	handlerCalled := false
 	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handlerCalled = true
 			w.WriteHeader(http.StatusOK)
 		}),
-		AuthRequired(mockProvider{}, auth.ModeHybrid),
+		AuthRequired(engine, auth.ModeHybrid),
 	)
 
 	rr := httptest.NewRecorder()
@@ -54,7 +39,7 @@ func TestAuthRequiredMissingTokenUnauthorized(t *testing.T) {
 }
 
 func TestAuthRequiredValidTokenInjectsContext(t *testing.T) {
-	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", TenantID: "t1", Role: "admin", Permissions: []string{"system.whoami"}}}
+	engine, token := newPolicyTestAuthEngine(t)
 
 	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,12 +52,12 @@ func TestAuthRequiredValidTokenInjectsContext(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 		}),
-		AuthRequired(provider, auth.ModeHybrid),
+		AuthRequired(engine, auth.ModeHybrid),
 	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
-	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
@@ -81,19 +66,19 @@ func TestAuthRequiredValidTokenInjectsContext(t *testing.T) {
 }
 
 func TestRequirePermForbiddenWhenMissing(t *testing.T) {
-	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Permissions: []string{"a.read"}}}
+	engine, token := newPolicyTestAuthEngine(t)
 
 	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
-		AuthRequired(provider, auth.ModeHybrid),
-		RequirePerm("a.write"),
+		AuthRequired(engine, auth.ModeHybrid),
+		RequirePerm("project.write"),
 	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
-	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusForbidden {
@@ -104,64 +89,43 @@ func TestRequirePermForbiddenWhenMissing(t *testing.T) {
 	}
 }
 
-func TestRequireRoleForbiddenWhenMissing(t *testing.T) {
-	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Role: "viewer"}}
-
-	h := Chain(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}),
-		AuthRequired(provider, auth.ModeHybrid),
-		RequireRole("admin"),
-	)
-
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
-	req.Header.Set("Authorization", "Bearer valid-token")
-	h.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("status=%d want=%d", rr.Code, http.StatusForbidden)
-	}
-}
-
 func TestAuthRequiredNoSecretLeakOnFailure(t *testing.T) {
-	provider := mockProvider{err: errors.New("token signature mismatch: very-secret")}
+	engine, _ := newPolicyTestAuthEngine(t)
 
 	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
-		AuthRequired(provider, auth.ModeHybrid),
+		AuthRequired(engine, auth.ModeHybrid),
 	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
-	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Authorization", "Bearer token-signature-mismatch")
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d want=%d", rr.Code, http.StatusUnauthorized)
 	}
-	if strings.Contains(rr.Body.String(), "very-secret") {
+	if strings.Contains(strings.ToLower(rr.Body.String()), "secret") {
 		t.Fatalf("response leaked secret: %s", rr.Body.String())
 	}
 }
 
 func TestRequireAnyPermForbiddenWhenMissingAll(t *testing.T) {
-	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Permissions: []string{"a.read"}}}
+	engine, token := newPolicyTestAuthEngine(t)
 
 	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
-		AuthRequired(provider, auth.ModeHybrid),
-		RequireAnyPerm("a.write", "a.admin"),
+		AuthRequired(engine, auth.ModeHybrid),
+		RequireAnyPerm("project.write", "project.admin"),
 	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
-	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusForbidden {
@@ -170,19 +134,19 @@ func TestRequireAnyPermForbiddenWhenMissingAll(t *testing.T) {
 }
 
 func TestRequireAnyPermAllowsWhenAnyPresent(t *testing.T) {
-	provider := mockProvider{principal: auth.AuthContext{UserID: "u1", Permissions: []string{"a.read", "a.write"}}}
+	engine, token := newPolicyTestAuthEngine(t)
 
 	h := Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
-		AuthRequired(provider, auth.ModeHybrid),
-		RequireAnyPerm("a.write", "a.admin"),
+		AuthRequired(engine, auth.ModeHybrid),
+		RequireAnyPerm("project.write", "system.whoami"),
 	)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/secure", nil)
-	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	h.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {

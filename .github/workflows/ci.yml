@@ -34,3 +34,21 @@ jobs:
 
       - name: Lint
         run: golangci-lint run
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Vulnerability scan
+        run: govulncheck ./...
+
+      - name: Install CycloneDX SBOM tool
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+
+      - name: Generate SBOM
+        run: cyclonedx-gomod mod -licenses -json -output sbom.cdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json

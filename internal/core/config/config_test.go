@@ -133,6 +133,87 @@ func TestTracingDefaultsToDisabled(t *testing.T) {
 	}
 }
 
+func TestDefaultsSetGlobalMaxBodyLimit(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if got, want := cfg.HTTP.Middleware.MaxBodyBytes, int64(1<<20); got != want {
+		t.Fatalf("MaxBodyBytes=%d want=%d", got, want)
+	}
+}
+
+func TestSecurityHeadersDefaultByEnv(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	cfgProd, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfgProd.HTTP.Middleware.SecurityHeadersEnabled {
+		t.Fatalf("expected security headers enabled by default in prod")
+	}
+
+	t.Setenv("APP_ENV", "dev")
+	cfgDev, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfgDev.HTTP.Middleware.SecurityHeadersEnabled {
+		t.Fatalf("expected security headers disabled by default in dev")
+	}
+}
+
+func TestTracingInsecureDefaultByEnv(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	cfgProd, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfgProd.Tracing.Insecure {
+		t.Fatalf("expected tracing insecure=false by default in prod")
+	}
+
+	t.Setenv("APP_ENV", "dev")
+	cfgDev, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfgDev.Tracing.Insecure {
+		t.Fatalf("expected tracing insecure=true by default in dev")
+	}
+}
+
+func TestLintRejectsMetricsWithoutAuthTokenInProd(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("METRICS_ENABLED", "true")
+	t.Setenv("METRICS_AUTH_TOKEN", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for missing metrics auth token in prod")
+	}
+}
+
+func TestLintAllowsMetricsTokenInProd(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("METRICS_ENABLED", "true")
+	t.Setenv("METRICS_AUTH_TOKEN", "super-secret-token")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err != nil {
+		t.Fatalf("expected lint success, got: %v", err)
+	}
+}
+
 func TestLintRejectsInvalidTracingSamplerWhenEnabled(t *testing.T) {
 	t.Setenv("TRACING_ENABLED", "true")
 	t.Setenv("TRACING_SAMPLER", "invalid")
@@ -188,6 +269,21 @@ func TestLintRejectsAuthEnabledWithoutRedis(t *testing.T) {
 	}
 }
 
+func TestLintRejectsAuthEnabledWithoutPostgres(t *testing.T) {
+	t.Setenv("AUTH_ENABLED", "true")
+	t.Setenv("REDIS_ENABLED", "true")
+	t.Setenv("POSTGRES_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for auth enabled without postgres")
+	}
+}
+
 func TestLintRejectsRateLimitEnabledWithoutRedis(t *testing.T) {
 	t.Setenv("RATELIMIT_ENABLED", "true")
 	t.Setenv("REDIS_ENABLED", "false")
@@ -240,5 +336,68 @@ func TestLintRejectsInvalidRateLimitDefaults(t *testing.T) {
 
 	if err := cfg.Lint(); err == nil {
 		t.Fatalf("expected lint error for invalid ratelimit default limit")
+	}
+}
+
+func TestLoadAppliesMinimalProfileDefaults(t *testing.T) {
+	t.Setenv("APP_PROFILE", "minimal")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Auth.Enabled {
+		t.Fatalf("expected auth disabled in minimal profile")
+	}
+	if cfg.Cache.Enabled {
+		t.Fatalf("expected cache disabled in minimal profile")
+	}
+	if cfg.RateLimit.Enabled {
+		t.Fatalf("expected ratelimit disabled in minimal profile")
+	}
+}
+
+func TestLoadAppliesDevProfileDefaults(t *testing.T) {
+	t.Setenv("APP_PROFILE", "dev")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Auth.Enabled {
+		t.Fatalf("expected auth enabled in dev profile")
+	}
+	if cfg.Auth.Mode != "jwt_only" {
+		t.Fatalf("auth mode=%q want=%q", cfg.Auth.Mode, "jwt_only")
+	}
+	if !cfg.Cache.Enabled {
+		t.Fatalf("expected cache enabled in dev profile")
+	}
+	if !cfg.RateLimit.Enabled {
+		t.Fatalf("expected ratelimit enabled in dev profile")
+	}
+}
+
+func TestLoadEnvOverridesProfileDefaults(t *testing.T) {
+	t.Setenv("APP_PROFILE", "dev")
+	t.Setenv("AUTH_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Auth.Enabled {
+		t.Fatalf("expected env override AUTH_ENABLED=false to win over profile")
+	}
+}
+
+func TestLoadRejectsInvalidProfile(t *testing.T) {
+	t.Setenv("APP_PROFILE", "unknown")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("expected load error for invalid profile")
 	}
 }

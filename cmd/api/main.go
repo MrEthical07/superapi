@@ -12,6 +12,12 @@ import (
 	"github.com/MrEthical07/superapi/internal/modules"
 )
 
+// START HERE:
+// - This is the production server bootstrap entrypoint.
+// - It loads config, validates config, builds app dependencies, and runs HTTP server.
+// - For dependency wiring details, see internal/core/app/deps.go.
+// - For module registration, see internal/modules/modules.go.
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {

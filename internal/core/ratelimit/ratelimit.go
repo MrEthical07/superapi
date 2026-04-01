@@ -15,35 +15,54 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/MrEthical07/superapi/internal/core/auth"
+	"github.com/MrEthical07/superapi/internal/core/netx"
 )
 
+// Scope identifies which principal dimension rate limiting should key by.
 type Scope string
 
 const (
-	ScopeAuto   Scope = "auto"
-	ScopeAnon   Scope = "anon"
-	ScopeIP     Scope = "ip"
-	ScopeUser   Scope = "user"
+	// ScopeAuto resolves to user, tenant, token, then anon fallback.
+	ScopeAuto Scope = "auto"
+	// ScopeAnon keys all anonymous traffic together.
+	ScopeAnon Scope = "anon"
+	// ScopeIP keys by resolved client IP.
+	ScopeIP Scope = "ip"
+	// ScopeUser keys by authenticated user ID.
+	ScopeUser Scope = "user"
+	// ScopeTenant keys by authenticated tenant ID.
 	ScopeTenant Scope = "tenant"
-	ScopeToken  Scope = "token"
+	// ScopeToken keys by hashed bearer token fingerprint.
+	ScopeToken Scope = "token"
 )
 
+// Outcome describes limiter decision category for metrics and diagnostics.
 type Outcome string
 
 const (
-	OutcomeAllowed  Outcome = "allowed"
-	OutcomeBlocked  Outcome = "blocked"
+	// OutcomeAllowed indicates request is within budget.
+	OutcomeAllowed Outcome = "allowed"
+	// OutcomeBlocked indicates budget exceeded.
+	OutcomeBlocked Outcome = "blocked"
+	// OutcomeFailOpen indicates dependency failure with fail-open behavior.
 	OutcomeFailOpen Outcome = "fail_open"
-	OutcomeError    Outcome = "error"
+	// OutcomeError indicates dependency failure with fail-closed behavior.
+	OutcomeError Outcome = "error"
 )
 
+// Rule defines route-level throttling parameters.
 type Rule struct {
-	Limit  int
+	// Limit defines max requests per window.
+	Limit int
+	// Window defines throttling window duration.
 	Window time.Duration
-	Scope  Scope
-	Keyer  Keyer
+	// Scope selects identity strategy used for keys.
+	Scope Scope
+	// Keyer optionally overrides scope/identifier extraction.
+	Keyer Keyer
 }
 
+// Validate ensures rule is usable by runtime limiter.
 func (r Rule) Validate() error {
 	if r.Limit <= 0 {
 		return fmt.Errorf("rate limit must be > 0")
@@ -54,33 +73,51 @@ func (r Rule) Validate() error {
 	return nil
 }
 
+// Request is the normalized limiter input sent to Redis limiter.
 type Request struct {
-	Route      string
-	Scope      Scope
+	// Route is low-cardinality route pattern.
+	Route string
+	// Scope is resolved identity scope.
+	Scope Scope
+	// Identifier is normalized identity value for the scope.
 	Identifier string
-	Limit      int
-	Window     time.Duration
+	// Limit is request budget for this route/scope.
+	Limit int
+	// Window is throttling window duration.
+	Window time.Duration
 }
 
+// Decision describes the limiter result for one request.
 type Decision struct {
-	Allowed    bool
-	Remaining  int
+	// Allowed indicates whether request should proceed.
+	Allowed bool
+	// Remaining is best-effort remaining budget.
+	Remaining int
+	// RetryAfter is retry delay when blocked.
 	RetryAfter time.Duration
-	Outcome    Outcome
+	// Outcome classifies decision for observability.
+	Outcome Outcome
 }
 
+// Limiter is the runtime interface used by policy middleware.
 type Limiter interface {
 	Allow(ctx context.Context, req Request) (Decision, error)
 }
 
+// ObserveFunc records limiter outcomes for metrics integration.
 type ObserveFunc func(route string, outcome Outcome)
 
+// Config configures RedisLimiter defaults.
 type Config struct {
-	Env      string
+	// Env namespaces redis keys by environment.
+	Env string
+	// FailOpen allows requests when redis calls fail.
 	FailOpen bool
-	Observe  ObserveFunc
+	// Observe receives decision outcomes for metrics.
+	Observe ObserveFunc
 }
 
+// RedisLimiter executes fixed-window rate limiting using Redis and Lua script.
 type RedisLimiter struct {
 	client   redis.UniversalClient
 	script   *redis.Script
@@ -112,6 +149,7 @@ end
 return {allowed, current, ttl}
 `)
 
+// NewRedisLimiter constructs a Redis-backed limiter instance.
 func NewRedisLimiter(client redis.UniversalClient, cfg Config) (*RedisLimiter, error) {
 	if client == nil {
 		return nil, fmt.Errorf("ratelimit requires redis client")
@@ -129,6 +167,7 @@ func NewRedisLimiter(client redis.UniversalClient, cfg Config) (*RedisLimiter, e
 	}, nil
 }
 
+// Allow applies fixed-window decision logic for one request.
 func (l *RedisLimiter) Allow(ctx context.Context, req Request) (Decision, error) {
 	if err := validateRequest(req); err != nil {
 		return Decision{}, err
@@ -197,6 +236,7 @@ func (l *RedisLimiter) observeDecision(route string, outcome Outcome) {
 	l.observe(r, outcome)
 }
 
+// BuildKey builds a normalized redis key for limiter counters.
 func BuildKey(env, route string, scope Scope, id string) string {
 	normalizedEnv := strings.TrimSpace(env)
 	if normalizedEnv == "" {
@@ -215,6 +255,7 @@ func BuildKey(env, route string, scope Scope, id string) string {
 	return fmt.Sprintf("rl:%s:%s:%s:%s", normalizedEnv, normalizedRoute, normalizedScope, normalizedID)
 }
 
+// ResolveScopeAndIdentifier resolves request identity based on rule and auth context.
 func ResolveScopeAndIdentifier(r *http.Request, rule Rule) (Scope, string) {
 	if r == nil {
 		return ScopeAnon, "anonymous"
@@ -259,18 +300,24 @@ func ResolveScopeAndIdentifier(r *http.Request, rule Rule) (Scope, string) {
 	}
 }
 
+// Keyer extracts custom scope and identifier from a request.
 type Keyer func(r *http.Request) (Scope, string)
 
+// KeyByAnonymous groups all requests under one anonymous bucket.
 func KeyByAnonymous() Keyer {
 	return func(r *http.Request) (Scope, string) {
 		return ScopeAnon, "anonymous"
 	}
 }
 
+// KeyByIP resolves identity from trusted client IP information.
 func KeyByIP() Keyer {
 	return func(r *http.Request) (Scope, string) {
 		if r == nil {
 			return ScopeAnon, "anonymous"
+		}
+		if ip, ok := netx.ClientIPFromContext(r.Context()); ok {
+			return ScopeIP, ip
 		}
 		host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 		if err != nil {
@@ -283,6 +330,7 @@ func KeyByIP() Keyer {
 	}
 }
 
+// KeyByUser resolves identity from authenticated user ID.
 func KeyByUser() Keyer {
 	return func(r *http.Request) (Scope, string) {
 		if r == nil {
@@ -296,6 +344,7 @@ func KeyByUser() Keyer {
 	}
 }
 
+// KeyByTenant resolves identity from authenticated tenant ID.
 func KeyByTenant() Keyer {
 	return func(r *http.Request) (Scope, string) {
 		if r == nil {
@@ -309,6 +358,7 @@ func KeyByTenant() Keyer {
 	}
 }
 
+// KeyByTokenHash resolves identity from bearer token hash prefix.
 func KeyByTokenHash(prefixLen int) Keyer {
 	if prefixLen <= 0 {
 		prefixLen = 16
@@ -327,6 +377,7 @@ func KeyByTokenHash(prefixLen int) Keyer {
 	}
 }
 
+// KeyByUserOrTenantOrTokenHash resolves user, then tenant, then token-hash identity.
 func KeyByUserOrTenantOrTokenHash(prefixLen int) Keyer {
 	user := KeyByUser()
 	tenant := KeyByTenant()
@@ -345,6 +396,7 @@ func KeyByUserOrTenantOrTokenHash(prefixLen int) Keyer {
 	}
 }
 
+// RetryAfterSeconds converts retry duration to whole seconds for Retry-After header.
 func RetryAfterSeconds(d time.Duration) int {
 	if d <= 0 {
 		return 0

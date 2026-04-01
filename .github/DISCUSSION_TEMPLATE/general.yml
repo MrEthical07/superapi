@@ -1,0 +1,34 @@
+name: General discussion
+description: Start a design, architecture, or governance discussion.
+title: "discussion: "
+labels:
+  - discussion
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start a design or governance discussion. Keep scope explicit and actionable.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What are you trying to decide or improve?
+      placeholder: We need to decide ...
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: List candidate options and tradeoffs.
+      placeholder: |
+        Option A: ...
+        Option B: ...
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision criteria
+      description: What constraints should drive the decision?
+      placeholder: Security impact, backward compatibility, hot-path overhead ...

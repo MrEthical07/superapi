@@ -3,41 +3,72 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
+// Config contains all runtime configuration used to bootstrap the API process.
+//
+// The struct is populated by Load from environment variables and then validated
+// by Lint before the HTTP server starts.
 type Config struct {
-	Env         string
+	// Env identifies the runtime environment, such as dev or prod.
+	Env string
+	// Profile selects preset defaults before explicit env overrides are applied.
+	Profile string
+	// ServiceName is used for structured logs and tracing service identity.
 	ServiceName string
-	HTTP        HTTPConfig
-	Log         LogConfig
-	Auth        AuthConfig
-	RateLimit   RateLimitConfig
-	Cache       CacheConfig
-	Postgres    PostgresConfig
-	Redis       RedisConfig
-	Metrics     MetricsConfig
-	Tracing     TracingConfig
+	// HTTP controls server socket, transport timeouts, and global middleware.
+	HTTP HTTPConfig
+	// Log configures log level and output format.
+	Log LogConfig
+	// Auth toggles authentication integration and route auth mode.
+	Auth AuthConfig
+	// RateLimit configures default route-level throttling behavior.
+	RateLimit RateLimitConfig
+	// Cache configures default route-level response caching behavior.
+	Cache CacheConfig
+	// Postgres controls primary SQL dependency wiring.
+	Postgres PostgresConfig
+	// Redis controls cache/session/rate-limit dependency wiring.
+	Redis RedisConfig
+	// Metrics controls Prometheus endpoint exposure.
+	Metrics MetricsConfig
+	// Tracing controls OpenTelemetry exporter setup.
+	Tracing TracingConfig
 }
 
+// AuthConfig configures route authentication behavior.
 type AuthConfig struct {
+	// Enabled enables goAuth-backed auth provider wiring.
 	Enabled bool
-	Mode    string
+	// Mode selects validation strategy: jwt_only, hybrid, or strict.
+	Mode string
 }
 
+// RateLimitConfig defines default policy values for route rate limiting.
 type RateLimitConfig struct {
-	Enabled       bool
-	FailOpen      bool
-	DefaultLimit  int
+	// Enabled enables Redis-backed route throttling middleware.
+	Enabled bool
+	// FailOpen allows requests when limiter dependencies are unavailable.
+	FailOpen bool
+	// DefaultLimit is the baseline request budget per window.
+	DefaultLimit int
+	// DefaultWindow is the baseline rate-limit window duration.
 	DefaultWindow time.Duration
 }
 
+// CacheConfig defines default policy values for route response caching.
 type CacheConfig struct {
-	Enabled         bool
-	FailOpen        bool
+	// Enabled enables Redis-backed response cache middleware.
+	Enabled bool
+	// FailOpen bypasses caching when Redis is unavailable.
+	FailOpen bool
+	// DefaultMaxBytes caps cached payload size per response.
 	DefaultMaxBytes int
 }
 
@@ -49,78 +80,192 @@ type LogConfig struct {
 	Format string
 }
 
+// HTTPConfig defines server transport settings and middleware configuration.
 type HTTPConfig struct {
-	Addr              string
+	// Addr is the HTTP listen address, for example :8080.
+	Addr string
+	// ReadHeaderTimeout bounds time allowed to read request headers.
 	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	ShutdownTimeout   time.Duration
-	MaxHeaderBytes    int
-	Middleware        HTTPMiddlewareConfig
+	// ReadTimeout bounds total request read time.
+	ReadTimeout time.Duration
+	// WriteTimeout bounds total response write time.
+	WriteTimeout time.Duration
+	// IdleTimeout bounds keep-alive connection idle time.
+	IdleTimeout time.Duration
+	// ShutdownTimeout bounds graceful shutdown drain time.
+	ShutdownTimeout time.Duration
+	// MaxHeaderBytes caps request header size.
+	MaxHeaderBytes int
+	// Middleware configures process-wide HTTP middleware behavior.
+	Middleware HTTPMiddlewareConfig
 }
 
+// HTTPMiddlewareConfig controls global middleware toggles and options.
 type HTTPMiddlewareConfig struct {
-	RequestIDEnabled       bool
-	RecovererEnabled       bool
-	MaxBodyBytes           int64
+	// RequestIDEnabled enables request-id propagation middleware.
+	RequestIDEnabled bool
+	// RecovererEnabled enables panic recovery middleware.
+	RecovererEnabled bool
+	// MaxBodyBytes caps request bodies for methods that accept payloads.
+	MaxBodyBytes int64
+	// SecurityHeadersEnabled toggles defensive response headers.
 	SecurityHeadersEnabled bool
-	RequestTimeout         time.Duration
-	AccessLog              AccessLogConfig
+	// RequestTimeout applies context cancellation to downstream handlers.
+	RequestTimeout time.Duration
+	// AccessLog configures structured access logging behavior.
+	AccessLog AccessLogConfig
+	// ClientIP configures trusted proxy behavior for client IP extraction.
+	ClientIP ClientIPConfig
+	// CORS configures cross-origin handling.
+	CORS CORSConfig
 }
 
+// AccessLogConfig controls structured request logging.
 type AccessLogConfig struct {
-	Enabled          bool
-	SampleRate       float64
-	ExcludePaths     []string
-	SlowThreshold    time.Duration
-	IncludeUserAgent bool
-	IncludeRemoteIP  bool
-}
-
-type PostgresConfig struct {
-	Enabled            bool
-	URL                string
-	MaxConns           int32
-	MinConns           int32
-	ConnMaxLifetime    time.Duration
-	ConnMaxIdleTime    time.Duration
-	StartupPingTimeout time.Duration
-	HealthCheckTimeout time.Duration
-}
-
-type RedisConfig struct {
-	Enabled            bool
-	Addr               string
-	Password           string
-	DB                 int
-	DialTimeout        time.Duration
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	PoolSize           int
-	MinIdleConns       int
-	StartupPingTimeout time.Duration
-	HealthCheckTimeout time.Duration
-}
-
-type MetricsConfig struct {
+	// Enabled toggles access log middleware.
 	Enabled bool
-	Path    string
+	// SampleRate is a deterministic sample fraction in [0,1].
+	SampleRate float64
+	// ExcludePaths skips access logging for selected paths.
+	ExcludePaths []string
+	// SlowThreshold forces logging for requests above this duration.
+	SlowThreshold time.Duration
+	// IncludeUserAgent adds user agent to log records when true.
+	IncludeUserAgent bool
+	// IncludeRemoteIP adds resolved client IP to log records when true.
+	IncludeRemoteIP bool
 }
 
+// ClientIPConfig configures trusted forwarding headers.
+type ClientIPConfig struct {
+	// TrustedProxies lists trusted proxy CIDRs/IPs used for forwarded header parsing.
+	TrustedProxies []string
+}
+
+// CORSConfig configures CORS behavior for browser callers.
+type CORSConfig struct {
+	// Enabled toggles CORS middleware.
+	Enabled bool
+	// AllowOrigins lists allowed origins.
+	AllowOrigins []string
+	// DenyOrigins lists blocked origins evaluated before allow list.
+	DenyOrigins []string
+	// AllowMethods lists allowed cross-origin methods.
+	AllowMethods []string
+	// AllowHeaders lists allowed request headers.
+	AllowHeaders []string
+	// ExposeHeaders lists response headers visible to browsers.
+	ExposeHeaders []string
+	// AllowCredentials controls Access-Control-Allow-Credentials.
+	AllowCredentials bool
+	// MaxAge configures preflight cache duration.
+	MaxAge time.Duration
+	// AllowPrivateNetwork controls PNA preflight acceptance.
+	AllowPrivateNetwork bool
+}
+
+// PostgresConfig configures Postgres connectivity and pool behavior.
+type PostgresConfig struct {
+	// Enabled toggles Postgres dependency wiring.
+	Enabled bool
+	// URL is the Postgres DSN used by pgxpool.
+	URL string
+	// MaxConns bounds maximum pool size.
+	MaxConns int32
+	// MinConns sets minimum maintained pool connections.
+	MinConns int32
+	// ConnMaxLifetime bounds connection reuse lifetime.
+	ConnMaxLifetime time.Duration
+	// ConnMaxIdleTime bounds idle connection lifetime.
+	ConnMaxIdleTime time.Duration
+	// StartupPingTimeout bounds startup ping during dependency init.
+	StartupPingTimeout time.Duration
+	// HealthCheckTimeout bounds readiness health checks.
+	HealthCheckTimeout time.Duration
+}
+
+// RedisConfig configures Redis connectivity and pool behavior.
+type RedisConfig struct {
+	// Enabled toggles Redis dependency wiring.
+	Enabled bool
+	// Addr is the Redis host:port.
+	Addr string
+	// Password is optional Redis auth password.
+	Password string
+	// DB selects Redis logical database.
+	DB int
+	// DialTimeout bounds initial connection dialing.
+	DialTimeout time.Duration
+	// ReadTimeout bounds Redis read calls.
+	ReadTimeout time.Duration
+	// WriteTimeout bounds Redis write calls.
+	WriteTimeout time.Duration
+	// PoolSize bounds Redis connection pool size.
+	PoolSize int
+	// MinIdleConns sets minimum idle redis connections.
+	MinIdleConns int
+	// StartupPingTimeout bounds startup ping during dependency init.
+	StartupPingTimeout time.Duration
+	// HealthCheckTimeout bounds readiness health checks.
+	HealthCheckTimeout time.Duration
+}
+
+// MetricsConfig controls Prometheus endpoint wiring.
+type MetricsConfig struct {
+	// Enabled toggles metrics endpoint registration.
+	Enabled bool
+	// Path is the HTTP route used for metrics scraping.
+	Path string
+	// AuthToken is an optional bearer token required to scrape metrics.
+	AuthToken string
+}
+
+// TracingConfig controls OpenTelemetry export behavior.
 type TracingConfig struct {
-	Enabled      bool
-	ServiceName  string
-	Exporter     string
+	// Enabled toggles tracing provider initialization.
+	Enabled bool
+	// ServiceName identifies service name in telemetry backends.
+	ServiceName string
+	// Exporter selects tracing exporter implementation.
+	Exporter string
+	// OTLPEndpoint sets destination for OTLP exporter.
 	OTLPEndpoint string
-	Sampler      string
-	SampleRatio  float64
-	Insecure     bool
+	// Sampler controls sampling strategy.
+	Sampler string
+	// SampleRatio controls traceidratio sampling fraction.
+	SampleRatio float64
+	// Insecure toggles insecure transport to tracer backend.
+	Insecure bool
 }
 
+// Load reads configuration from environment variables and profile defaults.
+//
+// Usage:
+//
+//	cfg, err := config.Load()
+//	if err != nil {
+//	    // handle startup config error
+//	}
+//
+// Notes:
+// - Explicit env variables override APP_PROFILE defaults
+// - Run cfg.Lint() before constructing app dependencies
 func Load() (*Config, error) {
+	profile := strings.TrimSpace(os.Getenv("APP_PROFILE"))
+	restoreProfileDefaults, err := activateProfile(profile)
+	if err != nil {
+		return nil, err
+	}
+	defer restoreProfileDefaults()
+
+	env := getenv("APP_ENV", "dev")
+	isProdEnv := strings.EqualFold(strings.TrimSpace(env), "prod") || strings.EqualFold(strings.TrimSpace(env), "production")
+	securityHeadersDefault := isProdEnv
+	tracingInsecureDefault := !isProdEnv
+
 	cfg := &Config{
-		Env:         getenv("APP_ENV", "dev"),
+		Env:         env,
+		Profile:     profile,
 		ServiceName: getenv("APP_SERVICE_NAME", "api-template"),
 		HTTP: HTTPConfig{
 			Addr:              getenv("HTTP_ADDR", ":8080"),
@@ -133,8 +278,8 @@ func Load() (*Config, error) {
 			Middleware: HTTPMiddlewareConfig{
 				RequestIDEnabled:       getBool("HTTP_MIDDLEWARE_REQUEST_ID_ENABLED", true),
 				RecovererEnabled:       getBool("HTTP_MIDDLEWARE_RECOVERER_ENABLED", true),
-				MaxBodyBytes:           getInt64("HTTP_MIDDLEWARE_MAX_BODY_BYTES", 0),
-				SecurityHeadersEnabled: getBool("HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED", false),
+				MaxBodyBytes:           getInt64("HTTP_MIDDLEWARE_MAX_BODY_BYTES", 1<<20), // 1 MiB
+				SecurityHeadersEnabled: getBool("HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED", securityHeadersDefault),
 				RequestTimeout:         getDuration("HTTP_MIDDLEWARE_REQUEST_TIMEOUT", 0),
 				AccessLog: AccessLogConfig{
 					Enabled:          getBool("HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED", true),
@@ -143,6 +288,20 @@ func Load() (*Config, error) {
 					SlowThreshold:    getDuration("HTTP_MIDDLEWARE_ACCESS_LOG_SLOW_THRESHOLD", 2*time.Second),
 					IncludeUserAgent: getBool("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_USER_AGENT", false),
 					IncludeRemoteIP:  getBool("HTTP_MIDDLEWARE_ACCESS_LOG_INCLUDE_REMOTE_IP", false),
+				},
+				ClientIP: ClientIPConfig{
+					TrustedProxies: getCSV("HTTP_TRUSTED_PROXIES", nil),
+				},
+				CORS: CORSConfig{
+					Enabled:             getBool("HTTP_MIDDLEWARE_CORS_ENABLED", false),
+					AllowOrigins:        getCSV("HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS", nil),
+					DenyOrigins:         getCSV("HTTP_MIDDLEWARE_CORS_DENY_ORIGINS", nil),
+					AllowMethods:        getCSV("HTTP_MIDDLEWARE_CORS_ALLOW_METHODS", nil),
+					AllowHeaders:        getCSV("HTTP_MIDDLEWARE_CORS_ALLOW_HEADERS", nil),
+					ExposeHeaders:       getCSV("HTTP_MIDDLEWARE_CORS_EXPOSE_HEADERS", nil),
+					AllowCredentials:    getBool("HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS", false),
+					MaxAge:              getDuration("HTTP_MIDDLEWARE_CORS_MAX_AGE", 0),
+					AllowPrivateNetwork: getBool("HTTP_MIDDLEWARE_CORS_ALLOW_PRIVATE_NETWORK", false),
 				},
 			},
 		},
@@ -189,8 +348,9 @@ func Load() (*Config, error) {
 			HealthCheckTimeout: getDuration("REDIS_HEALTH_CHECK_TIMEOUT", 1*time.Second),
 		},
 		Metrics: MetricsConfig{
-			Enabled: getBool("METRICS_ENABLED", true),
-			Path:    getenv("METRICS_PATH", "/metrics"),
+			Enabled:   getBool("METRICS_ENABLED", true),
+			Path:      getenv("METRICS_PATH", "/metrics"),
+			AuthToken: getenv("METRICS_AUTH_TOKEN", ""),
 		},
 		Tracing: TracingConfig{
 			Enabled:      getBool("TRACING_ENABLED", false),
@@ -199,7 +359,7 @@ func Load() (*Config, error) {
 			OTLPEndpoint: getenv("TRACING_OTLP_ENDPOINT", "localhost:4317"),
 			Sampler:      getenv("TRACING_SAMPLER", "traceidratio"),
 			SampleRatio:  getFloat64("TRACING_SAMPLE_RATIO", 0.05),
-			Insecure:     getBool("TRACING_INSECURE", true),
+			Insecure:     getBool("TRACING_INSECURE", tracingInsecureDefault),
 		},
 	}
 
@@ -210,11 +370,23 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// Lint validates configuration constraints and cross-feature dependencies.
+//
+// Behavior:
+// - Validates env value formats and timeout ranges
+// - Enforces dependency rules (for example auth requires Redis and Postgres)
+// - Enforces production-only constraints such as metrics auth token
 func (c *Config) Lint() error {
+	if profile := strings.TrimSpace(os.Getenv("APP_PROFILE")); profile != "" {
+		if _, err := resolveProfileDefaults(profile); err != nil {
+			return err
+		}
+	}
+
 	if c.ServiceName == "" {
 		return errors.New("service name cannot be empty")
 	}
-	if c.HTTP.Addr == "" {
+	if strings.TrimSpace(c.HTTP.Addr) == "" {
 		return errors.New("http addr cannot be empty")
 	}
 	if c.HTTP.ReadHeaderTimeout <= 0 {
@@ -247,6 +419,30 @@ func (c *Config) Lint() error {
 	if c.HTTP.Middleware.AccessLog.SlowThreshold < 0 {
 		return fmt.Errorf("http middleware access log slow threshold must be >= 0")
 	}
+	if c.HTTP.Middleware.CORS.MaxAge < 0 {
+		return fmt.Errorf("http middleware cors max age must be >= 0")
+	}
+	if c.HTTP.Middleware.CORS.AllowCredentials && containsWildcard(c.HTTP.Middleware.CORS.AllowOrigins) {
+		return fmt.Errorf("http middleware cors allow credentials cannot be used with wildcard allow origins")
+	}
+	if err := validateOrigins("http middleware cors allow origins", c.HTTP.Middleware.CORS.AllowOrigins); err != nil {
+		return err
+	}
+	if err := validateOrigins("http middleware cors deny origins", c.HTTP.Middleware.CORS.DenyOrigins); err != nil {
+		return err
+	}
+	if err := validateTokens("http middleware cors allow methods", c.HTTP.Middleware.CORS.AllowMethods); err != nil {
+		return err
+	}
+	if err := validateTokens("http middleware cors allow headers", c.HTTP.Middleware.CORS.AllowHeaders); err != nil {
+		return err
+	}
+	if err := validateTokens("http middleware cors expose headers", c.HTTP.Middleware.CORS.ExposeHeaders); err != nil {
+		return err
+	}
+	if err := validateTrustedProxies(c.HTTP.Middleware.ClientIP.TrustedProxies); err != nil {
+		return err
+	}
 
 	switch strings.ToLower(strings.TrimSpace(c.Auth.Mode)) {
 	case "jwt_only", "jwt-only", "jwtonly", "hybrid", "strict", "":
@@ -256,6 +452,9 @@ func (c *Config) Lint() error {
 	}
 	if c.Auth.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("auth enabled requires redis enabled")
+	}
+	if c.Auth.Enabled && !c.Postgres.Enabled {
+		return fmt.Errorf("auth enabled requires postgres enabled")
 	}
 	if c.RateLimit.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("ratelimit enabled requires redis enabled")
@@ -343,6 +542,11 @@ func (c *Config) Lint() error {
 	if c.Metrics.Path[0] != '/' {
 		return fmt.Errorf("metrics path must start with '/'")
 	}
+	if strings.EqualFold(strings.TrimSpace(c.Env), "prod") || strings.EqualFold(strings.TrimSpace(c.Env), "production") {
+		if c.Metrics.Enabled && strings.TrimSpace(c.Metrics.AuthToken) == "" {
+			return fmt.Errorf("metrics auth token cannot be empty in prod when metrics is enabled")
+		}
+	}
 	if c.Tracing.Enabled {
 		if c.Tracing.ServiceName == "" {
 			return fmt.Errorf("tracing service name cannot be empty when enabled")
@@ -380,11 +584,6 @@ func (c *Config) Lint() error {
 			return fmt.Errorf("invalid HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED: %q", v)
 		}
 	}
-	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_MAX_BODY_BYTES"); ok {
-		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
-			return fmt.Errorf("invalid HTTP_MIDDLEWARE_MAX_BODY_BYTES: %q", v)
-		}
-	}
 	if v, ok := os.LookupEnv("HTTP_MIDDLEWARE_REQUEST_TIMEOUT"); ok {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -394,7 +593,21 @@ func (c *Config) Lint() error {
 			return fmt.Errorf("http middleware request timeout must be >= 0")
 		}
 	}
+	if v, ok := os.LookupEnv("HTTP_ADDR"); ok {
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("http addr cannot be empty")
+		}
+	}
 	if err := lintBoolEnv("HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_CORS_ENABLED"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS"); err != nil {
+		return err
+	}
+	if err := lintBoolEnv("HTTP_MIDDLEWARE_CORS_ALLOW_PRIVATE_NETWORK"); err != nil {
 		return err
 	}
 	if err := lintBoolEnv("AUTH_ENABLED"); err != nil {
@@ -410,6 +623,30 @@ func (c *Config) Lint() error {
 		return err
 	}
 	if err := lintDurationEnv("RATELIMIT_DEFAULT_WINDOW"); err != nil {
+		return err
+	}
+	if err := lintIntEnv("HTTP_MAX_HEADER_BYTES"); err != nil {
+		return err
+	}
+	if err := lintInt64Env("HTTP_MIDDLEWARE_MAX_BODY_BYTES"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_READ_HEADER_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_READ_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_WRITE_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_IDLE_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_SHUTDOWN_TIMEOUT"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("HTTP_MIDDLEWARE_CORS_MAX_AGE"); err != nil {
 		return err
 	}
 	if err := lintFloat64Env("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE"); err != nil {
@@ -507,6 +744,11 @@ func (c *Config) Lint() error {
 func getenv(key, fallback string) string {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	return v
@@ -514,6 +756,11 @@ func getenv(key, fallback string) string {
 
 func getInt(key string, fallback int) int {
 	v := os.Getenv(key)
+	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
 	if v == "" {
 		return fallback
 	}
@@ -527,6 +774,11 @@ func getInt(key string, fallback int) int {
 func getInt64(key string, fallback int64) int64 {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
@@ -538,6 +790,11 @@ func getInt64(key string, fallback int64) int64 {
 
 func getBool(key string, fallback bool) bool {
 	v := os.Getenv(key)
+	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
 	if v == "" {
 		return fallback
 	}
@@ -551,6 +808,11 @@ func getBool(key string, fallback bool) bool {
 func getDuration(key string, fallback time.Duration) time.Duration {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	d, err := time.ParseDuration(v)
@@ -563,6 +825,11 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 func getFloat64(key string, fallback float64) float64 {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	n, err := strconv.ParseFloat(v, 64)
@@ -574,6 +841,11 @@ func getFloat64(key string, fallback float64) float64 {
 
 func getCSV(key string, fallback []string) []string {
 	v := os.Getenv(key)
+	if strings.TrimSpace(v) == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
 	if strings.TrimSpace(v) == "" {
 		return fallback
 	}
@@ -633,6 +905,79 @@ func lintFloat64Env(key string) error {
 	}
 	if _, err := strconv.ParseFloat(v, 64); err != nil {
 		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func lintInt64Env(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func containsWildcard(items []string) bool {
+	for _, item := range items {
+		if strings.TrimSpace(item) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func validateOrigins(label string, origins []string) error {
+	for _, origin := range origins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "*" || strings.EqualFold(trimmed, "null") {
+			continue
+		}
+
+		u, err := url.Parse(trimmed)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("%s contains invalid origin: %q", label, origin)
+		}
+		if u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("%s origin must not include path, query, or fragment: %q", label, origin)
+		}
+	}
+	return nil
+}
+
+func validateTokens(label string, items []string) error {
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if strings.ContainsAny(trimmed, " \t\r\n") || strings.Contains(trimmed, ",") {
+			return fmt.Errorf("%s contains invalid token: %q", label, item)
+		}
+	}
+	return nil
+}
+
+func validateTrustedProxies(items []string) error {
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		if strings.Contains(trimmed, "/") {
+			if _, _, err := net.ParseCIDR(trimmed); err != nil {
+				return fmt.Errorf("http trusted proxy is invalid cidr: %q", item)
+			}
+			continue
+		}
+		if ip := net.ParseIP(trimmed); ip == nil {
+			return fmt.Errorf("http trusted proxy is invalid ip: %q", item)
+		}
 	}
 	return nil
 }

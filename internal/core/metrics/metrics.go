@@ -18,6 +18,7 @@ const (
 	namespace = "superapi"
 )
 
+// Service owns Prometheus collectors and HTTP instrumentation helpers.
 type Service struct {
 	enabled bool
 	path    string
@@ -35,6 +36,7 @@ type Service struct {
 	dependencyRead *prometheus.GaugeVec
 }
 
+// New builds a metrics service and registers collectors when enabled.
 func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 	if !cfg.Enabled {
 		return &Service{enabled: false, path: cfg.Path}, nil
@@ -147,10 +149,12 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 	}, nil
 }
 
+// Enabled reports whether metrics collection is active.
 func (s *Service) Enabled() bool {
 	return s != nil && s.enabled
 }
 
+// Path returns the route path where metrics are exposed.
 func (s *Service) Path() string {
 	if s == nil || s.path == "" {
 		return "/metrics"
@@ -158,6 +162,7 @@ func (s *Service) Path() string {
 	return s.path
 }
 
+// Handler returns the metrics endpoint handler.
 func (s *Service) Handler() http.Handler {
 	if s == nil || !s.enabled || s.handler == nil {
 		return http.NotFoundHandler()
@@ -165,6 +170,7 @@ func (s *Service) Handler() http.Handler {
 	return s.handler
 }
 
+// InstrumentHTTP records request counters/latency and in-flight gauge.
 func (s *Service) InstrumentHTTP(next http.Handler) http.Handler {
 	if s == nil || !s.enabled {
 		return next
@@ -196,6 +202,7 @@ func (s *Service) InstrumentHTTP(next http.Handler) http.Handler {
 	})
 }
 
+// CaptureRoutePattern stores resolved chi route patterns for later metrics labels.
 func (s *Service) CaptureRoutePattern(next http.Handler) http.Handler {
 	if s == nil || !s.enabled {
 		return next
@@ -220,6 +227,7 @@ func (s *Service) CaptureRoutePattern(next http.Handler) http.Handler {
 	})
 }
 
+// ObserveReadiness updates readiness gauges from a readiness report.
 func (s *Service) ObserveReadiness(report readiness.Report) {
 	if s == nil || !s.enabled {
 		return
@@ -239,6 +247,7 @@ func (s *Service) ObserveReadiness(report readiness.Report) {
 	}
 }
 
+// ObserveRateLimit increments route-level rate-limit outcome counters.
 func (s *Service) ObserveRateLimit(route, outcome string) {
 	if s == nil || !s.enabled || s.rateLimitRequests == nil {
 		return
@@ -254,6 +263,7 @@ func (s *Service) ObserveRateLimit(route, outcome string) {
 	s.rateLimitRequests.WithLabelValues(r, o).Inc()
 }
 
+// ObserveCache increments route-level cache outcome counters.
 func (s *Service) ObserveCache(route, outcome string) {
 	if s == nil || !s.enabled || s.cacheOperations == nil {
 		return
@@ -296,11 +306,13 @@ type statusCapturingResponseWriter struct {
 	routePattern string
 }
 
+// WriteHeader captures status code before delegating to the wrapped writer.
 func (w *statusCapturingResponseWriter) WriteHeader(statusCode int) {
 	w.statusCode = statusCode
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 
+// SetRoutePattern stores resolved route pattern for metrics labeling.
 func (w *statusCapturingResponseWriter) SetRoutePattern(pattern string) {
 	w.routePattern = pattern
 }

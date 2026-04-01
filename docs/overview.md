@@ -6,6 +6,7 @@ SuperAPI is a production-grade Go API template for SaaS projects. It provides a 
 
 - Module-based architecture (add features without touching core wiring)
 - Route-level policy engine (auth, rate limiting, caching, tenant isolation, RBAC)
+- Strict route policy validation (invalid policy stacks fail fast at startup)
 - Postgres (pgx v5 + sqlc) and Redis (go-redis v9) integration
 - Prometheus metrics, OpenTelemetry tracing, structured logging (zerolog)
 - goAuth-backed authentication (JWT validation, session checks, MFA-aware)
@@ -70,6 +71,8 @@ export AUTH_ENABLED=true
 export AUTH_MODE=hybrid          # jwt_only | hybrid | strict
 export REDIS_ENABLED=true
 export REDIS_ADDR="127.0.0.1:6379"
+export POSTGRES_ENABLED=true
+export POSTGRES_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
 go run ./cmd/api
 ```
 
@@ -79,14 +82,22 @@ go run ./cmd/api
 |---|---|---|---|
 | Postgres | `POSTGRES_ENABLED` | `false` | `POSTGRES_URL` |
 | Redis | `REDIS_ENABLED` | `false` | `REDIS_ADDR` |
-| Auth (goAuth) | `AUTH_ENABLED` | `false` | Redis |
+| Auth (goAuth) | `AUTH_ENABLED` | `false` | Redis + Postgres |
 | Rate limiting | `RATELIMIT_ENABLED` | `false` | Redis |
 | Response caching | `CACHE_ENABLED` | `false` | Redis |
 | Prometheus metrics | `METRICS_ENABLED` | `true` | — |
 | OpenTelemetry tracing | `TRACING_ENABLED` | `false` | OTLP endpoint |
-| Security headers | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `false` | — |
+| Security headers | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `true` in `prod`, otherwise `false` | — |
 | Request timeout | `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` | `0` (disabled) | — |
-| Max body bytes | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | `0` (disabled) | — |
+| Max body bytes | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | `1048576` (1 MiB) | — |
+| CORS middleware | `HTTP_MIDDLEWARE_CORS_ENABLED` | `false` | — |
+| Trusted proxies | `HTTP_TRUSTED_PROXIES` | empty | — |
+
+Notes:
+- `APP_ENV` defaults to `dev`; `prod`/`production` changes some defaults (for example, security headers enabled and tracing insecure transport disabled).
+- Client IP resolution trusts `Forwarded` / `X-Forwarded-For` only when `HTTP_TRUSTED_PROXIES` is configured.
+- `HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS=true` cannot be used with `HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS=*`.
+- See [docs/environment-variables.md](environment-variables.md) for the full env matrix.
 
 ## Key endpoints (built-in)
 
@@ -95,12 +106,10 @@ go run ./cmd/api
 | GET | `/healthz` | Process liveness (always 200) |
 | GET | `/readyz` | Dependency readiness (200 or 503) |
 | GET | `/metrics` | Prometheus metrics |
-| POST | `/system/parse-duration` | Typed JSON handler example |
+| POST | `/system/parse-duration` | Unified adapter JSON endpoint example |
+| POST | `/api/v1/system/auth/login` | Session login (returns access + refresh tokens) |
+| POST | `/api/v1/system/auth/refresh` | Session refresh (rotates access + refresh tokens) |
 | GET | `/api/v1/system/whoami` | Auth-protected principal info |
-| POST | `/api/v1/tenants` | Create tenant |
-| GET | `/api/v1/tenants` | List tenants |
-| GET | `/api/v1/tenants/{id}` | Get tenant by ID (cached) |
-| GET | `/api/v1/tenants/self` | Get own tenant (auth + tenant required) |
 
 ## Where to start
 
@@ -108,4 +117,5 @@ go run ./cmd/api
 2. Read [docs/modules.md](modules.md) to learn how to add a module
 3. Read [docs/policies.md](policies.md) for auth/rate-limit/cache/tenant policy reference
 4. Read [docs/crud-examples.md](crud-examples.md) for full CRUD with recommended policy stacks
-5. Use `make module name=<your_module>` to scaffold and start building
+5. Use `make module` for the interactive wizard, or `make module name=<your_module>` for flags-only scaffolding
+6. Run `go run ./cmd/superapi-verify ./...` (or `make verify`) before pushing route changes

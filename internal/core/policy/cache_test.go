@@ -16,13 +16,13 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/cache"
 )
 
-func newCacheManagerForPolicyTests(t *testing.T, redisAddr string, failOpen bool) *cache.Manager {
-	t.Helper()
+func newCacheManagerForPolicyTests(tb testing.TB, redisAddr string, failOpen bool) *cache.Manager {
+	tb.Helper()
 	client := redis.NewClient(&redis.Options{Addr: redisAddr, DialTimeout: 10 * time.Millisecond, ReadTimeout: 10 * time.Millisecond, WriteTimeout: 10 * time.Millisecond})
-	t.Cleanup(func() { _ = client.Close() })
+	tb.Cleanup(func() { _ = client.Close() })
 	mgr, err := cache.NewManager(client, cache.ManagerConfig{Env: "test", FailOpen: failOpen, DefaultMaxBytes: 128})
 	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
+		tb.Fatalf("NewManager() error = %v", err)
 	}
 	return mgr
 }
@@ -123,15 +123,13 @@ func TestCacheReadBypassesSetCookieResponses(t *testing.T) {
 	}
 }
 
-func TestCacheReadAuthSafetyBypassesWithoutUserOrTenantVary(t *testing.T) {
+func TestCacheReadAuthSafetyPanicsWithoutUserOrTenantVary(t *testing.T) {
 	mr := miniredis.RunT(t)
 	mgr := newCacheManagerForPolicyTests(t, mr.Addr(), true)
 
-	calls := 0
 	r := chi.NewRouter()
 	r.Get("/api/v1/tenants/{id}", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			calls++
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}),
@@ -140,15 +138,18 @@ func TestCacheReadAuthSafetyBypassesWithoutUserOrTenantVary(t *testing.T) {
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
 	req1 = req1.WithContext(auth.WithContext(req1.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"}))
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
-	req2 = req2.WithContext(auth.WithContext(req2.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"}))
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("expected panic for unsafe authenticated cache configuration")
+		}
+		if !strings.Contains(toString(recovered), "invalid route config") {
+			t.Fatalf("unexpected panic message: %v", recovered)
+		}
+	}()
 
 	r.ServeHTTP(httptest.NewRecorder(), req1)
-	r.ServeHTTP(httptest.NewRecorder(), req2)
-
-	if calls != 2 {
-		t.Fatalf("handler calls=%d want=2 (auth endpoint should bypass by default)", calls)
-	}
 }
 
 func TestCacheReadAuthVaryByUserProducesDifferentEntries(t *testing.T) {
@@ -267,10 +268,10 @@ func TestCacheReadFailClosedOnRedisError(t *testing.T) {
 	if called {
 		t.Fatalf("expected handler not to run in fail-closed mode")
 	}
-	if rr.Code != http.StatusInternalServerError {
-		t.Fatalf("status=%d want=%d", rr.Code, http.StatusInternalServerError)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want=%d", rr.Code, http.StatusServiceUnavailable)
 	}
-	if !strings.Contains(rr.Body.String(), `"code":"internal_error"`) {
+	if !strings.Contains(rr.Body.String(), `"code":"dependency_unavailable"`) {
 		t.Fatalf("unexpected body: %s", rr.Body.String())
 	}
 }

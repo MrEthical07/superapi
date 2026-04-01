@@ -16,12 +16,14 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/config"
 )
 
+// Service owns tracer construction and shutdown for the process.
 type Service struct {
 	enabled    bool
 	tracer     trace.Tracer
 	shutdownFn func(context.Context) error
 }
 
+// New configures OpenTelemetry tracing and installs global providers.
 func New(ctx context.Context, cfg config.TracingConfig, env string) (*Service, error) {
 	if !cfg.Enabled {
 		return &Service{enabled: false}, nil
@@ -69,6 +71,7 @@ func New(ctx context.Context, cfg config.TracingConfig, env string) (*Service, e
 	return NewWithProvider(tp, tp.Shutdown), nil
 }
 
+// NewWithProvider wraps an existing tracer provider in Service API.
 func NewWithProvider(provider trace.TracerProvider, shutdownFn func(context.Context) error) *Service {
 	if provider == nil {
 		return &Service{}
@@ -80,10 +83,12 @@ func NewWithProvider(provider trace.TracerProvider, shutdownFn func(context.Cont
 	}
 }
 
+// Enabled reports whether tracing is active.
 func (s *Service) Enabled() bool {
 	return s != nil && s.enabled && s.tracer != nil
 }
 
+// Tracer returns the HTTP tracer used by middleware and handlers.
 func (s *Service) Tracer() trace.Tracer {
 	if s == nil {
 		return otel.Tracer("superapi/http")
@@ -94,6 +99,7 @@ func (s *Service) Tracer() trace.Tracer {
 	return s.tracer
 }
 
+// Shutdown flushes telemetry and closes exporter resources.
 func (s *Service) Shutdown(ctx context.Context) error {
 	if s == nil || s.shutdownFn == nil {
 		return nil
