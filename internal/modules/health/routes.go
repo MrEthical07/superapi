@@ -5,28 +5,27 @@ import (
 
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/readiness"
-	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
 func (m *Module) Register(r httpx.Router) error {
-	r.Handle(http.MethodGet, "/healthz", http.HandlerFunc(m.healthz))
-	r.Handle(http.MethodGet, "/readyz", http.HandlerFunc(m.readyz))
+	r.Handle(http.MethodGet, "/healthz", httpx.Adapter(m.healthz))
+	r.Handle(http.MethodGet, "/readyz", httpx.Adapter(m.readyz))
 	return nil
 }
 
-func (m *Module) healthz(w http.ResponseWriter, r *http.Request) {
-	response.OK(w, map[string]any{
+func (m *Module) healthz(_ *httpx.Context, _ httpx.NoBody) (map[string]any, error) {
+	return map[string]any{
 		"status": "ok",
-	}, httpx.RequestIDFromContext(r.Context()))
+	}, nil
 }
 
-func (m *Module) readyz(w http.ResponseWriter, r *http.Request) {
+func (m *Module) readyz(ctx *httpx.Context, _ httpx.NoBody) (httpx.Result[readiness.Report], error) {
 	report := readiness.Report{
 		Status:       readiness.StatusReady,
 		Dependencies: map[string]readiness.DependencyStatus{},
 	}
 	if m.readiness != nil {
-		report = m.readiness.Check(r.Context())
+		report = m.readiness.Check(ctx.Context())
 	}
 	if m.metrics != nil {
 		m.metrics.ObserveReadiness(report)
@@ -39,9 +38,9 @@ func (m *Module) readyz(w http.ResponseWriter, r *http.Request) {
 		ok = false
 	}
 
-	response.JSON(w, status, response.Envelope{
-		OK:        ok,
-		Data:      report,
-		RequestID: httpx.RequestIDFromContext(r.Context()),
-	})
+	return httpx.Result[readiness.Report]{
+		Status: status,
+		OK:     httpx.Bool(ok),
+		Data:   report,
+	}, nil
 }

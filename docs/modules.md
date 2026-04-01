@@ -31,7 +31,7 @@ internal/modules/projects/
 | `module.go` | Declares the module struct, satisfies `app.Module` and optionally `app.DependencyBinder`. Stores injected dependencies. | Must export `New() *Module` and `Name() string`. |
 | `routes.go` | Contains `Register(r httpx.Router) error`. Registers all HTTP routes with their handlers and policy stacks. | Only route wiring here. No business logic. No request handling. |
 | `dto.go` | Request/response structs with JSON tags. Validation methods. Parsing helpers (e.g., `parseListLimit`). | DTOs implement `Validate() error` using typed `AppError`. |
-| `handler.go` | Handler struct holding a reference to the service. Methods are HTTP handlers (`func(w, r)`) or typed JSON functions (`func(ctx, req) (resp, err)`). | Decodes input, calls service, writes response. No business logic. |
+| `handler.go` | Handler struct holding a reference to the service. Methods use unified signatures: `func(ctx *httpx.Context, req T) (resp, err)`. | Decode/validation and response envelope are handled by `httpx.Adapter`. Keep business logic in service. |
 | `service.go` | Service interface + concrete implementation. Business logic, validation beyond DTO, transaction orchestration. | Owns transaction boundaries. Calls repo methods. |
 | `repo.go` | Repository interface + concrete implementation. Wraps `*sqlcgen.Queries` methods. Maps DB rows to domain types. Maps DB errors to `AppError`. | No business logic. No transactions. |
 
@@ -113,6 +113,7 @@ Constraints enforced by generator:
 package projects
 
 import (
+    goauth "github.com/MrEthical07/goAuth"
     "github.com/MrEthical07/superapi/internal/core/app"
     "github.com/MrEthical07/superapi/internal/core/auth"
     "github.com/MrEthical07/superapi/internal/core/cache"
@@ -125,8 +126,8 @@ type Module struct {
     pool    *pgxpool.Pool
     handler *Handler
     cache   *cache.Manager
-    auth    auth.Provider
-    mode    auth.Mode
+    authEngine *goauth.Engine
+    authMode auth.Mode
     limiter ratelimit.Limiter
     rlCfg   app.Dependencies // store what you need
 }
@@ -141,8 +142,8 @@ func (m *Module) Name() string { return "projects" }
 func (m *Module) BindDependencies(deps *app.Dependencies) {
     if deps != nil {
         m.cache = deps.CacheMgr
-        m.auth = deps.Auth
-        m.mode = deps.AuthMode
+        m.authEngine = deps.AuthEngine
+        m.authMode = deps.AuthMode
         m.limiter = deps.Limiter
     }
 
@@ -176,7 +177,6 @@ import (
     "github.com/MrEthical07/superapi/internal/core/cache"
     "github.com/MrEthical07/superapi/internal/core/httpx"
     "github.com/MrEthical07/superapi/internal/core/policy"
-    "github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
 
 func (m *Module) Register(r httpx.Router) error {
@@ -184,23 +184,22 @@ func (m *Module) Register(r httpx.Router) error {
         m.handler = NewHandler(nil)
     }
 
-    authPol := policy.AuthRequired(m.auth, m.mode)
+    authPol := policy.AuthRequired(m.authEngine, m.authMode)
 
     // Create
-    r.Handle(http.MethodPost, "/api/v1/projects", m.handler.Create(),
+    r.Handle(http.MethodPost, "/api/v1/projects", httpx.Adapter(m.handler.Create),
         authPol,
         policy.TenantRequired(),
         policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{Tags: []string{"project"}}),
     )
 
     // Get by ID
-    r.Handle(http.MethodGet, "/api/v1/projects/{id}", http.HandlerFunc(m.handler.GetByID),
+    r.Handle(http.MethodGet, "/api/v1/projects/{id}", httpx.Adapter(m.handler.GetByID),
         authPol,
         policy.TenantRequired(),
         policy.CacheRead(m.cache, cache.CacheReadConfig{
-            TTL:                30 * time.Second,
-            Tags:               []string{"project"},
-            AllowAuthenticated: true,
+            TTL:  30 * time.Second,
+            Tags: []string{"project"},
             VaryBy: cache.CacheVaryBy{
                 TenantID:   true,
                 PathParams: []string{"id"},
@@ -209,13 +208,12 @@ func (m *Module) Register(r httpx.Router) error {
     )
 
     // List
-    r.Handle(http.MethodGet, "/api/v1/projects", http.HandlerFunc(m.handler.List),
+    r.Handle(http.MethodGet, "/api/v1/projects", httpx.Adapter(m.handler.List),
         authPol,
         policy.TenantRequired(),
         policy.CacheRead(m.cache, cache.CacheReadConfig{
-            TTL:                15 * time.Second,
-            Tags:               []string{"project"},
-            AllowAuthenticated: true,
+            TTL:  15 * time.Second,
+            Tags: []string{"project"},
             VaryBy: cache.CacheVaryBy{
                 TenantID:    true,
                 QueryParams: []string{"limit"},
@@ -224,14 +222,14 @@ func (m *Module) Register(r httpx.Router) error {
     )
 
     // Update
-    r.Handle(http.MethodPatch, "/api/v1/projects/{id}", m.handler.Update(),
+    r.Handle(http.MethodPatch, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Update),
         authPol,
         policy.TenantRequired(),
         policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{Tags: []string{"project"}}),
     )
 
     // Delete
-    r.Handle(http.MethodDelete, "/api/v1/projects/{id}", http.HandlerFunc(m.handler.Delete),
+    r.Handle(http.MethodDelete, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Delete),
         authPol,
         policy.TenantRequired(),
         policy.RequirePerm("project.delete"),
@@ -302,13 +300,10 @@ type listProjectsResponse struct {
 package projects
 
 import (
-    "context"
-    "net/http"
     "strings"
 
     apperr "github.com/MrEthical07/superapi/internal/core/errors"
     "github.com/MrEthical07/superapi/internal/core/httpx"
-    "github.com/MrEthical07/superapi/internal/core/response"
     "github.com/MrEthical07/superapi/internal/core/tenant"
 )
 
@@ -320,67 +315,57 @@ func NewHandler(svc Service) *Handler {
     return &Handler{svc: svc}
 }
 
-// Create returns an http.Handler using the typed JSON adapter.
-func (h *Handler) Create() http.Handler {
-    return httpx.JSON(h.create)
-}
-
-func (h *Handler) create(ctx context.Context, req createProjectRequest) (projectResponse, error) {
+func (h *Handler) Create(ctx *httpx.Context, req createProjectRequest) (projectResponse, error) {
     if h.svc == nil {
         return projectResponse{}, apperr.New(apperr.CodeDependencyFailure, 503, "database is not configured")
     }
-    tenantID, ok := tenant.TenantIDFromContext(ctx)
+    tenantID, ok := tenant.TenantIDFromContext(ctx.Context())
     if !ok {
         return projectResponse{}, apperr.New(apperr.CodeForbidden, 403, "tenant scope required")
     }
-    p, err := h.svc.Create(ctx, tenantID, req)
+    p, err := h.svc.Create(ctx.Context(), tenantID, req)
     if err != nil {
         return projectResponse{}, err
     }
     return toProjectResponse(p), nil
 }
 
-func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetByID(ctx *httpx.Context, _ httpx.NoBody) (projectResponse, error) {
     if h.svc == nil {
-        response.Error(w, apperr.New(apperr.CodeDependencyFailure, 503, "database is not configured"), httpx.RequestIDFromContext(r.Context()))
-        return
+        return projectResponse{}, apperr.New(apperr.CodeDependencyFailure, 503, "database is not configured")
     }
-    id := strings.TrimSpace(httpx.URLParam(r, "id"))
+    id := strings.TrimSpace(ctx.Param("id"))
     if id == "" {
-        response.Error(w, apperr.New(apperr.CodeBadRequest, 400, "id is required"), httpx.RequestIDFromContext(r.Context()))
-        return
+        return projectResponse{}, apperr.New(apperr.CodeBadRequest, 400, "id is required")
     }
-    p, err := h.svc.GetByID(r.Context(), id)
+    p, err := h.svc.GetByID(ctx.Context(), id)
     if err != nil {
-        response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
-        return
+        return projectResponse{}, err
     }
-    response.OK(w, toProjectResponse(p), httpx.RequestIDFromContext(r.Context()))
+    return toProjectResponse(p), nil
 }
 
-func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-    // ... parse limit, call svc.List, write response
+func (h *Handler) List(ctx *httpx.Context, _ httpx.NoBody) (listProjectsResponse, error) {
+    // ... parse ctx.Query("limit"), call svc.List, return structured response
+    return listProjectsResponse{}, nil
 }
 
-// Update returns an http.Handler using the typed JSON adapter.
-func (h *Handler) Update() http.Handler {
-    return httpx.JSON(h.update)
-}
-
-func (h *Handler) update(ctx context.Context, req updateProjectRequest) (projectResponse, error) {
-    // ... get id from context/params, call svc.Update
+func (h *Handler) Update(ctx *httpx.Context, req updateProjectRequest) (projectResponse, error) {
+    // ... use ctx.Param("id"), call svc.Update
     return projectResponse{}, nil
 }
 
-func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-    // ... parse id, call svc.Delete, write response
+func (h *Handler) Delete(ctx *httpx.Context, _ httpx.NoBody) (map[string]any, error) {
+    // ... parse ctx.Param("id"), call svc.Delete
+    return map[string]any{"deleted": true}, nil
 }
 ```
 
-**Two handler patterns:**
+**Single handler pattern:**
 
-1. **Typed JSON handler** (`httpx.JSON(fn)`) — for POST/PUT/PATCH with JSON bodies. Returns `http.Handler`.
-2. **Classic handler** (`func(w, r)`) — for GET/DELETE or when you need direct `http.Request` access. Wrap with `http.HandlerFunc(m.handler.Method)`.
+- Handlers always use `func(ctx *httpx.Context, req T) (resp, error)`.
+- Routes always register through `httpx.Adapter(handlerMethod)`.
+- Use `httpx.NoBody` for endpoints without request JSON.
 
 ### 4.6 Define service.go
 
@@ -530,53 +515,54 @@ type Router interface {
 2. Policies are variadic — pass zero or many
 3. Policy order matters: first listed = outermost (runs first on request, last on response)
 4. Pattern uses chi syntax: `/api/v1/projects/{id}` for path params
-5. Handler must be `http.Handler` — use `http.HandlerFunc(fn)` for plain functions or `httpx.JSON(fn)` for typed JSON
+5. Handler must be `http.Handler` — use `httpx.Adapter(handlerMethod)` for unified handlers
 
 ### Policy attachment order convention
 
 For a typical authenticated, tenant-scoped endpoint:
 
-1. `policy.AuthRequired(provider, mode)` — must be first (outermost)
+1. `policy.AuthRequired(authEngine, mode)` — must be first (outermost)
 2. `policy.TenantRequired()` — after auth
 3. `policy.TenantMatchFromPath("tenant_id")` — if tenant_id is in the URL path
-4. `policy.RequireRole(...)` / `policy.RequirePerm(...)` — RBAC after tenant check
+4. `policy.RequirePerm(...)` / `policy.RequireAnyPerm(...)` — RBAC after tenant check
 5. `policy.RateLimit(limiter, rule)` — after auth (so user scope is available for keying)
 6. `policy.CacheRead(mgr, cfg)` — for GET endpoints (innermost, closest to handler)
 7. `policy.CacheInvalidate(mgr, cfg)` — for write endpoints
 
 ---
 
-## 6. Using the typed JSON adapter
+## 6. Using the unified adapter
 
-For endpoints with JSON request bodies, use `httpx.JSON`:
+All module handlers are registered through `httpx.Adapter`:
 
 ```go
-func (h *Handler) Create() http.Handler {
-    return httpx.JSON(h.create)
-}
-
-func (h *Handler) create(ctx context.Context, req createProjectRequest) (projectResponse, error) {
-    // Business logic via service
-    result, err := h.svc.Create(ctx, req)
-    if err != nil {
-        return projectResponse{}, err  // AppError passed through; others become 500
-    }
-    return toProjectResponse(result), nil
-}
+r.Handle(http.MethodGet, "/api/v1/projects/{id}", httpx.Adapter(m.handler.GetByID),
+    policy.AuthRequired(m.authEngine, m.authMode),
+    policy.TenantRequired(),
+)
 ```
 
+Handler signatures:
+
+- With JSON body: `func(ctx *httpx.Context, req CreateRequest) (CreateResponse, error)`
+- Without JSON body: `func(ctx *httpx.Context, _ httpx.NoBody) (Resp, error)`
+
 The adapter handles:
-- Body size limit (1 MiB)
+
 - Strict JSON decode (unknown fields rejected)
-- Validation (`Validate()` called automatically if implemented)
-- Error mapping (AppError → correct HTTP status; other errors → 500)
-- Response envelope (`response.OK()`)
+- Validation (`Validate()` on request DTOs)
+- `NoBody` routes without decode work
+- Standard envelope response mapping
+- AppError/non-AppError error mapping
 
-### When NOT to use typed JSON
+Use `httpx.Context` accessors instead of direct request plumbing:
 
-- GET/DELETE endpoints (no request body) — use classic `func(w, r)` handlers
-- Endpoints needing direct access to `http.Request` (e.g., reading path params, headers, query params)
-- Streaming or non-JSON responses
+- `ctx.Param("id")`
+- `ctx.Query("limit")`
+- `ctx.Header("X-Correlation-ID")`
+- `ctx.Auth()`
+- `ctx.RequestID()`
+- `ctx.Context()`
 
 ---
 
@@ -586,8 +572,8 @@ The adapter handles:
 
 ```go
 // BAD — handler does too much
-func (h *Handler) Create(ctx context.Context, req createProjectRequest) (projectResponse, error) {
-    if req.Status == "archived" && !isAdmin(ctx) {
+func (h *Handler) Create(ctx *httpx.Context, req createProjectRequest) (projectResponse, error) {
+    if req.Status == "archived" && !isAdmin(ctx.Context()) {
         return projectResponse{}, errors.New(...)
     }
     // ... direct DB call ...
@@ -596,8 +582,8 @@ func (h *Handler) Create(ctx context.Context, req createProjectRequest) (project
 
 ```go
 // GOOD — handler delegates to service
-func (h *Handler) Create(ctx context.Context, req createProjectRequest) (projectResponse, error) {
-    result, err := h.svc.Create(ctx, tenantID, req)
+func (h *Handler) Create(ctx *httpx.Context, req createProjectRequest) (projectResponse, error) {
+    result, err := h.svc.Create(ctx.Context(), tenantID, req)
     if err != nil {
         return projectResponse{}, err
     }

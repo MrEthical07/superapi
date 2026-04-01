@@ -1,7 +1,6 @@
 package httpx
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,58 +9,12 @@ import (
 	"strings"
 
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
-	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
 const defaultJSONBodyLimit int64 = 1 << 20 // 1 MiB
 
 type Validatable interface {
 	Validate() error
-}
-
-type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp, error)
-type JSONRequestHandlerFunc[Req any, Resp any] func(ctx context.Context, r *http.Request, req Req) (Resp, error)
-
-// JSON adapts a typed JSON request/response handler to net/http.
-//
-// Behavior:
-//   - limits body size to 1 MiB
-//   - requires exactly one JSON value
-//   - disallows unknown fields (strict decode)
-//   - invokes Validate() when request implements Validatable
-//   - writes success via standard envelope
-//   - maps errors through response.Error (AppError passthrough, internal sanitized)
-func JSON[Req any, Resp any](fn JSONHandlerFunc[Req, Resp]) http.Handler {
-	return JSONWithRequest(func(ctx context.Context, _ *http.Request, req Req) (Resp, error) {
-		return fn(ctx, req)
-	})
-}
-
-// JSONWithRequest adapts a typed JSON request/response handler to net/http while
-// preserving access to the incoming request for path params, headers, and query
-// values.
-func JSONWithRequest[Req any, Resp any](fn JSONRequestHandlerFunc[Req, Resp]) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reqID := RequestIDFromContext(r.Context())
-
-		var req Req
-		if err := DecodeAndValidateJSON(w, r, &req); err != nil {
-			if _, isApp := apperr.AsAppError(err); isApp {
-				response.Error(w, err, reqID)
-				return
-			}
-			response.Error(w, mapDecodeError(err), reqID)
-			return
-		}
-
-		resp, err := fn(r.Context(), r, req)
-		if err != nil {
-			response.Error(w, err, reqID)
-			return
-		}
-
-		response.OK(w, resp, reqID)
-	})
 }
 
 // DecodeAndValidateJSON strictly decodes a JSON request body into dst, applies

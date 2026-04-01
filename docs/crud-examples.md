@@ -119,6 +119,7 @@ internal/modules/projects/
 package projects
 
 import (
+	goauth "github.com/MrEthical07/goAuth"
 	"github.com/MrEthical07/superapi/internal/core/app"
 	"github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/cache"
@@ -129,8 +130,8 @@ import (
 
 type Module struct {
 	pool     *pgxpool.Pool
-	auth     auth.Provider
-	mode     auth.Mode
+	authEngine *goauth.Engine
+	authMode auth.Mode
 	limiter  *ratelimit.RedisLimiter
 	cacheMgr *cache.Manager
 	handler  *Handler
@@ -146,8 +147,8 @@ func (m *Module) Name() string {
 
 func (m *Module) BindDependencies(d *app.Dependencies) {
 	m.pool = d.Postgres
-	m.auth = d.Auth
-	m.mode = d.AuthMode
+	m.authEngine = d.AuthEngine
+	m.authMode = d.AuthMode
 	m.limiter = d.Limiter
 	m.cacheMgr = d.CacheMgr
 
@@ -268,7 +269,7 @@ func parseListLimit(raw string) (int32, error) {
 ```
 
 **Key patterns:**
-- Request types have a `Validate() error` method — used by `httpx.JSON` automatically
+- Request types have a `Validate() error` method — used by `httpx.Adapter` when decoding request bodies
 - Use `apperr.New()` for validation errors with explicit HTTP status code
 - Response types map 1:1 to API JSON output
 - Parsing helpers for query params return `AppError` for consistent error responses
@@ -281,13 +282,10 @@ func parseListLimit(raw string) (int32, error) {
 package projects
 
 import (
-	"context"
-	"net/http"
 	"strings"
 
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
-	"github.com/MrEthical07/superapi/internal/core/response"
 	"github.com/MrEthical07/superapi/internal/core/tenant"
 )
 
@@ -299,67 +297,51 @@ func NewHandler(svc Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// --- POST /api/v1/projects (typed JSON handler) ---
-
-func (h *Handler) Create() http.Handler {
-	return httpx.JSON(h.create)
-}
-
-func (h *Handler) create(ctx context.Context, req createProjectRequest) (projectResponse, error) {
-	tenantID, ok := tenant.TenantIDFromContext(ctx)
+func (h *Handler) Create(ctx *httpx.Context, req createProjectRequest) (projectResponse, error) {
+	tenantID, ok := tenant.TenantIDFromContext(ctx.Context())
 	if !ok {
 		return projectResponse{}, apperr.New(apperr.CodeForbidden, 403, "tenant scope required")
 	}
 
-	p, err := h.svc.Create(ctx, tenantID, req)
+	p, err := h.svc.Create(ctx.Context(), tenantID, req)
 	if err != nil {
 		return projectResponse{}, err
 	}
 	return toProjectResponse(p), nil
 }
 
-// --- GET /api/v1/projects/{id} (manual handler) ---
-
-func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenant.TenantIDFromContext(r.Context())
+func (h *Handler) GetByID(ctx *httpx.Context, _ httpx.NoBody) (projectResponse, error) {
+	tenantID, ok := tenant.TenantIDFromContext(ctx.Context())
 	if !ok {
-		response.Error(w, apperr.New(apperr.CodeForbidden, 403, "tenant scope required"), httpx.RequestIDFromContext(r.Context()))
-		return
+		return projectResponse{}, apperr.New(apperr.CodeForbidden, 403, "tenant scope required")
 	}
 
-	id := strings.TrimSpace(httpx.URLParam(r, "id"))
+	id := strings.TrimSpace(ctx.Param("id"))
 	if id == "" {
-		response.Error(w, apperr.New(apperr.CodeBadRequest, 400, "id is required"), httpx.RequestIDFromContext(r.Context()))
-		return
+		return projectResponse{}, apperr.New(apperr.CodeBadRequest, 400, "id is required")
 	}
 
-	p, err := h.svc.GetByID(r.Context(), tenantID, id)
+	p, err := h.svc.GetByID(ctx.Context(), tenantID, id)
 	if err != nil {
-		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
-		return
+		return projectResponse{}, err
 	}
-	response.OK(w, toProjectResponse(p), httpx.RequestIDFromContext(r.Context()))
+	return toProjectResponse(p), nil
 }
 
-// --- GET /api/v1/projects (manual handler) ---
-
-func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenant.TenantIDFromContext(r.Context())
+func (h *Handler) List(ctx *httpx.Context, _ httpx.NoBody) (listProjectsResponse, error) {
+	tenantID, ok := tenant.TenantIDFromContext(ctx.Context())
 	if !ok {
-		response.Error(w, apperr.New(apperr.CodeForbidden, 403, "tenant scope required"), httpx.RequestIDFromContext(r.Context()))
-		return
+		return listProjectsResponse{}, apperr.New(apperr.CodeForbidden, 403, "tenant scope required")
 	}
 
-	limit, err := parseListLimit(r.URL.Query().Get("limit"))
+	limit, err := parseListLimit(ctx.Query("limit"))
 	if err != nil {
-		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
-		return
+		return listProjectsResponse{}, err
 	}
 
-	items, err := h.svc.List(r.Context(), tenantID, limit)
+	items, err := h.svc.List(ctx.Context(), tenantID, limit)
 	if err != nil {
-		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
-		return
+		return listProjectsResponse{}, err
 	}
 
 	out := make([]projectResponse, 0, len(items))
@@ -367,79 +349,45 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toProjectResponse(item))
 	}
 
-	response.OK(w, listProjectsResponse{
+	return listProjectsResponse{
 		Items: out,
 		Count: len(out),
 		Limit: int(limit),
-	}, httpx.RequestIDFromContext(r.Context()))
+	}, nil
 }
 
-// --- PUT /api/v1/projects/{id} (typed JSON handler) ---
-
-func (h *Handler) Update() http.Handler {
-	return httpx.JSON(h.update)
-}
-
-func (h *Handler) update(ctx context.Context, req updateProjectRequest) (projectResponse, error) {
-	tenantID, ok := tenant.TenantIDFromContext(ctx)
+func (h *Handler) Update(ctx *httpx.Context, req updateProjectRequest) (projectResponse, error) {
+	tenantID, ok := tenant.TenantIDFromContext(ctx.Context())
 	if !ok {
 		return projectResponse{}, apperr.New(apperr.CodeForbidden, 403, "tenant scope required")
 	}
-
-	// httpx.JSON doesn't expose URL params in ctx, so we use CaptureRoutePattern
-	// For typed JSON handlers that need path params, use manual handler pattern instead.
-	// This is a simplified example — see note below.
-	return projectResponse{}, apperr.New(apperr.CodeBadRequest, 400, "use manual handler for path param routes")
-}
-
-// Better: manual handler for update (needs path param)
-func (h *Handler) UpdateManual(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenant.TenantIDFromContext(r.Context())
-	if !ok {
-		response.Error(w, apperr.New(apperr.CodeForbidden, 403, "tenant scope required"), httpx.RequestIDFromContext(r.Context()))
-		return
-	}
-
-	id := strings.TrimSpace(httpx.URLParam(r, "id"))
+	id := strings.TrimSpace(ctx.Param("id"))
 	if id == "" {
-		response.Error(w, apperr.New(apperr.CodeBadRequest, 400, "id is required"), httpx.RequestIDFromContext(r.Context()))
-		return
+		return projectResponse{}, apperr.New(apperr.CodeBadRequest, 400, "id is required")
 	}
 
-	var req updateProjectRequest
-	if err := httpx.DecodeAndValidateJSON(w, r, &req); err != nil {
-		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
-		return
-	}
-
-	p, err := h.svc.Update(r.Context(), tenantID, id, req)
+	p, err := h.svc.Update(ctx.Context(), tenantID, id, req)
 	if err != nil {
-		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
-		return
+		return projectResponse{}, err
 	}
-	response.OK(w, toProjectResponse(p), httpx.RequestIDFromContext(r.Context()))
+	return toProjectResponse(p), nil
 }
 
-// --- DELETE /api/v1/projects/{id} (manual handler) ---
-
-func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := tenant.TenantIDFromContext(r.Context())
+func (h *Handler) Delete(ctx *httpx.Context, _ httpx.NoBody) (map[string]any, error) {
+	tenantID, ok := tenant.TenantIDFromContext(ctx.Context())
 	if !ok {
-		response.Error(w, apperr.New(apperr.CodeForbidden, 403, "tenant scope required"), httpx.RequestIDFromContext(r.Context()))
-		return
+		return nil, apperr.New(apperr.CodeForbidden, 403, "tenant scope required")
 	}
 
-	id := strings.TrimSpace(httpx.URLParam(r, "id"))
+	id := strings.TrimSpace(ctx.Param("id"))
 	if id == "" {
-		response.Error(w, apperr.New(apperr.CodeBadRequest, 400, "id is required"), httpx.RequestIDFromContext(r.Context()))
-		return
+		return nil, apperr.New(apperr.CodeBadRequest, 400, "id is required")
 	}
 
-	if err := h.svc.Delete(r.Context(), tenantID, id); err != nil {
-		response.Error(w, err, httpx.RequestIDFromContext(r.Context()))
-		return
+	if err := h.svc.Delete(ctx.Context(), tenantID, id); err != nil {
+		return nil, err
 	}
-	response.OK(w, nil, httpx.RequestIDFromContext(r.Context()))
+	return map[string]any{"deleted": true}, nil
 }
 
 // --- Mapper ---
@@ -456,14 +404,11 @@ func toProjectResponse(p Project) projectResponse {
 }
 ```
 
-**Two handler styles:**
+**Unified handler style:**
 
-| Style | When to use | Example |
-|---|---|---|
-| **Typed JSON** (`httpx.JSON`) | POST/PUT with JSON body, no path params needed | `Create()` |
-| **Manual** (`http.HandlerFunc`) | Routes with path params, query params, or custom response shapes | `GetByID`, `List`, `Delete`, `UpdateManual` |
-
-> **Note on typed JSON + path params:** `httpx.JSON` receives only the decoded body. It does not have access to `http.Request` directly, so you cannot read URL params. For endpoints that need both a JSON body and path params (like update), use a manual handler.
+- Register every handler with `httpx.Adapter(...)`.
+- Use `httpx.NoBody` for routes without request JSON.
+- Use `ctx.Param(...)`, `ctx.Query(...)`, and `ctx.Header(...)` for request data.
 
 ---
 
@@ -756,8 +701,8 @@ func (m *Module) Register(r httpx.Router) error {
 	rlRule := ratelimit.Rule{Limit: 60, Window: time.Minute}
 
 	// POST /api/v1/projects — Create
-	r.Handle(http.MethodPost, "/api/v1/projects", m.handler.Create(),
-		policy.AuthRequired(m.auth, auth.ModeStrict),
+	r.Handle(http.MethodPost, "/api/v1/projects", httpx.Adapter(m.handler.Create),
+		policy.AuthRequired(m.authEngine, auth.ModeStrict),
 		policy.TenantRequired(),
 		policy.RequirePerm("project.write"),
 		policy.RateLimitWithKeyer(m.limiter, "projects.create", rlRule, ratelimit.KeyByTenant()),
@@ -767,14 +712,13 @@ func (m *Module) Register(r httpx.Router) error {
 	)
 
 	// GET /api/v1/projects/{id} — Get by ID
-	r.Handle(http.MethodGet, "/api/v1/projects/{id}", http.HandlerFunc(m.handler.GetByID),
-		policy.AuthRequired(m.auth, m.mode),
+	r.Handle(http.MethodGet, "/api/v1/projects/{id}", httpx.Adapter(m.handler.GetByID),
+		policy.AuthRequired(m.authEngine, m.authMode),
 		policy.TenantRequired(),
 		policy.RateLimitWithKeyer(m.limiter, "projects.get", rlRule, ratelimit.KeyByTenant()),
 		policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
-			TTL:                30 * time.Second,
-			Tags:               []string{"project"},
-			AllowAuthenticated: true,
+			TTL:  30 * time.Second,
+			Tags: []string{"project"},
 			VaryBy: cache.CacheVaryBy{
 				TenantID:   true,
 				PathParams: []string{"id"},
@@ -783,14 +727,13 @@ func (m *Module) Register(r httpx.Router) error {
 	)
 
 	// GET /api/v1/projects — List
-	r.Handle(http.MethodGet, "/api/v1/projects", http.HandlerFunc(m.handler.List),
-		policy.AuthRequired(m.auth, m.mode),
+	r.Handle(http.MethodGet, "/api/v1/projects", httpx.Adapter(m.handler.List),
+		policy.AuthRequired(m.authEngine, m.authMode),
 		policy.TenantRequired(),
 		policy.RateLimitWithKeyer(m.limiter, "projects.list", rlRule, ratelimit.KeyByTenant()),
 		policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
-			TTL:                15 * time.Second,
-			Tags:               []string{"project"},
-			AllowAuthenticated: true,
+			TTL:  15 * time.Second,
+			Tags: []string{"project"},
 			VaryBy: cache.CacheVaryBy{
 				TenantID:    true,
 				QueryParams: []string{"limit"},
@@ -799,8 +742,8 @@ func (m *Module) Register(r httpx.Router) error {
 	)
 
 	// PUT /api/v1/projects/{id} — Update
-	r.Handle(http.MethodPut, "/api/v1/projects/{id}", http.HandlerFunc(m.handler.UpdateManual),
-		policy.AuthRequired(m.auth, auth.ModeStrict),
+	r.Handle(http.MethodPut, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Update),
+		policy.AuthRequired(m.authEngine, auth.ModeStrict),
 		policy.TenantRequired(),
 		policy.RequirePerm("project.write"),
 		policy.RateLimitWithKeyer(m.limiter, "projects.update", rlRule, ratelimit.KeyByTenant()),
@@ -810,8 +753,8 @@ func (m *Module) Register(r httpx.Router) error {
 	)
 
 	// DELETE /api/v1/projects/{id} — Delete
-	r.Handle(http.MethodDelete, "/api/v1/projects/{id}", http.HandlerFunc(m.handler.Delete),
-		policy.AuthRequired(m.auth, auth.ModeStrict),
+	r.Handle(http.MethodDelete, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Delete),
+		policy.AuthRequired(m.authEngine, auth.ModeStrict),
 		policy.TenantRequired(),
 		policy.RequirePerm("project.delete"),
 		policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
@@ -861,7 +804,7 @@ Content-Type: application/json
 }
 ```
 
-Success (201 via httpx.JSON):
+Success (201 via httpx.Adapter):
 
 ```json
 {
@@ -1051,7 +994,7 @@ When building a new CRUD module:
 - [ ] Write `dto.go` — request/response types, Validate()
 - [ ] Write `repo.go` — domain type, Repository interface, sqlcgen wrapper, error mapping
 - [ ] Write `service.go` — Service interface, business logic, tx boundaries
-- [ ] Write `handler.go` — HTTP handlers (typed JSON for body-only, manual for path params)
+- [ ] Write `handler.go` — unified handlers using `func(ctx *httpx.Context, req T) (resp, error)`
 - [ ] Write `routes.go` — Register() with policies in correct order
 - [ ] Register module in `internal/modules/modules.go`
 - [ ] Run `make migrate-up`

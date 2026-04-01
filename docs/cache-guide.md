@@ -38,6 +38,13 @@ Notes:
 - Route TTL is configured per-route via `CacheReadConfig.TTL` (there is no global `CACHE_DEFAULT_TTL` env var).
 - Key prefixes are currently fixed in code as `cache` (read keys) and `cver` (tag version keys).
 
+### Strict safety guarantees
+
+- `policy.CacheRead(...)` requires a non-nil cache manager and `TTL > 0`; invalid config panics at registration.
+- `policy.CacheInvalidate(...)` requires a non-nil cache manager and at least one tag; invalid config panics at registration.
+- On authenticated routes (`AuthRequired` present), `CacheRead` must set `VaryBy.UserID` or `VaryBy.TenantID`; otherwise route registration fails with `invalid route config`.
+- The same policy invariants are checked statically by `go run ./cmd/superapi-verify ./...`.
+
 ---
 
 ## Key construction
@@ -162,13 +169,12 @@ VaryBy: cache.CacheVaryBy{QueryParams: []string{"limit","cursor"}}
 ```go
 // routes.go
 func (m *Module) registerRoutes(r httpx.Router) {
-    r.Handle(http.MethodGet, "/api/v1/projects", m.handler.List,
-        policy.AuthRequired(m.auth, m.mode),
+    r.Handle(http.MethodGet, "/api/v1/projects", httpx.Adapter(m.handler.List),
+        policy.AuthRequired(m.authEngine, m.authMode),
         policy.TenantRequired(),
         policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
-            TTL:                30 * time.Second,
-            Tags:               []string{"project"},
-            AllowAuthenticated: true,
+            TTL:  30 * time.Second,
+            Tags: []string{"project"},
             VaryBy: cache.CacheVaryBy{
                 TenantID:    true,
                 QueryParams: []string{"limit", "cursor"},
@@ -181,13 +187,12 @@ func (m *Module) registerRoutes(r httpx.Router) {
 ### Caching a detail endpoint
 
 ```go
-r.Handle(http.MethodGet, "/api/v1/projects/{id}", m.handler.GetByID,
-    policy.AuthRequired(m.auth, m.mode),
+r.Handle(http.MethodGet, "/api/v1/projects/{id}", httpx.Adapter(m.handler.GetByID),
+    policy.AuthRequired(m.authEngine, m.authMode),
     policy.TenantRequired(),
     policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
-        TTL:                60 * time.Second,
-        Tags:               []string{"project"},
-        AllowAuthenticated: true,
+        TTL:  60 * time.Second,
+        Tags: []string{"project"},
         VaryBy: cache.CacheVaryBy{
             TenantID:   true,
             PathParams: []string{"id"},
@@ -199,8 +204,8 @@ r.Handle(http.MethodGet, "/api/v1/projects/{id}", m.handler.GetByID,
 ### Invalidating on create
 
 ```go
-r.Handle(http.MethodPost, "/api/v1/projects", m.handler.Create,
-    policy.AuthRequired(m.auth, m.mode),
+r.Handle(http.MethodPost, "/api/v1/projects", httpx.Adapter(m.handler.Create),
+    policy.AuthRequired(m.authEngine, m.authMode),
     policy.TenantRequired(),
     policy.RequirePerm("project.write"),
     policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
@@ -212,8 +217,8 @@ r.Handle(http.MethodPost, "/api/v1/projects", m.handler.Create,
 ### Invalidating on update or delete
 
 ```go
-r.Handle(http.MethodPut, "/api/v1/projects/{id}", m.handler.Update,
-    policy.AuthRequired(m.auth, m.mode),
+r.Handle(http.MethodPut, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Update),
+    policy.AuthRequired(m.authEngine, m.authMode),
     policy.TenantRequired(),
     policy.RequirePerm("project.write"),
     policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
@@ -221,8 +226,8 @@ r.Handle(http.MethodPut, "/api/v1/projects/{id}", m.handler.Update,
     }),
 )
 
-r.Handle(http.MethodDelete, "/api/v1/projects/{id}", m.handler.Delete,
-    policy.AuthRequired(m.auth, m.mode),
+r.Handle(http.MethodDelete, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Delete),
+    policy.AuthRequired(m.authEngine, m.authMode),
     policy.TenantRequired(),
     policy.RequirePerm("project.delete"),
     policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
@@ -285,8 +290,9 @@ The cache policy will skip storing a response if:
 2. Response status is not in `CacheStatuses` (default: 200)
 3. Response body exceeds `MaxBytes` (default: 256 KiB)
 4. Response includes `Set-Cookie` header
-5. Request is authenticated and neither `AllowAuthenticated` nor `VaryBy.UserID`/`VaryBy.TenantID` is set
-6. The response writer was hijacked (WebSocket upgrade) or flushed (streaming)
+5. The response writer was hijacked (WebSocket upgrade) or flushed (streaming)
+
+On authenticated routes, missing `VaryBy.UserID` and `VaryBy.TenantID` is not a runtime skip. It is a startup validation error (`invalid route config`).
 
 ---
 
@@ -294,11 +300,15 @@ The cache policy will skip storing a response if:
 
 ### Cache hit/miss
 
-The cache policy sets an `X-Cache` response header:
+The cache policy records outcomes via metrics labels (route + outcome):
 
-- `HIT` — served from cache
-- `MISS` — fetched from handler, stored in cache
-- `BYPASS` — caching skipped (method, auth, error, etc.)
+- `hit` — served from cache
+- `miss` — cache miss
+- `set` — response stored
+- `bypass` — not cacheable (method/status/streaming/cookie/size)
+- `error` — cache operation failed
+
+No `X-Cache` response header is emitted by default.
 
 ### Redis key inspection
 

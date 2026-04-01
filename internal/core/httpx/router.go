@@ -53,6 +53,7 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // invalid patterns will panic immediately (fail-fast), which is acceptable
 // for route registration at startup.
 func (m *Mux) Handle(method string, pattern string, h http.Handler, policies ...policy.Policy) {
+	policy.MustValidateRoute(method, pattern, policies...)
 	final := policy.Chain(h, policies...)
 	m.r.Method(method, pattern, final)
 }
