@@ -6,7 +6,7 @@ This directory contains the authoritative documentation for the goAuth authentic
 
 | Goal | Start Here |
 |------|-----------|
-| **First integration** | [README](../README.md) → [usage.md](usage.md) → [examples/http-minimal](../examples/http-minimal/) |
+| **First integration** | [README](../../README.md) → [usage.md](usage.md) → [architecture.md](architecture.md) |
 | **Choose validation mode** | [jwt.md § Validation Modes](jwt.md) → [config.md § Validation Mode](config.md#validation-mode-configvalidationmode) |
 | **Add MFA** | [mfa.md](mfa.md) → [flows.md § TOTP](flows.md#totp-setup) |
 | **Add password reset / email verification** | [password_reset.md](password_reset.md) · [email_verification.md](email_verification.md) |
@@ -84,11 +84,10 @@ Detailed per-flow documentation (supplementary to [flows.md](flows.md)):
 
 | Document | Location |
 |----------|----------|
-| [README.md](../README.md) | Quickstart, features, installation |
-| [CHANGELOG.md](../CHANGELOG.md) | Release changelog (SemVer) |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | Documentation and code conventions |
-| [THREAT_MODEL.md](../THREAT_MODEL.md) | Threat model |
-| [SECURITY.md](../SECURITY.md) | Security policy |
-| [SECURITY_REVIEW_CHECKLIST.md](../SECURITY_REVIEW_CHECKLIST.md) | Review checklist |
-| [SECURITY_FINDINGS.md](../SECURITY_FINDINGS.md) | Findings register |
-| [ARCHITECTURE_INVARIANTS.md](../ARCHITECTURE_INVARIANTS.md) | Architecture invariants |
+| [README.md](../../README.md) | Quickstart, features, installation |
+| [LICENSE](../../LICENSE) | Apache 2.0 licensing terms |
+| [CHANGELOG.md](../../CHANGELOG.md) | Release changelog |
+| [CONTRIBUTING.md](../../CONTRIBUTING.md) | Contribution process and standards |
+| [environment-variables.md](../environment-variables.md) | Runtime configuration reference |
+| [security-env-recommendations.md](../security-env-recommendations.md) | Production security defaults |
+| [workflows.md](../workflows.md) | Day-to-day development workflows |

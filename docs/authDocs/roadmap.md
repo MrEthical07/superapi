@@ -93,7 +93,7 @@ To propose a roadmap item, open an issue with:
 3. Expected impact on API surface, performance, or security posture
 4. Whether it introduces breaking changes
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.
+See [CONTRIBUTING.md](../../CONTRIBUTING.md) for contribution guidelines.
 
 ---
 
@@ -102,4 +102,4 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.
 - [release-readiness.md](release-readiness.md) — Current release status
 - [security.md](security.md) — Security model and mitigations
 - [performance.md](performance.md) — Performance budgets
-- [CHANGELOG.md](../CHANGELOG.md) — Release history
+- [CHANGELOG.md](../../CHANGELOG.md) — Release history

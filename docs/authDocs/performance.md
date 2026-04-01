@@ -104,10 +104,10 @@ Operations that hit Redis are dominated by network RTT in production:
 ### CI Regression Gate
 
 ```bash
-bash security/run_perf_sanity.sh
+go test -run '^$' -bench 'Benchmark(Validate|Refresh)' -benchmem -count=5 ./...
 ```
 
-This runs tracked benchmarks with `-count=5`, compares against baseline via `benchstat`, and fails on > +30% regression. See [perf-budgets.md](perf-budgets.md) for details.
+This command runs tracked benchmarks with `-count=5`. Compare results to your stored baseline (for example using `benchstat`) and fail CI when regressions exceed your agreed threshold. See [perf-budgets.md](perf-budgets.md) for details.
 
 ---
 

@@ -13,7 +13,7 @@ Tracked benchmarks (from `auth_bench_test.go`):
 
 Baseline samples are stored in:
 
-- `security/perf/bench_baseline.txt`
+- A versioned baseline artifact in your repository (for example `performance/results/auth_bench_baseline.txt`)
 
 ## Budget Targets
 
@@ -34,15 +34,14 @@ These are the current working budgets for regression detection:
 CI runs:
 
 ```bash
-bash security/run_perf_sanity.sh
+go test -run '^$' -bench 'Benchmark(Validate|Refresh)' -benchmem -count=5 ./...
 ```
 
-That script:
+Recommended gate workflow:
 
 1. Executes the benchmark subset with `-count=5`.
-2. Prints a `benchstat` comparison between baseline and candidate.
-3. Enforces a +30% regression threshold using
-   `security/cmd/perf-regression`.
+2. Compares baseline vs candidate with `benchstat`.
+3. Enforces a +30% regression threshold in CI.
 
 The gate is intentionally tolerant of small jitter but blocks large slow-path
 regressions.
@@ -52,5 +51,5 @@ regressions.
 When an intentional perf change is accepted:
 
 1. Re-run the benchmark subset on representative hardware.
-2. Update `security/perf/bench_baseline.txt`.
+2. Update your repository baseline artifact (for example `performance/results/auth_bench_baseline.txt`).
 3. Keep the rationale in the PR description (what changed and why).

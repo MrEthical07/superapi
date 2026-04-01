@@ -24,12 +24,28 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# Environment files
 .env
+.env.*
+!.env.example
+
+# Logs and diagnostics
+*.log
+logs/
+tmp/
+*.tmp
+
+# Build artifacts
+bin/
+build/
+dist/
+coverage/
+*.prof
+*.pprof
 
 # Performance test artifacts
 performance/results/
 
 # Editor/IDE
 # .idea/
-# .vscode/
+.vscode/

@@ -103,10 +103,10 @@ goAuth assumes attackers may:
 ### gosec
 
 ```bash
-bash security/run_scanners.sh
+gosec ./...
 ```
 
-Runs `gosec` with exclusions from `security/gosec.excludes`:
+Run `gosec` in CI and apply only narrowly justified exclusions:
 
 | Exclusion | Reason |
 |-----------|--------|
@@ -120,14 +120,14 @@ Runs `gosec` with exclusions from `security/gosec.excludes`:
 govulncheck ./...
 ```
 
-JSON mode with baseline enforcement. New stdlib CVEs fail the build.
+Use JSON mode if your pipeline tracks allowlists or historical exceptions.
 
 ### Baselines
 
-- `security/baselines/gosec.allowlist`
-- `security/baselines/govulncheck.allowlist`
+- Maintain scanner allowlists in your own repository conventions.
+- Keep exceptions small, reviewed, and time-bounded.
 
-All findings tracked in `SECURITY_FINDINGS.md`.
+Track findings in a security register or release notes.
 
 ---
 
