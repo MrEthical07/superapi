@@ -19,7 +19,7 @@ internal/
       app.go               # App struct, New(), Run(), module registration
       deps.go              # Dependencies struct, initDependencies(), closeDependencies()
     config/config.go       # Env-based config + Lint() validation
-    httpx/                 # Router, global middleware, typed JSON, tracing middleware
+    httpx/                 # Router, global middleware, unified handler adapter/context, tracing middleware
     response/response.go   # Response envelope + error mapping
     errors/errors.go       # Typed AppError model
     auth/                  # goAuth adapter, AuthContext, Provider interface
@@ -39,7 +39,6 @@ internal/
     modules.go             # Centralized module registry
     health/                # Liveness + readiness module
     system/                # System utilities (whoami, parse-duration)
-    tenants/               # Tenant CRUD reference module
   devx/modulegen/          # Module generator logic
 db/
   migrations/              # Versioned SQL migration files
@@ -120,9 +119,12 @@ Then: **Router** (chi) matches the route pattern and invokes the handler.
 
 When a route is registered with policies:
 
+- `httpx.Mux.Handle(...)` validates policy invariants via `policy.MustValidateRoute(...)` before registration.
+- Invalid policy stacks panic immediately with `invalid route config: ...` during startup.
+
 ```go
 r.Handle(http.MethodGet, "/api/v1/resource/{id}", handler,
-    policy.AuthRequired(provider, mode),      // P1 (outermost)
+    policy.AuthRequired(authEngine, mode),      // P1 (outermost)
     policy.TenantRequired(),                   // P2
     policy.RateLimit(limiter, rule),           // P3
     policy.CacheRead(cacheMgr, cfg),           // P4 (innermost before handler)
@@ -387,7 +389,7 @@ Modules receive dependencies through `BindDependencies(*app.Dependencies)`. The 
 | `Readiness` | `*readiness.Service` | Always available |
 | `Metrics` | `*metrics.Service` | Always available (may be disabled internally) |
 | `Tracing` | `*tracing.Service` | Always available (may be disabled internally) |
-| `Auth` | `auth.Provider` | DisabledProvider if auth disabled |
+| `AuthEngine` | `*goauth.Engine` | Nil if auth disabled |
 | `AuthMode` | `auth.Mode` | Configured auth mode |
 | `RateLimit` | `config.RateLimitConfig` | Rate limit configuration values |
 | `Cache` | `config.CacheConfig` | Cache configuration values |
@@ -481,30 +483,36 @@ func (s *service) Create(ctx context.Context, req Request) (Result, error) {
 
 ---
 
-## 8. Typed JSON handler adapter
+## 8. Unified handler adapter
 
-File: `internal/core/httpx/typedjson.go`
+Files: `internal/core/httpx/adapter.go`, `internal/core/httpx/context.go`, `internal/core/httpx/typedjson.go`
 
-The `httpx.JSON[Req, Resp]()` adapter converts a typed function into an `http.Handler`:
+`httpx.Adapter[Req, Resp]()` converts a unified typed handler into an `http.Handler`:
 
 ```go
-func JSON[Req any, Resp any](fn JSONHandlerFunc[Req, Resp]) http.Handler
+func Adapter[Req any, Resp any](fn HandlerFunc[Req, Resp]) http.Handler
 ```
 
-Where `JSONHandlerFunc` is:
+Where `HandlerFunc` is:
 
 ```go
-type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp, error)
+type HandlerFunc[Req any, Resp any] func(ctx *httpx.Context, req Req) (Resp, error)
+```
+
+For routes without a request body, use `httpx.NoBody`:
+
+```go
+func (h *Handler) GetByID(ctx *httpx.Context, _ httpx.NoBody) (responseDTO, error)
 ```
 
 **What it does automatically:**
 
-1. Limits body to 1 MiB
-2. Decodes JSON with `DisallowUnknownFields()` (strict)
-3. Rejects multiple JSON values in body
-4. Calls `Validate()` if request implements `Validatable` interface
-5. On success: writes `response.OK(w, resp, requestID)`
-6. On error: maps through `response.Error()` (AppError passthrough, internal sanitized)
+1. Decodes JSON strictly (unknown fields rejected) for non-`NoBody` requests
+2. Rejects multiple JSON values in body
+3. Calls `Validate()` if request implements `Validatable`
+4. Maps errors through `response.Error()` (AppError passthrough, internal sanitized)
+5. Writes envelope responses through `response.OK()`
+6. Supports status-aware responses via `httpx.Result[T]`
 
 **Decode error mapping:**
 
@@ -538,7 +546,7 @@ type JSONHandlerFunc[Req any, Resp any] func(ctx context.Context, req Req) (Resp
 - Request bodies and auth headers are never logged
 - Cache keys never contain raw tokens, IPs, or full query strings
 - `Set-Cookie` responses are never cached
-- Authenticated responses are bypassed from cache unless explicitly configured with vary-by dimensions
+- Unsafe authenticated cache configs are rejected at route registration (`CacheRead` on authenticated routes must vary by user or tenant)
 - Tenant mismatch returns 404 (not 403) to prevent tenant enumeration
 
 ### Cardinality safety

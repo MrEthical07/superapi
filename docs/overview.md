@@ -6,6 +6,7 @@ SuperAPI is a production-grade Go API template for SaaS projects. It provides a 
 
 - Module-based architecture (add features without touching core wiring)
 - Route-level policy engine (auth, rate limiting, caching, tenant isolation, RBAC)
+- Strict route policy validation (invalid policy stacks fail fast at startup)
 - Postgres (pgx v5 + sqlc) and Redis (go-redis v9) integration
 - Prometheus metrics, OpenTelemetry tracing, structured logging (zerolog)
 - goAuth-backed authentication (JWT validation, session checks, MFA-aware)
@@ -105,7 +106,9 @@ Notes:
 | GET | `/healthz` | Process liveness (always 200) |
 | GET | `/readyz` | Dependency readiness (200 or 503) |
 | GET | `/metrics` | Prometheus metrics |
-| POST | `/system/parse-duration` | Typed JSON handler example |
+| POST | `/system/parse-duration` | Unified adapter JSON endpoint example |
+| POST | `/api/v1/system/auth/login` | Session login (returns access + refresh tokens) |
+| POST | `/api/v1/system/auth/refresh` | Session refresh (rotates access + refresh tokens) |
 | GET | `/api/v1/system/whoami` | Auth-protected principal info |
 
 ## Where to start
@@ -115,3 +118,4 @@ Notes:
 3. Read [docs/policies.md](policies.md) for auth/rate-limit/cache/tenant policy reference
 4. Read [docs/crud-examples.md](crud-examples.md) for full CRUD with recommended policy stacks
 5. Use `make module` for the interactive wizard, or `make module name=<your_module>` for flags-only scaffolding
+6. Run `go run ./cmd/superapi-verify ./...` (or `make verify`) before pushing route changes

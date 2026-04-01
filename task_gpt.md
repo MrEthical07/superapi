@@ -147,7 +147,673 @@ This becomes your **reference implementation** for future modules.
 ## Testing / quality
 
 * [ ] integration test harness for DB/Redis (containerized or local optional)
-* [ ] load test scripts (k6/vegeta) for 10k RPS target scenarios
-* [ ] benchmark tests for hot path (router + adapter + middleware chain)
+* [x] load test scripts (k6/vegeta) for 10k RPS target scenarios
+* [x] benchmark tests for hot path (router + adapter + middleware chain)
+
+---
+
+Next:
+
+# 🧱 SUPERAPI HARDENING ROADMAP (ENFORCEMENT + DX)
+
+---
+
+# 🔴 TASK 1 — Policy Validation Engine (Runtime Enforcement)
+
+## 🎯 Goal
+
+Make it **impossible to register unsafe routes**.
+
+---
+
+## ❗ Problem
+
+Right now:
+
+* Policy order matters but isn’t enforced
+* Missing policies = silent security bugs
+* Misconfiguration is only documented
+
+---
+
+## ✅ What to build
+
+### 1.1 Add validation layer inside router
+
+Hook into:
+
+```go
+r.Handle(method, pattern, handler, policies...)
+```
+
+Before registration:
+
+```go
+validateRoute(method, pattern, policies)
+```
+
+---
+
+### 1.2 Validation rules (STRICT)
+
+Implement these checks:
+
+#### 🔐 Auth rules
+
+* If any of:
+
+  * `RequirePerm`
+  * `RequireRole`
+  * `TenantRequired`
+
+  👉 Then `AuthRequired` MUST exist
+
+---
+
+#### 🧱 Policy order rules
+
+Enforce exact order:
+
+1. AuthRequired
+2. TenantRequired / TenantMatch
+3. RBAC (Role/Perm)
+4. RateLimit
+5. CacheRead / CacheInvalidate
+
+👉 If wrong → panic
+
+---
+
+#### 🏢 Tenant rules
+
+If route:
+
+* uses `TenantMatchFromPath`
+  👉 MUST also include `TenantRequired`
+
+---
+
+#### 🧠 Cache safety rules
+
+For `CacheRead`:
+
+If route has `AuthRequired`:
+
+* MUST have one of:
+
+  * `VaryBy.UserID`
+  * `VaryBy.TenantID`
+  * `AllowAuthenticated=true`
+
+Else:
+👉 panic
+
+---
+
+#### ✍️ Write route rules
+
+For methods:
+
+* POST / PUT / PATCH / DELETE
+
+If route has:
+
+* corresponding GET with cache tags
+
+👉 MUST include `CacheInvalidate` with same tag
+
+(Keep simple first: warn or panic if no invalidate)
+
+---
+
+### 1.3 Failure behavior
+
+👉 Always:
+
+```go
+panic("invalid route configuration: ...")
+```
+
+No logs. No warnings.
+
+---
+
+## 📁 Files to create
+
+```
+internal/core/policy/validator.go
+internal/core/policy/validator_rules.go
+```
+
+---
+
+## 🧪 Tests
+
+* invalid order → panic
+* missing auth → panic
+* unsafe cache → panic
+* valid route → passes
+
+---
+
+## 📚 Docs update
+
+Update:
+
+* `docs/policies.md`
+
+Add section:
+
+```
+## Policy Validation (Strict Mode)
+
+- Routes are validated at startup
+- Invalid configurations will panic
+- This guarantees security invariants
+```
+
+---
+
+## ⚙️ Best implementation approach
+
+* Represent policies as identifiable types (not anonymous funcs)
+* Use type assertions or wrapper structs:
+
+```go
+type PolicyMeta struct {
+    Type PolicyType
+}
+```
+
+---
+
+---
+
+# 🟠 TASK 2 — Policy Presets (Reduce Cognitive Load)
+
+## 🎯 Goal
+
+Stop repeating policy chains. Reduce human error.
+
+---
+
+## ❗ Problem
+
+Every route manually defines:
+
+* auth
+* tenant
+* rbac
+* rate limit
+* cache
+
+👉 Too much room for mistakes.
+
+---
+
+## ✅ What to build
+
+Create preset builders:
+
+### 2.1 Core presets
+
+```go
+policy.TenantRead(opts...)
+policy.TenantWrite(opts...)
+policy.PublicRead(opts...)
+```
+
+---
+
+### 2.2 Example
+
+```go
+r.Handle(GET, "/projects/{id}", handler,
+    policy.TenantRead(
+        policy.WithCache(30*time.Second, "project"),
+    ),
+)
+```
+
+---
+
+### 2.3 Preset internals
+
+Each preset returns:
+
+```go
+[]policy.Policy
+```
+
+Example:
+
+TenantRead:
+
+* AuthRequired
+* TenantRequired
+* RateLimit (tenant scoped)
+* CacheRead (safe defaults)
+
+---
+
+### 2.4 Config options
+
+Use functional options:
+
+```go
+policy.WithCache(ttl, tags...)
+policy.WithRateLimit(limit, window)
+policy.WithStrictAuth()
+```
+
+---
+
+## 📁 Files
+
+```
+internal/core/policy/presets.go
+internal/core/policy/options.go
+```
+
+---
+
+## 🧪 Tests
+
+* preset generates correct order
+* preset passes validator
+
+---
+
+## 📚 Docs update
+
+Update:
+
+* `docs/policies.md`
+
+Add:
+
+```
+## Policy Presets
+
+Recommended usage:
+- TenantRead
+- TenantWrite
+...
+```
+
+---
+
+## ⚙️ Best approach
+
+* Build presets ON TOP of existing policies (no rewrite)
+* Keep them composable but opinionated
+
+---
+
+---
+
+# 🟡 TASK 3 — Unsafe Config Elimination
+
+## 🎯 Goal
+
+Remove all “silent safe fallbacks”
+
+---
+
+## ❗ Problem
+
+Current system:
+
+* silently bypasses unsafe cache
+* allows missing tenant checks
+* allows weak configs
+
+---
+
+## ✅ What to change
+
+### 3.1 CacheRead behavior
+
+Current:
+
+> bypass if unsafe
+
+Change:
+
+```go
+panic("unsafe cache config: missing vary-by for authenticated route")
+```
+
+---
+
+### 3.2 Tenant enforcement
+
+If route path contains:
+
+```
+{tenant_id}
+```
+
+👉 auto-require:
+
+* TenantMatchFromPath
+  OR
+* panic
+
+---
+
+### 3.3 Auth enforcement
+
+If RBAC exists without auth:
+👉 panic (already in validator)
+
+---
+
+## 📁 Files
+
+Modify:
+
+```
+internal/core/policy/cache.go
+internal/core/policy/auth.go
+```
+
+---
+
+## 🧪 Tests
+
+* unsafe cache → panic
+* missing tenant policy → panic
+
+---
+
+## 📚 Docs update
+
+Add section:
+
+```
+## Safe-by-default guarantees
+
+SuperAPI will refuse to start if:
+- cache is unsafe
+- auth is missing where required
+...
+```
+
+---
+
+---
+
+# 🟢 TASK 4 — Static Analyzer (CI Enforcement)
+
+## 🎯 Goal
+
+Catch issues BEFORE runtime.
+
+---
+
+## ❗ Problem
+
+Runtime panic is good — but CI should fail earlier.
+
+---
+
+## ✅ What to build
+
+### 4.1 CLI tool
+
+```bash
+superapi verify ./...
+```
+
+---
+
+### 4.2 What it checks
+
+* Parse AST of `routes.go`
+* Extract:
+
+  * route
+  * policies
+
+Run same validation logic as runtime
+
+---
+
+### 4.3 Output
+
+```
+[ERROR] projects.routes.go:45
+Missing TenantRequired for route /api/v1/tenants/{tenant_id}/projects
+```
+
+---
+
+## 📁 Files
+
+```
+cmd/superapi-verify/main.go
+internal/tools/validator/*
+```
+
+---
+
+## 🧪 Tests
+
+* broken module → fails
+* valid module → passes
+
+---
+
+## 📚 Docs update
+
+Update:
+
+* `docs/workflows.md`
+
+Add:
+
+```bash
+make verify
+```
+
+---
+
+## ⚙️ Best approach
+
+* reuse validation logic from runtime
+* don’t duplicate rules
+
+---
+
+---
+
+# 🔵 TASK 5 — Handler Unification (Remove Dual Pattern)
+
+## 🎯 Goal
+
+Eliminate split between typed and manual handlers
+
+---
+
+## ❗ Problem
+
+Current:
+
+* typed handler → no path params
+* manual handler → messy
+
+---
+
+## ✅ What to build
+
+### 5.1 New handler signature
+
+```go
+func(ctx *httpx.Context, req Request) (Response, error)
+```
+
+---
+
+### 5.2 Context provides:
+
+```go
+ctx.Param("id")
+ctx.Query("limit")
+ctx.Header("X")
+ctx.Auth()
+```
+
+---
+
+### 5.3 Replace:
+
+* `httpx.JSON`
+* manual handlers
+
+👉 with single adapter
+
+---
+
+## 📁 Files
+
+```
+internal/core/httpx/context.go
+internal/core/httpx/adapter.go
+```
+
+---
+
+## 🧪 Tests
+
+* JSON decode works
+* path params accessible
+* validation works
+
+---
+
+## 📚 Docs update
+
+Update:
+
+* `docs/modules.md`
+* `docs/crud-examples.md`
+
+Remove dual handler explanation
+
+---
+
+## ⚙️ Best approach
+
+* wrap `http.Request`
+* inject parsed values once
+* keep zero allocations where possible
+
+---
+
+---
+
+# 🟣 TASK 6 — Config Profiles (Reduce Setup Friction)
+
+## 🎯 Goal
+
+Spin up new project with minimal config
+
+---
+
+## ❗ Problem
+
+Too many env vars → friction
+
+---
+
+## ✅ What to build
+
+### 6.1 Profiles
+
+```bash
+APP_PROFILE=dev
+APP_PROFILE=prod
+APP_PROFILE=minimal
+```
+
+---
+
+### 6.2 Profile presets
+
+Each sets defaults:
+
+#### minimal
+
+* no auth
+* no cache
+* no rate limit
+
+#### dev
+
+* auth=jwt_only
+* cache enabled
+* rate limit relaxed
+
+#### prod
+
+* auth=strict
+* cache enabled
+* rate limit strict
+
+---
+
+### 6.3 Override logic
+
+Env vars override profile
+
+---
+
+## 📁 Files
+
+```
+internal/core/config/profile.go
+```
+
+---
+
+## 🧪 Tests
+
+* profile loads correct defaults
+* overrides work
+
+---
+
+## 📚 Docs update
+
+Update:
+
+* `docs/environment-variables.md`
+
+Add:
+
+```
+## Profiles
+```
+
+---
+
+## ⚙️ Best approach
+
+* apply profile BEFORE env parsing
+* then override with explicit env
+
+---
+
+# 🧾 FINAL PRIORITY ORDER
+
+Do in this order:
+
+1. 🔴 Policy validation engine (foundation)
+2. 🟡 Unsafe config elimination
+3. 🟠 Policy presets
+4. 🔵 Handler unification
+5. 🟣 Config profiles
+6. 🟢 Static analyzer (final polish)
 
 ---

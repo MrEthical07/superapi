@@ -10,8 +10,23 @@ Source of truth: `internal/core/config/config.go` (`Load()` defaults + `Lint()` 
 
 | Env var | Default | Notes |
 |---|---|---|
+| `APP_PROFILE` | empty | Optional profile defaults. Allowed: `minimal`, `dev`, `prod`. Invalid values fail startup lint. |
 | `APP_ENV` | `dev` | `prod`/`production` changes defaults for some settings (security headers, tracing insecure transport, metrics auth requirement). |
 | `APP_SERVICE_NAME` | `api-template` | Used as service identity; tracing service name falls back to this value when not explicitly set. |
+
+### APP_PROFILE defaults and precedence
+
+`APP_PROFILE` injects default values before config parsing:
+
+- `minimal`: disables auth/cache/ratelimit/postgres/redis wiring.
+- `dev`: enables auth/cache/ratelimit/postgres/redis with dev-friendly defaults.
+- `prod`: enables strict auth and fail-closed defaults for cache/rate-limit.
+
+Precedence order for every key is:
+
+1. Explicit environment variable.
+2. Active profile default.
+3. Built-in fallback in `config.Load()`.
 
 ---
 

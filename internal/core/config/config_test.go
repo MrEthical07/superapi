@@ -338,3 +338,66 @@ func TestLintRejectsInvalidRateLimitDefaults(t *testing.T) {
 		t.Fatalf("expected lint error for invalid ratelimit default limit")
 	}
 }
+
+func TestLoadAppliesMinimalProfileDefaults(t *testing.T) {
+	t.Setenv("APP_PROFILE", "minimal")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Auth.Enabled {
+		t.Fatalf("expected auth disabled in minimal profile")
+	}
+	if cfg.Cache.Enabled {
+		t.Fatalf("expected cache disabled in minimal profile")
+	}
+	if cfg.RateLimit.Enabled {
+		t.Fatalf("expected ratelimit disabled in minimal profile")
+	}
+}
+
+func TestLoadAppliesDevProfileDefaults(t *testing.T) {
+	t.Setenv("APP_PROFILE", "dev")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Auth.Enabled {
+		t.Fatalf("expected auth enabled in dev profile")
+	}
+	if cfg.Auth.Mode != "jwt_only" {
+		t.Fatalf("auth mode=%q want=%q", cfg.Auth.Mode, "jwt_only")
+	}
+	if !cfg.Cache.Enabled {
+		t.Fatalf("expected cache enabled in dev profile")
+	}
+	if !cfg.RateLimit.Enabled {
+		t.Fatalf("expected ratelimit enabled in dev profile")
+	}
+}
+
+func TestLoadEnvOverridesProfileDefaults(t *testing.T) {
+	t.Setenv("APP_PROFILE", "dev")
+	t.Setenv("AUTH_ENABLED", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Auth.Enabled {
+		t.Fatalf("expected env override AUTH_ENABLED=false to win over profile")
+	}
+}
+
+func TestLoadRejectsInvalidProfile(t *testing.T) {
+	t.Setenv("APP_PROFILE", "unknown")
+
+	if _, err := Load(); err == nil {
+		t.Fatalf("expected load error for invalid profile")
+	}
+}

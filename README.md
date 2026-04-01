@@ -27,6 +27,7 @@ go run ./cmd/api
 | Full CRUD walkthrough | [docs/crud-examples.md](docs/crud-examples.md) |
 | Route policies (auth, rate limit, cache) | [docs/policies.md](docs/policies.md) |
 | Cache deep dive | [docs/cache-guide.md](docs/cache-guide.md) |
+| Performance testing runbook | [docs/performance-testing.md](docs/performance-testing.md) |
 | Auth & goAuth integration | [docs/auth-goauth.md](docs/auth-goauth.md) |
 | Auth bootstrap generation | [docs/auth-bootstrap.md](docs/auth-bootstrap.md) |
 
@@ -180,21 +181,20 @@ Policy helpers:
 
 RBAC helpers:
 
-- `policy.RequireRole(...)`: any-of roles.
 - `policy.RequirePerm(...)`: all-of permissions.
 - `policy.RequireAnyPerm(...)`: any-of permissions.
 
 RBAC status rules:
 
 - Missing auth context -> `401 unauthorized`.
-- Authenticated but missing required role/permission -> `403 forbidden`.
+- Authenticated but missing required permission -> `403 forbidden`.
 
 Recommended attachment order for tenant-scoped routes:
 
 1. `AuthRequired(...)`
 2. `TenantRequired()`
 3. `TenantMatchFromPath("tenant_id")` (for routes containing tenant id in path)
-4. RBAC checks (`RequireRole` / `RequirePerm` / `RequireAnyPerm`) as needed.
+4. RBAC checks (`RequirePerm` / `RequireAnyPerm`) as needed.
 
 Demonstration pattern:
 

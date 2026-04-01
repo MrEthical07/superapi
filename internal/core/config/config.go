@@ -13,6 +13,7 @@ import (
 
 type Config struct {
 	Env         string
+	Profile     string
 	ServiceName string
 	HTTP        HTTPConfig
 	Log         LogConfig
@@ -140,6 +141,13 @@ type TracingConfig struct {
 }
 
 func Load() (*Config, error) {
+	profile := strings.TrimSpace(os.Getenv("APP_PROFILE"))
+	restoreProfileDefaults, err := activateProfile(profile)
+	if err != nil {
+		return nil, err
+	}
+	defer restoreProfileDefaults()
+
 	env := getenv("APP_ENV", "dev")
 	isProdEnv := strings.EqualFold(strings.TrimSpace(env), "prod") || strings.EqualFold(strings.TrimSpace(env), "production")
 	securityHeadersDefault := isProdEnv
@@ -147,6 +155,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Env:         env,
+		Profile:     profile,
 		ServiceName: getenv("APP_SERVICE_NAME", "api-template"),
 		HTTP: HTTPConfig{
 			Addr:              getenv("HTTP_ADDR", ":8080"),
@@ -252,6 +261,12 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) Lint() error {
+	if profile := strings.TrimSpace(os.Getenv("APP_PROFILE")); profile != "" {
+		if _, err := resolveProfileDefaults(profile); err != nil {
+			return err
+		}
+	}
+
 	if c.ServiceName == "" {
 		return errors.New("service name cannot be empty")
 	}
@@ -613,6 +628,11 @@ func (c *Config) Lint() error {
 func getenv(key, fallback string) string {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	return v
@@ -620,6 +640,11 @@ func getenv(key, fallback string) string {
 
 func getInt(key string, fallback int) int {
 	v := os.Getenv(key)
+	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
 	if v == "" {
 		return fallback
 	}
@@ -633,6 +658,11 @@ func getInt(key string, fallback int) int {
 func getInt64(key string, fallback int64) int64 {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
@@ -644,6 +674,11 @@ func getInt64(key string, fallback int64) int64 {
 
 func getBool(key string, fallback bool) bool {
 	v := os.Getenv(key)
+	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
 	if v == "" {
 		return fallback
 	}
@@ -657,6 +692,11 @@ func getBool(key string, fallback bool) bool {
 func getDuration(key string, fallback time.Duration) time.Duration {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	d, err := time.ParseDuration(v)
@@ -669,6 +709,11 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 func getFloat64(key string, fallback float64) float64 {
 	v := os.Getenv(key)
 	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
 		return fallback
 	}
 	n, err := strconv.ParseFloat(v, 64)
@@ -680,6 +725,11 @@ func getFloat64(key string, fallback float64) float64 {
 
 func getCSV(key string, fallback []string) []string {
 	v := os.Getenv(key)
+	if strings.TrimSpace(v) == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
 	if strings.TrimSpace(v) == "" {
 		return fallback
 	}

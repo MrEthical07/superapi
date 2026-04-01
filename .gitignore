@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# Performance test artifacts
+performance/results/
+
 # Editor/IDE
 # .idea/
 # .vscode/
