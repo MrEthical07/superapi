@@ -136,12 +136,12 @@ func renderQueries(cfg AuthGenConfig) string {
 	insertCols, insertParams := buildInsertColumns(cfg)
 
 	// -- CreateAuthUser
-	b.WriteString(fmt.Sprintf("-- name: CreateAuthUser :one\n"))
+	b.WriteString("-- name: CreateAuthUser :one\n")
 	b.WriteString(fmt.Sprintf("INSERT INTO %s (%s)\nVALUES (%s)\nRETURNING %s;\n\n",
 		table, strings.Join(insertCols, ", "), strings.Join(insertParams, ", "), strings.Join(selectCols, ", ")))
 
 	// -- GetAuthUserByID
-	b.WriteString(fmt.Sprintf("-- name: GetAuthUserByID :one\n"))
+	b.WriteString("-- name: GetAuthUserByID :one\n")
 	b.WriteString(fmt.Sprintf("SELECT %s\nFROM %s\nWHERE %s = $1",
 		strings.Join(selectCols, ", "), table, idCol))
 	if cfg.SoftDelete {
@@ -150,7 +150,7 @@ func renderQueries(cfg AuthGenConfig) string {
 	b.WriteString(";\n\n")
 
 	// -- GetAuthUserByLogin
-	b.WriteString(fmt.Sprintf("-- name: GetAuthUserByLogin :one\n"))
+	b.WriteString("-- name: GetAuthUserByLogin :one\n")
 	b.WriteString(fmt.Sprintf("SELECT %s\nFROM %s\nWHERE %s = $1",
 		strings.Join(selectCols, ", "), table, loginCol))
 	if cfg.SoftDelete {
@@ -160,7 +160,7 @@ func renderQueries(cfg AuthGenConfig) string {
 
 	// -- UpdateAuthUserPasswordHash
 	if cfg.PasswordHash {
-		b.WriteString(fmt.Sprintf("-- name: UpdateAuthUserPasswordHash :exec\n"))
+		b.WriteString("-- name: UpdateAuthUserPasswordHash :exec\n")
 		updateSet := "password_hash = $2"
 		if cfg.Timestamps {
 			updateSet += ", updated_at = NOW()"
@@ -170,7 +170,7 @@ func renderQueries(cfg AuthGenConfig) string {
 
 	// -- UpdateAuthUserStatus
 	if cfg.StatusEnabled {
-		b.WriteString(fmt.Sprintf("-- name: UpdateAuthUserStatus :one\n"))
+		b.WriteString("-- name: UpdateAuthUserStatus :one\n")
 		updateSet := "status = $2"
 		if cfg.Timestamps {
 			updateSet += ", updated_at = NOW()"
@@ -181,7 +181,7 @@ func renderQueries(cfg AuthGenConfig) string {
 
 	// -- UpdateAuthUserVerification
 	if cfg.VerificationFlag {
-		b.WriteString(fmt.Sprintf("-- name: UpdateAuthUserVerification :one\n"))
+		b.WriteString("-- name: UpdateAuthUserVerification :one\n")
 		updateSet := "is_verified = $2"
 		if cfg.Timestamps {
 			updateSet += ", updated_at = NOW()"
@@ -192,14 +192,14 @@ func renderQueries(cfg AuthGenConfig) string {
 
 	// -- UpdateAuthUserLastLogin
 	if cfg.LastLogin {
-		b.WriteString(fmt.Sprintf("-- name: UpdateAuthUserLastLogin :exec\n"))
+		b.WriteString("-- name: UpdateAuthUserLastLogin :exec\n")
 		b.WriteString(fmt.Sprintf("UPDATE %s SET last_login_at = NOW() WHERE %s = $1;\n\n",
 			table, idCol))
 	}
 
 	// -- GetAuthUserByTenant (if tenant enabled)
 	if cfg.TenantEnabled {
-		b.WriteString(fmt.Sprintf("-- name: GetAuthUserByIDAndTenant :one\n"))
+		b.WriteString("-- name: GetAuthUserByIDAndTenant :one\n")
 		b.WriteString(fmt.Sprintf("SELECT %s\nFROM %s\nWHERE %s = $1 AND tenant_id = $2",
 			strings.Join(selectCols, ", "), table, idCol))
 		if cfg.SoftDelete {
@@ -255,23 +255,24 @@ func buildSelectColumns(cfg AuthGenConfig) []string {
 func buildInsertColumns(cfg AuthGenConfig) (cols []string, params []string) {
 	paramIdx := 1
 
-	if cfg.IDType == IDTypeEmail {
+	switch cfg.IDType {
+	case IDTypeEmail:
 		cols = append(cols, "email")
 		params = append(params, fmt.Sprintf("$%d", paramIdx))
 		paramIdx++
-	} else if cfg.IDType == IDTypeCustomStr {
+	case IDTypeCustomStr:
 		cols = append(cols, "id")
 		params = append(params, fmt.Sprintf("$%d", paramIdx))
 		paramIdx++
 		cols = append(cols, cfg.LoginColumnName())
 		params = append(params, fmt.Sprintf("$%d", paramIdx))
 		paramIdx++
-	} else if cfg.IDType == IDTypeBigint {
+	case IDTypeBigint:
 		// auto-generated ID, don't include in INSERT
 		cols = append(cols, cfg.LoginColumnName())
 		params = append(params, fmt.Sprintf("$%d", paramIdx))
 		paramIdx++
-	} else {
+	default:
 		// UUID — can be auto-generated or provided
 		cols = append(cols, cfg.LoginColumnName())
 		params = append(params, fmt.Sprintf("$%d", paramIdx))
@@ -612,16 +613,17 @@ func buildMapFunc(cfg AuthGenConfig) string {
 	b.WriteString("\treturn goauth.UserRecord{\n")
 
 	// UserID
-	if cfg.IDType == IDTypeEmail {
+	switch cfg.IDType {
+	case IDTypeEmail:
 		b.WriteString("\t\tUserID:     row.Email,\n")
 		b.WriteString("\t\tIdentifier: row.Email,\n")
-	} else if cfg.IDType == IDTypeUUID {
+	case IDTypeUUID:
 		b.WriteString("\t\tUserID:     formatUUID(row.ID),\n")
 		b.WriteString(fmt.Sprintf("\t\tIdentifier: row.%s,\n", toPascal(cfg.LoginColumnName())))
-	} else if cfg.IDType == IDTypeBigint {
+	case IDTypeBigint:
 		b.WriteString("\t\tUserID:     strconv.FormatInt(row.ID, 10),\n")
 		b.WriteString(fmt.Sprintf("\t\tIdentifier: row.%s,\n", toPascal(cfg.LoginColumnName())))
-	} else {
+	default:
 		b.WriteString("\t\tUserID:     row.ID,\n")
 		b.WriteString(fmt.Sprintf("\t\tIdentifier: row.%s,\n", toPascal(cfg.LoginColumnName())))
 	}
@@ -660,16 +662,17 @@ func buildMapFunc(cfg AuthGenConfig) string {
 func buildCreateParams(cfg AuthGenConfig) []string {
 	var params []string
 
-	if cfg.IDType == IDTypeEmail {
+	switch cfg.IDType {
+	case IDTypeEmail:
 		params = append(params, "Email: input.Identifier")
-	} else if cfg.IDType == IDTypeCustomStr {
+	case IDTypeCustomStr:
 		params = append(params, "ID: input.Identifier")
 		loginField := toPascal(cfg.LoginColumnName())
 		params = append(params, fmt.Sprintf("%s: input.Identifier", loginField))
-	} else if cfg.IDType == IDTypeBigint {
+	case IDTypeBigint:
 		loginField := toPascal(cfg.LoginColumnName())
 		params = append(params, fmt.Sprintf("%s: input.Identifier", loginField))
-	} else {
+	default:
 		// UUID — auto-generated by DB
 		loginField := toPascal(cfg.LoginColumnName())
 		params = append(params, fmt.Sprintf("%s: input.Identifier", loginField))

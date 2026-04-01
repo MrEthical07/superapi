@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -306,9 +305,4 @@ func parseNumberList(input string, max int) []int {
 		}
 	}
 	return result
-}
-
-// readStdinScanner creates a scanner for stdin.
-func readStdinScanner() *bufio.Scanner {
-	return bufio.NewScanner(os.Stdin)
 }

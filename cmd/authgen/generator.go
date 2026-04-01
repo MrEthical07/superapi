@@ -46,12 +46,12 @@ func GenerateAuth(workspaceRoot string, cfg AuthGenConfig, force bool) error {
 	}
 
 	// --- Step 5: Update goauth_provider.go wiring ---
-	if err := updateGoAuthProvider(workspaceRoot, cfg); err != nil {
+	if err := updateGoAuthProvider(workspaceRoot); err != nil {
 		return fmt.Errorf("update goauth provider wiring: %w", err)
 	}
 
 	// --- Step 6: Update deps.go wiring ---
-	if err := updateDeps(workspaceRoot, cfg); err != nil {
+	if err := updateDeps(workspaceRoot); err != nil {
 		return fmt.Errorf("update deps wiring: %w", err)
 	}
 
@@ -226,7 +226,7 @@ func generateProvider(workspaceRoot string, cfg AuthGenConfig) error {
 	return nil
 }
 
-func updateGoAuthProvider(workspaceRoot string, cfg AuthGenConfig) error {
+func updateGoAuthProvider(workspaceRoot string) error {
 	providerPath := filepath.Join(workspaceRoot, "internal", "core", "auth", "goauth_provider.go")
 	content, err := os.ReadFile(providerPath)
 	if err != nil {
@@ -248,16 +248,12 @@ func updateGoAuthProvider(workspaceRoot string, cfg AuthGenConfig) error {
 	// Update function signature
 	oldSig := "func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode) (Provider, func(), error) {"
 	newSig := "func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (Provider, func(), error) {"
-	if strings.Contains(updated, oldSig) {
-		updated = strings.Replace(updated, oldSig, newSig, 1)
-	}
+	updated = strings.Replace(updated, oldSig, newSig, 1)
 
 	// Replace noopUserProvider{} with the parameter
 	oldProvider := "WithUserProvider(noopUserProvider{})."
 	newProvider := "WithUserProvider(userProvider)."
-	if strings.Contains(updated, oldProvider) {
-		updated = strings.Replace(updated, oldProvider, newProvider, 1)
-	}
+	updated = strings.Replace(updated, oldProvider, newProvider, 1)
 
 	if updated != original {
 		if err := os.WriteFile(providerPath, []byte(updated), 0o644); err != nil {
@@ -269,7 +265,7 @@ func updateGoAuthProvider(workspaceRoot string, cfg AuthGenConfig) error {
 	return nil
 }
 
-func updateDeps(workspaceRoot string, cfg AuthGenConfig) error {
+func updateDeps(workspaceRoot string) error {
 	depsPath := filepath.Join(workspaceRoot, "internal", "core", "app", "deps.go")
 	content, err := os.ReadFile(depsPath)
 	if err != nil {
@@ -292,12 +288,10 @@ func updateDeps(workspaceRoot string, cfg AuthGenConfig) error {
 	oldCall := "auth.NewGoAuthEngineProvider(deps.Redis, authMode)"
 	newCall := "auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres))"
 
-	if strings.Contains(updated, oldCall) {
-		updated = strings.Replace(updated,
-			oldCall,
-			"auth.NewGoAuthEngineProvider(deps.Redis, authMode, "+newCall+")",
-			1)
-	}
+	updated = strings.Replace(updated,
+		oldCall,
+		"auth.NewGoAuthEngineProvider(deps.Redis, authMode, "+newCall+")",
+		1)
 
 	if updated != original {
 		if err := os.WriteFile(depsPath, []byte(updated), 0o644); err != nil {

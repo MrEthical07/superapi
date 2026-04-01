@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/MrEthical07/superapi/internal/core/cache"
@@ -115,15 +114,4 @@ func mustValidatePreset(name, method, pattern string, policies []Policy) {
 	if err := ValidateRouteMetadata(method, pattern, metas); err != nil {
 		panicInvalidRouteConfigf("%s preset failed validator: %v", name, err)
 	}
-}
-
-func _validatePresetPolicyOrder(name string, policies []Policy) error {
-	metas, err := DescribePolicies(policies...)
-	if err != nil {
-		return err
-	}
-	if len(metas) == 0 {
-		return fmt.Errorf("%s preset produced no policies", name)
-	}
-	return ValidateRouteMetadata(http.MethodGet, "/api/v1/resource/{id}", metas)
 }
