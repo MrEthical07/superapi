@@ -131,20 +131,6 @@ func (c AuthGenConfig) Validate() error {
 		}
 	}
 
-	// If login method is email, the login column must be email-compatible.
-	if c.LoginMethod == LoginEmail && c.IDType == IDTypeEmail {
-		// Email as PK and login=email is fine, they share the same column.
-	}
-
-	// Bitmask requires integer-compatible storage.
-	if c.PermissionsEnabled && c.PermissionsMode == PermsBitmask {
-		// Valid — BIGINT column will be generated.
-	}
-
-	if !c.PasswordHash {
-		// Allowed but unusual; warn via summary.
-	}
-
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
 	}

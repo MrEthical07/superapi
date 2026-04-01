@@ -307,7 +307,6 @@ func buildInsertColumns(cfg AuthGenConfig) (cols []string, params []string) {
 	if cfg.VerificationFlag {
 		cols = append(cols, "is_verified")
 		params = append(params, fmt.Sprintf("$%d", paramIdx))
-		paramIdx++
 	}
 
 	return cols, params
