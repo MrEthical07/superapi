@@ -2,8 +2,11 @@ name: ci
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "**" ]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -29,11 +32,10 @@ jobs:
 
       - name: Install golangci-lint
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b $(go env GOPATH)/bin v1.64.6
+          GOBIN=$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.6
 
       - name: Lint
-        run: golangci-lint run
+        run: $(go env GOPATH)/bin/golangci-lint run
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest

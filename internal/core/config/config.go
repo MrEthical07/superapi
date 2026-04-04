@@ -327,8 +327,8 @@ func Load() (*Config, error) {
 		Postgres: PostgresConfig{
 			Enabled:            getBool("POSTGRES_ENABLED", false),
 			URL:                getenv("POSTGRES_URL", ""),
-			MaxConns:           int32(getInt("POSTGRES_MAX_CONNS", 10)),
-			MinConns:           int32(getInt("POSTGRES_MIN_CONNS", 0)),
+			MaxConns:           getInt32("POSTGRES_MAX_CONNS", 10),
+			MinConns:           getInt32("POSTGRES_MIN_CONNS", 0),
 			ConnMaxLifetime:    getDuration("POSTGRES_CONN_MAX_LIFETIME", 30*time.Minute),
 			ConnMaxIdleTime:    getDuration("POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
 			StartupPingTimeout: getDuration("POSTGRES_STARTUP_PING_TIMEOUT", 3*time.Second),
@@ -665,10 +665,10 @@ func (c *Config) Lint() error {
 	if err := lintBoolEnv("POSTGRES_ENABLED"); err != nil {
 		return err
 	}
-	if err := lintIntEnv("POSTGRES_MAX_CONNS"); err != nil {
+	if err := lintInt32Env("POSTGRES_MAX_CONNS"); err != nil {
 		return err
 	}
-	if err := lintIntEnv("POSTGRES_MIN_CONNS"); err != nil {
+	if err := lintInt32Env("POSTGRES_MIN_CONNS"); err != nil {
 		return err
 	}
 	if err := lintDurationEnv("POSTGRES_CONN_MAX_LIFETIME"); err != nil {
@@ -769,6 +769,23 @@ func getInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func getInt32(key string, fallback int32) int32 {
+	v := os.Getenv(key)
+	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return fallback
+	}
+	return int32(n)
 }
 
 func getInt64(key string, fallback int64) int64 {
@@ -904,6 +921,17 @@ func lintFloat64Env(key string) error {
 		return nil
 	}
 	if _, err := strconv.ParseFloat(v, 64); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func lintInt32Env(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := strconv.ParseInt(v, 10, 32); err != nil {
 		return fmt.Errorf("invalid %s: %q", key, v)
 	}
 	return nil

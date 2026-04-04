@@ -135,6 +135,58 @@ func TestRedisLimiterFailOpenOnRedisError(t *testing.T) {
 	}
 }
 
+func TestInt64ToIntBoundedSaturation(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int64
+		want int
+	}{
+		{"at max", maxIntBound, int(maxIntBound)},
+		{"at min", minIntBound, int(minIntBound)},
+		{"zero", 0, 0},
+		{"positive", 42, 42},
+		{"negative", -42, -42},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := int64ToIntBounded(tc.in)
+			if got != tc.want {
+				t.Fatalf("int64ToIntBounded(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAllowRemainingDoesNotOverflowOnLargeCurrentCount(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	limiter, err := NewRedisLimiter(client, Config{Env: "test", FailOpen: true})
+	if err != nil {
+		t.Fatalf("NewRedisLimiter() error = %v", err)
+	}
+
+	req := Request{
+		Route:      "/api/v1/overflow",
+		Scope:      ScopeUser,
+		Identifier: "u-overflow",
+		Limit:      1,
+		Window:     time.Minute,
+	}
+
+	// Call Allow enough times to exceed the limit; verify Remaining is always non-negative.
+	for i := 0; i < 5; i++ {
+		d, err := limiter.Allow(context.Background(), req)
+		if err != nil {
+			t.Fatalf("Allow() error = %v", err)
+		}
+		if d.Remaining < 0 {
+			t.Fatalf("Remaining=%d is negative after %d calls", d.Remaining, i+1)
+		}
+	}
+}
+
 func TestRedisLimiterFailClosedOnRedisError(t *testing.T) {
 	client := redis.NewClient(&redis.Options{
 		Addr:         "127.0.0.1:1",
