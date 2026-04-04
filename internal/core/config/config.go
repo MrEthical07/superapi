@@ -665,10 +665,10 @@ func (c *Config) Lint() error {
 	if err := lintBoolEnv("POSTGRES_ENABLED"); err != nil {
 		return err
 	}
-	if err := lintIntEnv("POSTGRES_MAX_CONNS"); err != nil {
+	if err := lintInt32Env("POSTGRES_MAX_CONNS"); err != nil {
 		return err
 	}
-	if err := lintIntEnv("POSTGRES_MIN_CONNS"); err != nil {
+	if err := lintInt32Env("POSTGRES_MIN_CONNS"); err != nil {
 		return err
 	}
 	if err := lintDurationEnv("POSTGRES_CONN_MAX_LIFETIME"); err != nil {
@@ -921,6 +921,17 @@ func lintFloat64Env(key string) error {
 		return nil
 	}
 	if _, err := strconv.ParseFloat(v, 64); err != nil {
+		return fmt.Errorf("invalid %s: %q", key, v)
+	}
+	return nil
+}
+
+func lintInt32Env(key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	if _, err := strconv.ParseInt(v, 10, 32); err != nil {
 		return fmt.Errorf("invalid %s: %q", key, v)
 	}
 	return nil

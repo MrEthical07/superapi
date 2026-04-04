@@ -471,14 +471,17 @@ func toInt64(v interface{}) int64 {
 	}
 }
 
+var (
+	maxIntBound = int64(^uint(0) >> 1)
+	minIntBound = -maxIntBound - 1
+)
+
 func int64ToIntBounded(n int64) int {
-	maxInt := int64(^uint(0) >> 1)
-	minInt := -maxInt - 1
-	if n > maxInt {
-		return int(maxInt)
+	if n > maxIntBound {
+		return int(maxIntBound)
 	}
-	if n < minInt {
-		return int(minInt)
+	if n < minIntBound {
+		return int(minIntBound)
 	}
 	return int(n)
 }
