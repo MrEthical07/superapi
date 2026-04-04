@@ -327,8 +327,8 @@ func Load() (*Config, error) {
 		Postgres: PostgresConfig{
 			Enabled:            getBool("POSTGRES_ENABLED", false),
 			URL:                getenv("POSTGRES_URL", ""),
-			MaxConns:           int32(getInt("POSTGRES_MAX_CONNS", 10)),
-			MinConns:           int32(getInt("POSTGRES_MIN_CONNS", 0)),
+			MaxConns:           getInt32("POSTGRES_MAX_CONNS", 10),
+			MinConns:           getInt32("POSTGRES_MIN_CONNS", 0),
 			ConnMaxLifetime:    getDuration("POSTGRES_CONN_MAX_LIFETIME", 30*time.Minute),
 			ConnMaxIdleTime:    getDuration("POSTGRES_CONN_MAX_IDLE_TIME", 5*time.Minute),
 			StartupPingTimeout: getDuration("POSTGRES_STARTUP_PING_TIMEOUT", 3*time.Second),
@@ -769,6 +769,23 @@ func getInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func getInt32(key string, fallback int32) int32 {
+	v := os.Getenv(key)
+	if v == "" {
+		if profileValue, ok := profileDefaultValue(key); ok {
+			v = profileValue
+		}
+	}
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return fallback
+	}
+	return int32(n)
 }
 
 func getInt64(key string, fallback int64) int64 {

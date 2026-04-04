@@ -201,17 +201,20 @@ func (l *RedisLimiter) Allow(ctx context.Context, req Request) (Decision, error)
 	}
 
 	allowed := toInt64(values[0]) == 1
-	current := int(toInt64(values[1]))
+	current := toInt64(values[1])
 	ttl := toInt64(values[2])
+	if current < 0 {
+		current = 0
+	}
 
-	remaining := req.Limit - current
+	remaining := int64(req.Limit) - current
 	if remaining < 0 {
 		remaining = 0
 	}
 
 	decision := Decision{
 		Allowed:   allowed,
-		Remaining: remaining,
+		Remaining: int64ToIntBounded(remaining),
 		Outcome:   OutcomeAllowed,
 	}
 	if !allowed {
@@ -466,6 +469,18 @@ func toInt64(v interface{}) int64 {
 	default:
 		return 0
 	}
+}
+
+func int64ToIntBounded(n int64) int {
+	maxInt := int64(^uint(0) >> 1)
+	minInt := -maxInt - 1
+	if n > maxInt {
+		return int(maxInt)
+	}
+	if n < minInt {
+		return int(minInt)
+	}
+	return int(n)
 }
 
 func bearerToken(header string) (string, bool) {
