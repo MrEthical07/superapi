@@ -50,6 +50,9 @@ r.Handle(method, pattern, handler,
     policy.CacheRead(cacheMgr, cacheConfig),
     // or for writes:
     policy.CacheInvalidate(cacheMgr, invalidateConfig),
+
+    // 7. Browser/proxy cache directives (optional)
+    policy.CacheControl(policy.CacheControlConfig{Public: true, MaxAge: 60 * time.Second}),
 )
 ```
 
@@ -268,7 +271,9 @@ Serves cached responses for matching requests and stores responses on cache miss
 ```go
 policy.CacheRead(cacheMgr, cache.CacheReadConfig{
     TTL:  30 * time.Second,
-    Tags: []string{"project"},
+    TagSpecs: []cache.CacheTagSpec{
+        {Name: "project", PathParams: []string{"id"}},
+    },
     VaryBy: cache.CacheVaryBy{
         TenantID:    true,
         PathParams:  []string{"id"},
@@ -284,12 +289,22 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 | `Key` | `string` | route pattern | Optional custom cache key prefix when you want tighter control than the route pattern |
 | `TTL` | `time.Duration` | (required) | Cache entry time-to-live |
 | `MaxBytes` | `int` | `CACHE_DEFAULT_MAX_BYTES` (256 KiB) | Max response body size to cache |
-| `Tags` | `[]string` | — | Invalidation tags included in key (version-bumped on write) |
+| `TagSpecs` | `[]CacheTagSpec` | — | Dynamic invalidation scopes included in key (version-bumped on write) |
 | `Methods` | `[]string` | `["GET", "HEAD"]` | HTTP methods eligible for caching |
 | `CacheStatuses` | `[]int` | `[200]` | HTTP status codes to cache |
 | `VaryBy` | `CacheVaryBy` | — | Dimensions that differentiate cache entries |
 | `FailOpen` | `*bool` | Global `CACHE_FAIL_OPEN` | Per-route fail-open override |
 | `AllowAuthenticated` | `bool` | `false` | Enables authenticated caching behavior in the cache layer; does not override validator safety rules |
+
+**CacheTagSpec fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `Name` | `string` | Base tag family name |
+| `PathParams` | `[]string` | Path params appended to tag scope |
+| `TenantID` | `bool` | Include auth tenant id in tag scope |
+| `UserID` | `bool` | Include auth user id in tag scope |
+| `Literals` | `[]CacheTagLiteral` | Constant key/value dimensions for scope splits |
 
 **CacheVaryBy fields:**
 
@@ -307,7 +322,7 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 
 1. Check if HTTP method is allowed (default: GET/HEAD only)
 2. Enforce authenticated cache safety rules (see below)
-3. Build cache key from route pattern + vary-by dimensions + tag versions
+3. Resolve tag names from TagSpecs, fetch their versions, and build cache key
 4. Attempt cache GET
    - **Hit:** Serve cached response directly, return
    - **Miss:** Continue to handler
@@ -331,39 +346,88 @@ If neither is set, validation fails and route registration panics. `AllowAuthent
 
 ### CacheInvalidate(manager, config)
 
-Bumps tag versions after a successful write operation, causing all cached entries using those tags to miss on next read.
+Bumps versions for resolved TagSpecs after a successful write operation, causing matching cached entries to miss on next read.
 
 ```go
 policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
-    Tags: []string{"project"},
+    TagSpecs: []cache.CacheTagSpec{
+        {Name: "project", PathParams: []string{"id"}},
+        {Name: "project-list", TenantID: true},
+    },
 })
 ```
 
 **Behavior:**
 1. Passes request to handler
-2. If handler returns a 2xx status code, bumps all configured tags
-3. If handler returns non-2xx, no invalidation occurs
+2. If handler returns a 2xx status code, resolves tag names from request/auth context
+3. Bumps all resolved tag versions
+4. If handler returns non-2xx, no invalidation occurs
 
 **Production notes:**
 - Invalidation uses `INCR` on tag version keys (`cver:{env}:{tag}`), which is O(1)
 - This is NOT mass key deletion — it's cheap and fast
-- Multiple tags can be invalidated in a single Redis pipeline
-- `CacheInvalidate(...)` requires a non-nil manager and at least one tag; invalid config panics at registration
+- Multiple scoped tags can be invalidated in a single Redis pipeline
+- `CacheInvalidate(...)` requires a non-nil manager and at least one tag spec; invalid config panics at registration
 
 ### Safe defaults summary
 
 | Default | Value | Why |
 |---|---|---|
-| Only cache GET/HEAD | Prevent caching side effects | |
-| Only cache 200 | Prevent caching error responses | |
-| Skip Set-Cookie responses | Prevent session leaks | |
-| Skip oversized responses | Prevent Redis memory abuse | |
-| Authenticated cache keys must vary by user or tenant | Prevent cross-user data leaks | |
-| Fail-open on Redis error | Availability over cache | |
+| Cache methods | `GET`, `HEAD` | Prevent caching side effects from write methods |
+| Cache statuses | `200` | Avoid caching error responses by default |
+| Set-Cookie handling | Skip responses with `Set-Cookie` | Prevent session and identity leakage |
+| Max body guard | `CACHE_DEFAULT_MAX_BYTES` | Avoid unbounded Redis memory usage |
+| Authenticated key isolation | Require `VaryBy.UserID` or `VaryBy.TenantID` | Prevent cross-user cache data leaks |
+| Redis error handling | Fail-open by default | Preserve availability during cache outages |
 
 ---
 
-## 6. Utility policies
+## 6. Cache-Control policy (browser/proxy cache)
+
+File: `internal/core/policy/cachecontrol.go`
+
+Use this policy to attach explicit `Cache-Control` and optional `Vary` headers to a route.
+
+```go
+policy.CacheControl(policy.CacheControlConfig{
+    Public:       true,
+    MaxAge:       60 * time.Second,
+    SharedMaxAge: 120 * time.Second,
+    Immutable:    true,
+    Vary:         []string{"Accept-Encoding"},
+})
+```
+
+### Supported directives
+
+| Field | Header directive |
+|---|---|
+| `Public` | `public` |
+| `Private` | `private` |
+| `NoStore` | `no-store` |
+| `NoCache` | `no-cache` |
+| `MustRevalidate` | `must-revalidate` |
+| `Immutable` | `immutable` |
+| `MaxAge` | `max-age=<seconds>` |
+| `SharedMaxAge` | `s-maxage=<seconds>` |
+| `StaleWhileRevalidate` | `stale-while-revalidate=<seconds>` |
+| `StaleIfError` | `stale-if-error=<seconds>` |
+
+### Validation rules
+
+- Durations must be `>= 0`.
+- `Public` and `Private` cannot both be set.
+- `NoStore` cannot be combined with max-age/s-maxage/stale/immutable directives.
+- Policy must set at least one cache directive or one `Vary` value.
+
+### Placement guidance
+
+- Place `CacheControl(...)` after auth/tenant/rbac/rate-limit/cache policies so it applies consistently to both fresh and cached responses.
+- Use conservative values for authenticated routes; avoid `public` unless the response is intentionally shared.
+
+---
+
+## 7. Utility policies
 
 ### RequireJSON()
 
@@ -396,7 +460,7 @@ policy.Noop()
 
 ---
 
-## 7. Validator and preset usage
+## 8. Validator and preset usage
 
 ### Runtime validator rules
 
@@ -431,7 +495,7 @@ r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
         policy.WithAuthEngine(authEngine, auth.ModeStrict),
         policy.WithLimiter(limiter),
         policy.WithCacheManager(cacheMgr),
-        policy.WithCache(30*time.Second, "project"),
+        policy.WithCache(30*time.Second, cache.CacheTagSpec{Name: "project", PathParams: []string{"id"}}),
         policy.WithCacheVaryBy(cache.CacheVaryBy{TenantID: true, PathParams: []string{"id"}}),
     )...,
 )
@@ -439,7 +503,7 @@ r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
 
 ---
 
-## 8. Recommended policy stacks by endpoint type
+## 9. Recommended policy stacks by endpoint type
 
 ### Public route (no auth)
 
@@ -490,7 +554,9 @@ r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
     policy.RateLimitWithKeyer(limiter, "projects.get", rule, ratelimit.KeyByTenant()),
     policy.CacheRead(cacheMgr, cache.CacheReadConfig{
         TTL:                30 * time.Second,
-        Tags:               []string{"project"},
+        TagSpecs: []cache.CacheTagSpec{
+            {Name: "project", PathParams: []string{"id"}},
+        },
         VaryBy: cache.CacheVaryBy{
             TenantID:   true,
             PathParams: []string{"id"},
@@ -516,7 +582,9 @@ r.Handle(http.MethodPost, "/api/v1/projects", handler,
     policy.RequirePerm("project.write"),
     policy.RateLimitWithKeyer(limiter, "projects.create", rule, ratelimit.KeyByTenant()),
     policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
-        Tags: []string{"project"},
+        TagSpecs: []cache.CacheTagSpec{
+            {Name: "project-list", TenantID: true},
+        },
     }),
 )
 ```
@@ -526,7 +594,7 @@ Policies:
 - TenantRequired
 - RequirePerm for write permission
 - Rate limit by tenant
-- CacheInvalidate to bump project tag
+- CacheInvalidate to bump project-list scope
 
 ### Tenant-scoped delete route
 
@@ -538,14 +606,17 @@ r.Handle(http.MethodDelete, "/api/v1/projects/{id}", handler,
     policy.TenantRequired(),
     policy.RequirePerm("project.delete"),
     policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
-        Tags: []string{"project"},
+        TagSpecs: []cache.CacheTagSpec{
+            {Name: "project", PathParams: []string{"id"}},
+            {Name: "project-list", TenantID: true},
+        },
     }),
 )
 ```
 
 ---
 
-## 9. Common mistakes and how to avoid them
+## 10. Common mistakes and how to avoid them
 
 ### Putting CacheRead before AuthRequired
 
@@ -585,7 +656,7 @@ r.Handle(method, pattern, handler,
 
 ### Forgetting CacheInvalidate on write routes
 
-If you cache `GET /api/v1/projects` with tag `"project"` but forget to add `CacheInvalidate` with tag `"project"` on `POST /api/v1/projects`, writes will not invalidate the cached list until TTL expires.
+If you cache `GET /api/v1/projects` with `TagSpecs: [{Name:"project-list", TenantID:true}]` but forget to add matching `CacheInvalidate` tag specs on writes, list cache stays stale until TTL expires.
 
 ### Using TenantMatchFromPath with wrong param name
 
@@ -606,9 +677,9 @@ policy.RequireAnyPerm()
 Both constructors require at least one non-empty permission and panic on invalid input.
 
 
-## 10. Required configuration by policy
+## 11. Required configuration by policy
 
-### 9.1 Auth / Tenant / RBAC
+### 11.1 Auth / Tenant / RBAC
 
 Required environment:
 
@@ -619,7 +690,7 @@ Required environment:
 
 If auth is disabled, routes with `AuthRequired` will always return `401`.
 
-### 9.2 Rate limit
+### 11.2 Rate limit
 
 Required environment:
 
@@ -632,7 +703,7 @@ Optional tuning:
 - `RATELIMIT_DEFAULT_LIMIT`
 - `RATELIMIT_DEFAULT_WINDOW`
 
-### 9.3 Cache
+### 11.3 Cache
 
 Required environment:
 
@@ -644,7 +715,7 @@ Optional tuning:
 - `CACHE_FAIL_OPEN` (default `true`)
 - `CACHE_DEFAULT_MAX_BYTES`
 
-## 11. Extensibility guidelines
+## 12. Extensibility guidelines
 
 When adding a new policy:
 

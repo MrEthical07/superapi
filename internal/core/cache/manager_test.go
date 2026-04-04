@@ -13,14 +13,14 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/auth"
 )
 
-func newTestManager(t *testing.T) (*Manager, *miniredis.Miniredis) {
-	t.Helper()
-	mr := miniredis.RunT(t)
+func newTestManager(tb testing.TB) (*Manager, *miniredis.Miniredis) {
+	tb.Helper()
+	mr := miniredis.RunT(tb)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-	mgr, err := NewManager(client, ManagerConfig{Env: "test", FailOpen: true, DefaultMaxBytes: 256 * 1024})
+	tb.Cleanup(func() { _ = client.Close() })
+	mgr, err := NewManager(client, ManagerConfig{Env: "test", FailOpen: true, DefaultMaxBytes: 256 * 1024, TagVersionCacheTTL: 250 * time.Millisecond})
 	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
+		tb.Fatalf("NewManager() error = %v", err)
 	}
 	return mgr, mr
 }
@@ -156,5 +156,68 @@ func TestTagVersionTokenChangesAfterBump(t *testing.T) {
 
 	if before == after {
 		t.Fatalf("expected tag version token to change after bump")
+	}
+}
+
+func TestBuildReadKeyDiffersByDynamicTagPathParam(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	r1 := httptest.NewRequest("GET", "/api/v1/projects/p1", nil)
+	rctx1 := chi.NewRouteContext()
+	rctx1.URLParams.Add("id", "p1")
+	r1 = r1.WithContext(context.WithValue(r1.Context(), chi.RouteCtxKey, rctx1))
+
+	r2 := httptest.NewRequest("GET", "/api/v1/projects/p2", nil)
+	rctx2 := chi.NewRouteContext()
+	rctx2.URLParams.Add("id", "p2")
+	r2 = r2.WithContext(context.WithValue(r2.Context(), chi.RouteCtxKey, rctx2))
+
+	cfg := CacheReadConfig{
+		TTL:      30 * time.Second,
+		TagSpecs: []CacheTagSpec{{Name: "project", PathParams: []string{"id"}}},
+		VaryBy:   CacheVaryBy{PathParams: []string{"id"}},
+	}
+
+	k1, err := mgr.BuildReadKey(context.Background(), r1, "/api/v1/projects/{id}", cfg)
+	if err != nil {
+		t.Fatalf("BuildReadKey(r1) error = %v", err)
+	}
+	k2, err := mgr.BuildReadKey(context.Background(), r2, "/api/v1/projects/{id}", cfg)
+	if err != nil {
+		t.Fatalf("BuildReadKey(r2) error = %v", err)
+	}
+
+	if k1 == k2 {
+		t.Fatalf("expected different keys for different dynamic tag path params")
+	}
+}
+
+func TestBuildReadKeyFailsWhenDynamicTagPathParamMissing(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	r := httptest.NewRequest("GET", "/api/v1/projects", nil)
+	cfg := CacheReadConfig{
+		TTL:      30 * time.Second,
+		TagSpecs: []CacheTagSpec{{Name: "project", PathParams: []string{"id"}}},
+	}
+
+	_, err := mgr.BuildReadKey(context.Background(), r, "/api/v1/projects", cfg)
+	if err == nil {
+		t.Fatalf("expected error when dynamic tag path param is missing")
+	}
+}
+
+func TestBuildReadKeyFailsWhenDynamicTagTenantMissing(t *testing.T) {
+	mgr, _ := newTestManager(t)
+
+	r := httptest.NewRequest("GET", "/api/v1/projects", nil)
+	cfg := CacheReadConfig{
+		TTL:      30 * time.Second,
+		TagSpecs: []CacheTagSpec{{Name: "project-list", TenantID: true}},
+	}
+
+	_, err := mgr.BuildReadKey(context.Background(), r, "/api/v1/projects", cfg)
+	if err == nil {
+		t.Fatalf("expected error when dynamic tag tenant id is missing")
 	}
 }

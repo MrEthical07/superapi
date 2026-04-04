@@ -200,7 +200,11 @@ func TestCacheInvalidateBumpsTagVersionForcesMiss(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}),
-		CacheRead(mgr, cache.CacheReadConfig{TTL: time.Minute, Tags: []string{"tenant"}, VaryBy: cache.CacheVaryBy{PathParams: []string{"id"}}}),
+		CacheRead(mgr, cache.CacheReadConfig{
+			TTL:      time.Minute,
+			TagSpecs: []cache.CacheTagSpec{{Name: "tenant"}},
+			VaryBy:   cache.CacheVaryBy{PathParams: []string{"id"}},
+		}),
 	).ServeHTTP)
 
 	r.Post("/api/v1/tenants", Chain(
@@ -208,7 +212,7 @@ func TestCacheInvalidateBumpsTagVersionForcesMiss(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}),
-		CacheInvalidate(mgr, cache.CacheInvalidateConfig{Tags: []string{"tenant"}}),
+		CacheInvalidate(mgr, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{{Name: "tenant"}}}),
 	).ServeHTTP)
 
 	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
@@ -284,7 +288,7 @@ func TestCacheInvalidateNoopWithoutSuccessStatus(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 		}),
-		CacheInvalidate(mgr, cache.CacheInvalidateConfig{Tags: []string{"tenant"}}),
+		CacheInvalidate(mgr, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{{Name: "tenant", PathParams: []string{"id"}}}}),
 	)
 
 	rr := httptest.NewRecorder()
@@ -299,5 +303,55 @@ func TestCacheInvalidateNoopWithoutSuccessStatus(t *testing.T) {
 	}
 	if token != "tenant=0" {
 		t.Fatalf("token=%q want=%q", token, "tenant=0")
+	}
+}
+
+func TestCacheInvalidateScopedByPathParamDoesNotEvictOtherDetails(t *testing.T) {
+	mr := miniredis.RunT(t)
+	mgr := newCacheManagerForPolicyTests(t, mr.Addr(), true)
+
+	getCalls := map[string]int{}
+
+	r := chi.NewRouter()
+	r.Get("/api/v1/projects/{id}", Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id := chi.URLParam(r, "id")
+			getCalls[id]++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"id":"` + id + `"}`))
+		}),
+		CacheRead(mgr, cache.CacheReadConfig{
+			TTL:      time.Minute,
+			TagSpecs: []cache.CacheTagSpec{{Name: "project", PathParams: []string{"id"}}},
+			VaryBy:   cache.CacheVaryBy{PathParams: []string{"id"}},
+		}),
+	).ServeHTTP)
+
+	r.Put("/api/v1/projects/{id}", Chain(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		CacheInvalidate(mgr, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{{Name: "project", PathParams: []string{"id"}}}}),
+	).ServeHTTP)
+
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/p2", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/p2", nil))
+
+	if getCalls["p1"] != 1 || getCalls["p2"] != 1 {
+		t.Fatalf("expected warm-cache hits before update, calls=%v", getCalls)
+	}
+
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPut, "/api/v1/projects/p1", nil))
+
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/p1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/p2", nil))
+
+	if getCalls["p1"] != 2 {
+		t.Fatalf("expected p1 cache to be invalidated, calls=%v", getCalls)
+	}
+	if getCalls["p2"] != 1 {
+		t.Fatalf("expected p2 cache entry to stay warm, calls=%v", getCalls)
 	}
 }

@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/config"
+	apperr "github.com/MrEthical07/superapi/internal/core/errors"
+	"github.com/MrEthical07/superapi/internal/core/requestid"
+	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
 // CORS applies CORS headers and handles preflight requests.
@@ -43,7 +46,8 @@ func CORS(cfg config.CORSConfig) func(http.Handler) http.Handler {
 
 			if isDeniedOrigin(origin, denyOrigins) || !isAllowedOrigin(origin, allowOrigins, allowAll, cfg.AllowCredentials) {
 				if isPreflight(r) {
-					w.WriteHeader(http.StatusForbidden)
+					rid := requestid.FromContext(r.Context())
+					response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "origin not allowed"), rid)
 					return
 				}
 				next.ServeHTTP(w, r)

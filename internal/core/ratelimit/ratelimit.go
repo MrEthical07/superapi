@@ -373,10 +373,11 @@ func KeyByTokenHash(prefixLen int) Keyer {
 		}
 		hash := sha256.Sum256([]byte(token))
 		hexHash := hex.EncodeToString(hash[:])
-		if prefixLen > len(hexHash) {
-			prefixLen = len(hexHash)
+		effectivePrefix := prefixLen
+		if effectivePrefix > len(hexHash) {
+			effectivePrefix = len(hexHash)
 		}
-		return ScopeToken, hexHash[:prefixLen]
+		return ScopeToken, hexHash[:effectivePrefix]
 	}
 }
 

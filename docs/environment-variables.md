@@ -53,6 +53,7 @@ Precedence order for every key is:
 | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | `1048576` (1 MiB) | Global body cap. Must be `>= 0`. |
 | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `true` in `prod`, otherwise `false` | Security headers middleware toggle. |
 | `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` | `0` (disabled) | Request context timeout. Must be `>= 0`; if enabled, must be `<= HTTP_WRITE_TIMEOUT`. |
+| `HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS` | `/healthz,/readyz,/metrics` | Exact path matches skipped by tracing middleware. |
 
 ### Access log middleware
 
@@ -113,7 +114,7 @@ Notes:
 | Env var | Default | Notes |
 |---|---|---|
 | `RATELIMIT_ENABLED` | `false` | Enables Redis-backed route rate limiting. |
-| `RATELIMIT_FAIL_OPEN` | `true` | Allows requests when Redis is unavailable. |
+| `RATELIMIT_FAIL_OPEN` | `true` in non-prod, `false` in prod | Allows requests when Redis is unavailable. In prod, fail-open is rejected by lint when rate-limit is enabled. |
 | `RATELIMIT_DEFAULT_LIMIT` | `10` | Must be `> 0`. |
 | `RATELIMIT_DEFAULT_WINDOW` | `1m` | Must be `> 0`. |
 
@@ -127,8 +128,9 @@ Notes:
 | Env var | Default | Notes |
 |---|---|---|
 | `CACHE_ENABLED` | `false` | Enables Redis-backed route response cache. |
-| `CACHE_FAIL_OPEN` | `true` | Bypasses cache when Redis is unavailable. |
+| `CACHE_FAIL_OPEN` | `true` in non-prod, `false` in prod | Bypasses cache when Redis is unavailable. In prod, fail-open is rejected by lint when cache is enabled. |
 | `CACHE_DEFAULT_MAX_BYTES` | `262144` (256 KiB) | Must be `> 0`. |
+| `CACHE_TAG_VERSION_CACHE_TTL` | `250ms` | In-process TTL for cached tag-version tokens used in cache key generation. Must be `>= 0`. |
 
 Notes:
 - When `CACHE_ENABLED=true`, startup lint requires `REDIS_ENABLED=true`.
@@ -175,6 +177,7 @@ Notes:
 | `METRICS_ENABLED` | `true` | Enables `/metrics` endpoint registration. |
 | `METRICS_PATH` | `/metrics` | Must be non-empty and start with `/`. |
 | `METRICS_AUTH_TOKEN` | empty | In `prod`/`production`, required when metrics are enabled. |
+| `METRICS_EXCLUDE_PATHS` | `/healthz,/readyz` | Exact paths excluded from HTTP metrics instrumentation. |
 
 ---
 
@@ -198,4 +201,6 @@ Notes:
 - `RATELIMIT_ENABLED=true` requires Redis.
 - `CACHE_ENABLED=true` requires Redis.
 - `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` must not exceed `HTTP_WRITE_TIMEOUT` when enabled.
+- In `prod` / `production`, `RATELIMIT_FAIL_OPEN=true` is rejected when rate limiting is enabled.
+- In `prod` / `production`, `CACHE_FAIL_OPEN=true` is rejected when cache is enabled.
 - In `prod` / `production`, metrics require `METRICS_AUTH_TOKEN` if metrics are enabled.

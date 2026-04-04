@@ -19,6 +19,8 @@ const (
 	PolicyTypeRequireJSON PolicyType = "require_json"
 	// PolicyTypeWithHeader marks static header injection policy.
 	PolicyTypeWithHeader PolicyType = "with_header"
+	// PolicyTypeCacheControl marks explicit Cache-Control response policy.
+	PolicyTypeCacheControl PolicyType = "cache_control"
 	// PolicyTypeAuthRequired marks authentication enforcement policy.
 	PolicyTypeAuthRequired PolicyType = "auth_required"
 	// PolicyTypeRequirePerm marks all-of permission enforcement policy.
@@ -51,8 +53,8 @@ type CacheReadMetadata struct {
 
 // CacheInvalidateMetadata stores cache invalidation policy details.
 type CacheInvalidateMetadata struct {
-	// TagCount is the number of invalidation tags configured.
-	TagCount int
+	// TagSpecCount is the number of invalidation tag specs configured.
+	TagSpecCount int
 }
 
 // Metadata captures validator-relevant attributes of one policy.

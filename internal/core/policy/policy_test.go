@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestChainOrderDeterministic(t *testing.T) {
@@ -150,4 +151,56 @@ func TestWithHeaderSetsResponseHeader(t *testing.T) {
 	if got := rr.Header().Get("X-Test"); got != "ok" {
 		t.Fatalf("header X-Test=%q want=%q", got, "ok")
 	}
+}
+
+func TestCacheControlSetsCacheHeaders(t *testing.T) {
+	h := Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), CacheControl(CacheControlConfig{
+		Public:       true,
+		MaxAge:       60 * time.Second,
+		SharedMaxAge: 120 * time.Second,
+		Immutable:    true,
+		Vary:         []string{"Accept-Encoding", "Accept-Language", "accept-encoding"},
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	h.ServeHTTP(rr, req)
+
+	cacheControl := rr.Header().Get("Cache-Control")
+	if !strings.Contains(cacheControl, "public") {
+		t.Fatalf("cache-control missing public directive: %q", cacheControl)
+	}
+	if !strings.Contains(cacheControl, "max-age=60") {
+		t.Fatalf("cache-control missing max-age directive: %q", cacheControl)
+	}
+	if !strings.Contains(cacheControl, "s-maxage=120") {
+		t.Fatalf("cache-control missing s-maxage directive: %q", cacheControl)
+	}
+	if !strings.Contains(cacheControl, "immutable") {
+		t.Fatalf("cache-control missing immutable directive: %q", cacheControl)
+	}
+
+	vary := rr.Header().Values("Vary")
+	if len(vary) == 0 {
+		t.Fatalf("expected vary header to be set")
+	}
+	joined := strings.Join(vary, ",")
+	if !strings.Contains(strings.ToLower(joined), "accept-encoding") {
+		t.Fatalf("vary header missing accept-encoding: %q", joined)
+	}
+	if !strings.Contains(strings.ToLower(joined), "accept-language") {
+		t.Fatalf("vary header missing accept-language: %q", joined)
+	}
+}
+
+func TestCacheControlPanicsOnInvalidConfig(t *testing.T) {
+	defer func() {
+		if rec := recover(); rec == nil {
+			t.Fatalf("expected invalid cache-control config panic")
+		}
+	}()
+
+	_ = CacheControl(CacheControlConfig{Public: true, Private: true})
 }

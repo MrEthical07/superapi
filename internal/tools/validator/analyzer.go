@@ -296,6 +296,8 @@ func parsePolicyMetadata(expr ast.Expr) (corepolicy.Metadata, error) {
 		meta.Type = corepolicy.PolicyTypeRequireJSON
 	case "WithHeader":
 		meta.Type = corepolicy.PolicyTypeWithHeader
+	case "CacheControl":
+		meta.Type = corepolicy.PolicyTypeCacheControl
 	case "Noop":
 		meta.Type = corepolicy.PolicyTypeNoop
 	default:
@@ -367,14 +369,14 @@ func parseCacheInvalidateMetadata(call *ast.CallExpr) corepolicy.CacheInvalidate
 		if !ok {
 			continue
 		}
-		if keyExprName(kv.Key) != "Tags" {
+		if keyExprName(kv.Key) != "TagSpecs" {
 			continue
 		}
 		tagsLit, ok := kv.Value.(*ast.CompositeLit)
 		if !ok {
 			continue
 		}
-		meta.TagCount = len(tagsLit.Elts)
+		meta.TagSpecCount = len(tagsLit.Elts)
 	}
 	return meta
 }

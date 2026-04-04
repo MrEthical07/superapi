@@ -91,6 +91,33 @@ func TestInstrumentHTTPLabelsNotFound(t *testing.T) {
 	)
 }
 
+func TestInstrumentHTTPSkipsExcludedPath(t *testing.T) {
+	svc, err := New(config.MetricsConfig{Enabled: true, Path: "/metrics", ExcludePaths: []string{"/healthz"}}, nil)
+	if err != nil {
+		t.Fatalf("new metrics service: %v", err)
+	}
+
+	r := chi.NewRouter()
+	r.Use(svc.CaptureRoutePattern)
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	h := svc.InstrumentHTTP(r)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+
+	assertMetricValue(t, svc, "superapi_http_requests_total",
+		map[string]string{"method": http.MethodGet, "route": "/healthz", "status": "200"},
+		0,
+	)
+}
+
 func TestObserveReadinessUpdatesGauges(t *testing.T) {
 	svc, err := New(config.MetricsConfig{Enabled: true, Path: "/metrics"}, nil)
 	if err != nil {

@@ -70,6 +70,8 @@ type CacheConfig struct {
 	FailOpen bool
 	// DefaultMaxBytes caps cached payload size per response.
 	DefaultMaxBytes int
+	// TagVersionCacheTTL caches tag version tokens in-process to reduce Redis MGET load.
+	TagVersionCacheTTL time.Duration
 }
 
 // LogConfig holds structured logging configuration.
@@ -118,6 +120,8 @@ type HTTPMiddlewareConfig struct {
 	ClientIP ClientIPConfig
 	// CORS configures cross-origin handling.
 	CORS CORSConfig
+	// TracingExcludePaths skips tracing middleware for selected routes.
+	TracingExcludePaths []string
 }
 
 // AccessLogConfig controls structured request logging.
@@ -218,6 +222,8 @@ type MetricsConfig struct {
 	Path string
 	// AuthToken is an optional bearer token required to scrape metrics.
 	AuthToken string
+	// ExcludePaths skips HTTP instrumentation for selected routes.
+	ExcludePaths []string
 }
 
 // TracingConfig controls OpenTelemetry export behavior.
@@ -262,6 +268,8 @@ func Load() (*Config, error) {
 	isProdEnv := strings.EqualFold(strings.TrimSpace(env), "prod") || strings.EqualFold(strings.TrimSpace(env), "production")
 	securityHeadersDefault := isProdEnv
 	tracingInsecureDefault := !isProdEnv
+	rateLimitFailOpenDefault := !isProdEnv
+	cacheFailOpenDefault := !isProdEnv
 
 	cfg := &Config{
 		Env:         env,
@@ -303,6 +311,7 @@ func Load() (*Config, error) {
 					MaxAge:              getDuration("HTTP_MIDDLEWARE_CORS_MAX_AGE", 0),
 					AllowPrivateNetwork: getBool("HTTP_MIDDLEWARE_CORS_ALLOW_PRIVATE_NETWORK", false),
 				},
+				TracingExcludePaths: getCSV("HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS", []string{"/healthz", "/readyz", "/metrics"}),
 			},
 		},
 		Log: LogConfig{
@@ -315,14 +324,15 @@ func Load() (*Config, error) {
 		},
 		RateLimit: RateLimitConfig{
 			Enabled:       getBool("RATELIMIT_ENABLED", false),
-			FailOpen:      getBool("RATELIMIT_FAIL_OPEN", true),
+			FailOpen:      getBool("RATELIMIT_FAIL_OPEN", rateLimitFailOpenDefault),
 			DefaultLimit:  getInt("RATELIMIT_DEFAULT_LIMIT", 10),
 			DefaultWindow: getDuration("RATELIMIT_DEFAULT_WINDOW", time.Minute),
 		},
 		Cache: CacheConfig{
-			Enabled:         getBool("CACHE_ENABLED", false),
-			FailOpen:        getBool("CACHE_FAIL_OPEN", true),
-			DefaultMaxBytes: getInt("CACHE_DEFAULT_MAX_BYTES", 256*1024),
+			Enabled:            getBool("CACHE_ENABLED", false),
+			FailOpen:           getBool("CACHE_FAIL_OPEN", cacheFailOpenDefault),
+			DefaultMaxBytes:    getInt("CACHE_DEFAULT_MAX_BYTES", 256*1024),
+			TagVersionCacheTTL: getDuration("CACHE_TAG_VERSION_CACHE_TTL", 250*time.Millisecond),
 		},
 		Postgres: PostgresConfig{
 			Enabled:            getBool("POSTGRES_ENABLED", false),
@@ -348,9 +358,10 @@ func Load() (*Config, error) {
 			HealthCheckTimeout: getDuration("REDIS_HEALTH_CHECK_TIMEOUT", 1*time.Second),
 		},
 		Metrics: MetricsConfig{
-			Enabled:   getBool("METRICS_ENABLED", true),
-			Path:      getenv("METRICS_PATH", "/metrics"),
-			AuthToken: getenv("METRICS_AUTH_TOKEN", ""),
+			Enabled:      getBool("METRICS_ENABLED", true),
+			Path:         getenv("METRICS_PATH", "/metrics"),
+			AuthToken:    getenv("METRICS_AUTH_TOKEN", ""),
+			ExcludePaths: getCSV("METRICS_EXCLUDE_PATHS", []string{"/healthz", "/readyz"}),
 		},
 		Tracing: TracingConfig{
 			Enabled:      getBool("TRACING_ENABLED", false),
@@ -425,6 +436,9 @@ func (c *Config) Lint() error {
 	if c.HTTP.Middleware.CORS.AllowCredentials && containsWildcard(c.HTTP.Middleware.CORS.AllowOrigins) {
 		return fmt.Errorf("http middleware cors allow credentials cannot be used with wildcard allow origins")
 	}
+	if c.Cache.TagVersionCacheTTL < 0 {
+		return fmt.Errorf("cache tag version cache ttl must be >= 0")
+	}
 	if err := validateOrigins("http middleware cors allow origins", c.HTTP.Middleware.CORS.AllowOrigins); err != nil {
 		return err
 	}
@@ -442,6 +456,14 @@ func (c *Config) Lint() error {
 	}
 	if err := validateTrustedProxies(c.HTTP.Middleware.ClientIP.TrustedProxies); err != nil {
 		return err
+	}
+	for _, p := range c.HTTP.Middleware.TracingExcludePaths {
+		if strings.TrimSpace(p) == "" {
+			return fmt.Errorf("http middleware tracing exclude path cannot be empty")
+		}
+		if p[0] != '/' {
+			return fmt.Errorf("http middleware tracing exclude path must start with '/': %q", p)
+		}
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.Auth.Mode)) {
@@ -470,6 +492,14 @@ func (c *Config) Lint() error {
 	}
 	if c.Cache.DefaultMaxBytes <= 0 {
 		return fmt.Errorf("cache default max bytes must be > 0")
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Env), "prod") || strings.EqualFold(strings.TrimSpace(c.Env), "production") {
+		if c.RateLimit.Enabled && c.RateLimit.FailOpen {
+			return fmt.Errorf("ratelimit fail-open cannot be enabled in prod")
+		}
+		if c.Cache.Enabled && c.Cache.FailOpen {
+			return fmt.Errorf("cache fail-open cannot be enabled in prod")
+		}
 	}
 
 	for _, p := range c.HTTP.Middleware.AccessLog.ExcludePaths {
@@ -541,6 +571,14 @@ func (c *Config) Lint() error {
 	}
 	if c.Metrics.Path[0] != '/' {
 		return fmt.Errorf("metrics path must start with '/'")
+	}
+	for _, p := range c.Metrics.ExcludePaths {
+		if strings.TrimSpace(p) == "" {
+			return fmt.Errorf("metrics exclude path cannot be empty")
+		}
+		if p[0] != '/' {
+			return fmt.Errorf("metrics exclude path must start with '/': %q", p)
+		}
 	}
 	if strings.EqualFold(strings.TrimSpace(c.Env), "prod") || strings.EqualFold(strings.TrimSpace(c.Env), "production") {
 		if c.Metrics.Enabled && strings.TrimSpace(c.Metrics.AuthToken) == "" {
@@ -647,6 +685,9 @@ func (c *Config) Lint() error {
 		return err
 	}
 	if err := lintDurationEnv("HTTP_MIDDLEWARE_CORS_MAX_AGE"); err != nil {
+		return err
+	}
+	if err := lintDurationEnv("CACHE_TAG_VERSION_CACHE_TTL"); err != nil {
 		return err
 	}
 	if err := lintFloat64Env("HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE"); err != nil {

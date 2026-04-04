@@ -24,11 +24,11 @@ type presetConfig struct {
 
 	cacheManager     *cache.Manager
 	cacheTTL         time.Duration
-	cacheTags        []string
+	cacheTagSpecs    []cache.CacheTagSpec
 	cacheConfigured  bool
 	cacheAllowAuth   bool
 	cacheVaryBy      cache.CacheVaryBy
-	invalidateTags   []string
+	invalidateTagCfg []cache.CacheTagSpec
 	invalidateTagSet bool
 	tenantMatchParam string
 }
@@ -41,10 +41,10 @@ func defaultPresetConfig() presetConfig {
 			Window: time.Minute,
 		},
 		cacheTTL:         30 * time.Second,
-		cacheTags:        []string{"resource"},
+		cacheTagSpecs:    []cache.CacheTagSpec{{Name: "resource"}},
 		cacheAllowAuth:   true,
 		cacheVaryBy:      cache.CacheVaryBy{TenantID: true},
-		invalidateTags:   []string{"resource"},
+		invalidateTagCfg: []cache.CacheTagSpec{{Name: "resource"}},
 		tenantMatchParam: "tenant_id",
 	}
 }
@@ -87,15 +87,15 @@ func WithCacheManager(manager *cache.Manager) PresetOption {
 	}
 }
 
-// WithCache configures cache TTL and tags used by preset-generated cache read policy.
-func WithCache(ttl time.Duration, tags ...string) PresetOption {
+// WithCache configures cache TTL and tag specs used by preset-generated cache read policy.
+func WithCache(ttl time.Duration, tagSpecs ...cache.CacheTagSpec) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.cacheConfigured = true
 		if ttl > 0 {
 			cfg.cacheTTL = ttl
 		}
-		if len(tags) > 0 {
-			cfg.cacheTags = append([]string(nil), tags...)
+		if len(tagSpecs) > 0 {
+			cfg.cacheTagSpecs = append([]cache.CacheTagSpec(nil), tagSpecs...)
 		}
 	}
 }
@@ -120,14 +120,14 @@ func WithStrictAuth() PresetOption {
 	}
 }
 
-// WithInvalidateTags sets tags used by preset-generated cache invalidation policy.
-func WithInvalidateTags(tags ...string) PresetOption {
+// WithInvalidateTags sets tag specs used by preset-generated cache invalidation policy.
+func WithInvalidateTags(tagSpecs ...cache.CacheTagSpec) PresetOption {
 	return func(cfg *presetConfig) {
-		if len(tags) == 0 {
+		if len(tagSpecs) == 0 {
 			return
 		}
 		cfg.invalidateTagSet = true
-		cfg.invalidateTags = append([]string(nil), tags...)
+		cfg.invalidateTagCfg = append([]cache.CacheTagSpec(nil), tagSpecs...)
 	}
 }
 

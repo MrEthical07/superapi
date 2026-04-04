@@ -118,6 +118,33 @@ func TestTracingMiddlewareHonorsTraceparent(t *testing.T) {
 	}
 }
 
+func TestTracingWithExcludesSkipsConfiguredPath(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+	defer tp.Shutdown(t.Context())
+
+	oldProvider := otel.GetTracerProvider()
+	oldProp := otel.GetTextMapPropagator()
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer func() {
+		otel.SetTracerProvider(oldProvider)
+		otel.SetTextMapPropagator(oldProp)
+	}()
+
+	svc := coretracing.NewWithProvider(tp, tp.Shutdown)
+
+	h := TracingWithExcludes(svc, []string{"/healthz"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if got := len(rec.Ended()); got != 0 {
+		t.Fatalf("ended spans = %d, want 0", got)
+	}
+}
+
 func assertHasAttr(t *testing.T, attrs []attribute.KeyValue, key string, want string) {
 	t.Helper()
 	for _, a := range attrs {

@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"net/http"
@@ -23,15 +24,26 @@ import (
 // - Names spans with low-cardinality route patterns
 // - Records status code and request metadata attributes
 func Tracing(svc *tracing.Service) func(http.Handler) http.Handler {
+	return TracingWithExcludes(svc, nil)
+}
+
+// TracingWithExcludes skips tracing spans for exact path matches.
+func TracingWithExcludes(svc *tracing.Service, excludePaths []string) func(http.Handler) http.Handler {
 	if svc == nil || !svc.Enabled() {
 		return func(next http.Handler) http.Handler { return next }
 	}
 
 	tracer := svc.Tracer()
 	prop := otel.GetTextMapPropagator()
+	excludes := normalizeTracingPathSet(excludePaths)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, skip := excludes[strings.TrimSpace(r.URL.Path)]; skip {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			ctx := prop.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 			spanName := r.Method + " unknown"
 			ctx, span := tracer.Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindServer))
@@ -84,6 +96,25 @@ func Tracing(svc *tracing.Service) func(http.Handler) http.Handler {
 	}
 }
 
+func normalizeTracingPathSet(paths []string) map[string]struct{} {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	out := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		out[trimmed] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func serverAddress(hostport string) (string, int) {
 	hostport = strings.TrimSpace(hostport)
 	if hostport == "" {
@@ -120,4 +151,29 @@ func (w *tracingResponseWriter) SetRoutePattern(pattern string) {
 	if setter, ok := w.ResponseWriter.(interface{ SetRoutePattern(string) }); ok {
 		setter.SetRoutePattern(pattern)
 	}
+}
+
+// Flush forwards flush capability when supported by underlying writer.
+func (w *tracingResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack forwards connection hijack when supported.
+func (w *tracingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+// Push forwards HTTP/2 server push when supported.
+func (w *tracingResponseWriter) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
 }

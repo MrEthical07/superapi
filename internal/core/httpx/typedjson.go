@@ -11,8 +11,6 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 )
 
-const defaultJSONBodyLimit int64 = 1 << 20 // 1 MiB
-
 // Validatable is implemented by DTOs that perform semantic validation.
 type Validatable interface {
 	Validate() error
@@ -21,7 +19,7 @@ type Validatable interface {
 // DecodeAndValidateJSON strictly decodes a JSON request body into dst, applies
 // the default body limit, rejects trailing values, and runs Validate when
 // available.
-func DecodeAndValidateJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+func DecodeAndValidateJSON(_ http.ResponseWriter, r *http.Request, dst any) error {
 	if r == nil {
 		return appBadRequest("request is required", errors.New("nil request"))
 	}
@@ -29,7 +27,6 @@ func DecodeAndValidateJSON(w http.ResponseWriter, r *http.Request, dst any) erro
 		return appBadRequest("request body is required", errors.New("nil destination"))
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, defaultJSONBodyLimit)
 	defer r.Body.Close()
 
 	dec := json.NewDecoder(r.Body)

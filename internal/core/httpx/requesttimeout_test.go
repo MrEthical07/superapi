@@ -57,3 +57,36 @@ func TestRequestTimeoutAllowsFastRequest(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 	}
 }
+
+func TestRequestTimeoutBypassesSSERequests(t *testing.T) {
+	h := RequestTimeout(10 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/events", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+}
+
+func TestRequestTimeoutBypassesWebsocketUpgrade(t *testing.T) {
+	h := RequestTimeout(10 * time.Millisecond)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusSwitchingProtocols)
+	}
+}

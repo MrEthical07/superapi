@@ -1,8 +1,11 @@
 package metrics
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +26,8 @@ type Service struct {
 	enabled bool
 	path    string
 
+	excludePaths map[string]struct{}
+
 	registry *prometheus.Registry
 	handler  http.Handler
 
@@ -39,7 +44,7 @@ type Service struct {
 // New builds a metrics service and registers collectors when enabled.
 func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 	if !cfg.Enabled {
-		return &Service{enabled: false, path: cfg.Path}, nil
+		return &Service{enabled: false, path: cfg.Path, excludePaths: normalizePathSet(cfg.ExcludePaths)}, nil
 	}
 
 	r := prometheus.NewRegistry()
@@ -137,6 +142,7 @@ func New(cfg config.MetricsConfig, pool *pgxpool.Pool) (*Service, error) {
 	return &Service{
 		enabled:                true,
 		path:                   cfg.Path,
+		excludePaths:           normalizePathSet(cfg.ExcludePaths),
 		registry:               r,
 		handler:                promhttp.HandlerFor(r, promhttp.HandlerOpts{}),
 		httpRequestsTotal:      httpRequestsTotal,
@@ -179,6 +185,10 @@ func (s *Service) InstrumentHTTP(next http.Handler) http.Handler {
 	metricsPath := s.Path()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == metricsPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.isExcludedPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -279,6 +289,35 @@ func (s *Service) ObserveCache(route, outcome string) {
 	s.cacheOperations.WithLabelValues(r, o).Inc()
 }
 
+func (s *Service) isExcludedPath(path string) bool {
+	if s == nil || len(s.excludePaths) == 0 {
+		return false
+	}
+	_, ok := s.excludePaths[strings.TrimSpace(path)]
+	return ok
+}
+
+func normalizePathSet(paths []string) map[string]struct{} {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	out := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		out[trimmed] = struct{}{}
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+
+	return out
+}
+
 func boolToFloat64(v bool) float64 {
 	if v {
 		return 1
@@ -315,4 +354,32 @@ func (w *statusCapturingResponseWriter) WriteHeader(statusCode int) {
 // SetRoutePattern stores resolved route pattern for metrics labeling.
 func (w *statusCapturingResponseWriter) SetRoutePattern(pattern string) {
 	w.routePattern = pattern
+	if setter, ok := w.ResponseWriter.(interface{ SetRoutePattern(string) }); ok {
+		setter.SetRoutePattern(pattern)
+	}
+}
+
+// Flush forwards flush capability when supported by underlying writer.
+func (w *statusCapturingResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack forwards connection hijack when supported.
+func (w *statusCapturingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+// Push forwards HTTP/2 server push when supported.
+func (w *statusCapturingResponseWriter) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
 }

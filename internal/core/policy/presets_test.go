@@ -34,7 +34,7 @@ func TestTenantReadPresetPassesValidator(t *testing.T) {
 		WithAuthEngine(engine, auth.ModeStrict),
 		WithLimiter(limiter),
 		WithCacheManager(mgr),
-		WithCache(45*time.Second, "project"),
+		WithCache(45*time.Second, cache.CacheTagSpec{Name: "project"}),
 	)
 
 	metas, err := DescribePolicies(policies...)
@@ -53,7 +53,7 @@ func TestTenantWritePresetPassesValidator(t *testing.T) {
 		WithAuthEngine(engine, auth.ModeStrict),
 		WithLimiter(limiter),
 		WithCacheManager(mgr),
-		WithInvalidateTags("project"),
+		WithInvalidateTags(cache.CacheTagSpec{Name: "project"}),
 	)
 
 	metas, err := DescribePolicies(policies...)
@@ -71,7 +71,7 @@ func TestPublicReadPresetPassesValidator(t *testing.T) {
 	policies := PublicRead(
 		WithLimiter(limiter),
 		WithCacheManager(mgr),
-		WithCache(20*time.Second, "public"),
+		WithCache(20*time.Second, cache.CacheTagSpec{Name: "public"}),
 	)
 
 	metas, err := DescribePolicies(policies...)

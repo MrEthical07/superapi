@@ -190,7 +190,9 @@ func (m *Module) Register(r httpx.Router) error {
     r.Handle(http.MethodPost, "/api/v1/projects", httpx.Adapter(m.handler.Create),
         authPol,
         policy.TenantRequired(),
-        policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{Tags: []string{"project"}}),
+        policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{
+            {Name: "project-list", TenantID: true},
+        }}),
     )
 
     // Get by ID
@@ -199,7 +201,9 @@ func (m *Module) Register(r httpx.Router) error {
         policy.TenantRequired(),
         policy.CacheRead(m.cache, cache.CacheReadConfig{
             TTL:  30 * time.Second,
-            Tags: []string{"project"},
+            TagSpecs: []cache.CacheTagSpec{
+                {Name: "project", PathParams: []string{"id"}},
+            },
             VaryBy: cache.CacheVaryBy{
                 TenantID:   true,
                 PathParams: []string{"id"},
@@ -213,7 +217,9 @@ func (m *Module) Register(r httpx.Router) error {
         policy.TenantRequired(),
         policy.CacheRead(m.cache, cache.CacheReadConfig{
             TTL:  15 * time.Second,
-            Tags: []string{"project"},
+            TagSpecs: []cache.CacheTagSpec{
+                {Name: "project-list", TenantID: true},
+            },
             VaryBy: cache.CacheVaryBy{
                 TenantID:    true,
                 QueryParams: []string{"limit"},
@@ -225,7 +231,10 @@ func (m *Module) Register(r httpx.Router) error {
     r.Handle(http.MethodPatch, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Update),
         authPol,
         policy.TenantRequired(),
-        policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{Tags: []string{"project"}}),
+        policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{
+            {Name: "project", PathParams: []string{"id"}},
+            {Name: "project-list", TenantID: true},
+        }}),
     )
 
     // Delete
@@ -233,7 +242,10 @@ func (m *Module) Register(r httpx.Router) error {
         authPol,
         policy.TenantRequired(),
         policy.RequirePerm("project.delete"),
-        policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{Tags: []string{"project"}}),
+        policy.CacheInvalidate(m.cache, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{
+            {Name: "project", PathParams: []string{"id"}},
+            {Name: "project-list", TenantID: true},
+        }}),
     )
 
     return nil

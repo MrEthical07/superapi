@@ -315,6 +315,13 @@ func routePolicies(cfg TemplateConfig) []string {
 		cacheCfg.WriteString("cache.CacheReadConfig{")
 		cacheCfg.WriteString("Key: \"" + spec.Package + ".ping\", ")
 		cacheCfg.WriteString("TTL: 30 * time.Second")
+		cacheCfg.WriteString(", TagSpecs: []cache.CacheTagSpec{{Name: \"" + spec.Package + ".ping\"")
+		if opt.UseTenant {
+			cacheCfg.WriteString(", TenantID: true")
+		} else if opt.UseAuth {
+			cacheCfg.WriteString(", UserID: true")
+		}
+		cacheCfg.WriteString("}}")
 		if opt.UseAuth || opt.UseTenant {
 			cacheCfg.WriteString(", AllowAuthenticated: true, VaryBy: cache.CacheVaryBy{")
 			if opt.UseTenant {

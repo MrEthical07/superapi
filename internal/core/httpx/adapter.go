@@ -73,11 +73,13 @@ type unifiedResult interface {
 // - Writes unified response envelope through response package helpers
 // - Uses request-id from context for deterministic error responses
 func Adapter[Req any, Resp any](fn HandlerFunc[Req, Resp]) http.Handler {
+	noBody := isNoBodyRequest[Req]()
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := RequestIDFromContext(r.Context())
 
 		var req Req
-		if !isNoBodyRequest[Req]() {
+		if !noBody {
 			if err := DecodeAndValidateJSON(w, r, &req); err != nil {
 				if _, isApp := apperr.AsAppError(err); isApp {
 					response.Error(w, err, reqID)

@@ -707,7 +707,9 @@ func (m *Module) Register(r httpx.Router) error {
 		policy.RequirePerm("project.write"),
 		policy.RateLimitWithKeyer(m.limiter, "projects.create", rlRule, ratelimit.KeyByTenant()),
 		policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
-			Tags: []string{"project"},
+			TagSpecs: []cache.CacheTagSpec{
+				{Name: "project-list", TenantID: true},
+			},
 		}),
 	)
 
@@ -718,7 +720,9 @@ func (m *Module) Register(r httpx.Router) error {
 		policy.RateLimitWithKeyer(m.limiter, "projects.get", rlRule, ratelimit.KeyByTenant()),
 		policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
 			TTL:  30 * time.Second,
-			Tags: []string{"project"},
+			TagSpecs: []cache.CacheTagSpec{
+				{Name: "project", PathParams: []string{"id"}},
+			},
 			VaryBy: cache.CacheVaryBy{
 				TenantID:   true,
 				PathParams: []string{"id"},
@@ -733,7 +737,9 @@ func (m *Module) Register(r httpx.Router) error {
 		policy.RateLimitWithKeyer(m.limiter, "projects.list", rlRule, ratelimit.KeyByTenant()),
 		policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
 			TTL:  15 * time.Second,
-			Tags: []string{"project"},
+			TagSpecs: []cache.CacheTagSpec{
+				{Name: "project-list", TenantID: true},
+			},
 			VaryBy: cache.CacheVaryBy{
 				TenantID:    true,
 				QueryParams: []string{"limit"},
@@ -748,7 +754,10 @@ func (m *Module) Register(r httpx.Router) error {
 		policy.RequirePerm("project.write"),
 		policy.RateLimitWithKeyer(m.limiter, "projects.update", rlRule, ratelimit.KeyByTenant()),
 		policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
-			Tags: []string{"project"},
+			TagSpecs: []cache.CacheTagSpec{
+				{Name: "project", PathParams: []string{"id"}},
+				{Name: "project-list", TenantID: true},
+			},
 		}),
 	)
 
@@ -758,7 +767,10 @@ func (m *Module) Register(r httpx.Router) error {
 		policy.TenantRequired(),
 		policy.RequirePerm("project.delete"),
 		policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
-			Tags: []string{"project"},
+			TagSpecs: []cache.CacheTagSpec{
+				{Name: "project", PathParams: []string{"id"}},
+				{Name: "project-list", TenantID: true},
+			},
 		}),
 	)
 

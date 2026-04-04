@@ -159,9 +159,10 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 
 	if cfg.Cache.Enabled {
 		cacheMgr, err := cache.NewManager(deps.Redis, cache.ManagerConfig{
-			Env:             cfg.Env,
-			FailOpen:        cfg.Cache.FailOpen,
-			DefaultMaxBytes: cfg.Cache.DefaultMaxBytes,
+			Env:                cfg.Env,
+			FailOpen:           cfg.Cache.FailOpen,
+			DefaultMaxBytes:    cfg.Cache.DefaultMaxBytes,
+			TagVersionCacheTTL: cfg.Cache.TagVersionCacheTTL,
 			Observe: func(route, outcome string) {
 				if deps.Metrics == nil {
 					return

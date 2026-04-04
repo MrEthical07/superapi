@@ -108,6 +108,45 @@ func TestLintRejectsInvalidAccessLogExcludePath(t *testing.T) {
 	}
 }
 
+func TestLintRejectsInvalidTracingExcludePath(t *testing.T) {
+	t.Setenv("HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS", "healthz,/readyz")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for tracing exclude path")
+	}
+}
+
+func TestLintRejectsInvalidMetricsExcludePath(t *testing.T) {
+	t.Setenv("METRICS_EXCLUDE_PATHS", "healthz,/readyz")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for metrics exclude path")
+	}
+}
+
+func TestLintRejectsNegativeCacheTagVersionCacheTTL(t *testing.T) {
+	t.Setenv("CACHE_TAG_VERSION_CACHE_TTL", "-1s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for negative cache tag version cache ttl")
+	}
+}
+
 func TestLintRejectsMiddlewareTimeoutExceedingWriteTimeout(t *testing.T) {
 	t.Setenv("HTTP_WRITE_TIMEOUT", "100ms")
 	t.Setenv("HTTP_MIDDLEWARE_REQUEST_TIMEOUT", "200ms")
@@ -196,6 +235,54 @@ func TestLintRejectsMetricsWithoutAuthTokenInProd(t *testing.T) {
 
 	if err := cfg.Lint(); err == nil {
 		t.Fatalf("expected lint error for missing metrics auth token in prod")
+	}
+}
+
+func TestLoadUsesFailClosedDefaultsInProd(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.RateLimit.FailOpen {
+		t.Fatalf("expected ratelimit fail-open disabled by default in prod")
+	}
+	if cfg.Cache.FailOpen {
+		t.Fatalf("expected cache fail-open disabled by default in prod")
+	}
+}
+
+func TestLintRejectsRateLimitFailOpenInProd(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("RATELIMIT_ENABLED", "true")
+	t.Setenv("RATELIMIT_FAIL_OPEN", "true")
+	t.Setenv("REDIS_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for prod ratelimit fail-open")
+	}
+}
+
+func TestLintRejectsCacheFailOpenInProd(t *testing.T) {
+	t.Setenv("APP_ENV", "prod")
+	t.Setenv("CACHE_ENABLED", "true")
+	t.Setenv("CACHE_FAIL_OPEN", "true")
+	t.Setenv("REDIS_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if err := cfg.Lint(); err == nil {
+		t.Fatalf("expected lint error for prod cache fail-open")
 	}
 }
 

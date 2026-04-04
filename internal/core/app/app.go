@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/config"
+	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/logx"
+	"github.com/MrEthical07/superapi/internal/core/requestid"
+	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
 // START HERE:
@@ -114,18 +117,19 @@ func requireBearerToken(next http.Handler, token string) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rid := requestid.FromContext(r.Context())
 		authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 		parts := strings.Fields(authHeader)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "unauthorized"), rid)
 			return
 		}
 
 		provided := strings.TrimSpace(parts[1])
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "unauthorized"), rid)
 			return
 		}
 

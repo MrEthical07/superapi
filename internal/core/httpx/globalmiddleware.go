@@ -30,7 +30,7 @@ func AssembleGlobalMiddleware(base http.Handler, cfg config.HTTPMiddlewareConfig
 	handler := base
 
 	handler = AccessLog(cfg.AccessLog, log)(handler)
-	handler = Tracing(tracingSvc)(handler)
+	handler = TracingWithExcludes(tracingSvc, cfg.TracingExcludePaths)(handler)
 	handler = RequestTimeout(cfg.RequestTimeout)(handler)
 
 	if cfg.MaxBodyBytes > 0 {

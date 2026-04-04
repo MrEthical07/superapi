@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/trace/noop"
+
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/logx"
+	coretracing "github.com/MrEthical07/superapi/internal/core/tracing"
 )
 
 type benchParseRequest struct {
@@ -60,6 +63,45 @@ func BenchmarkAssembleGlobalMiddleware_Healthz(b *testing.B) {
 	}))
 
 	handler := AssembleGlobalMiddleware(mux, cfg, logger, nil)
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			b.Fatalf("status=%d want=%d", rr.Code, http.StatusOK)
+		}
+	}
+}
+
+func BenchmarkAssembleGlobalMiddleware_HealthzTracingEnabled(b *testing.B) {
+	logger := newBenchLogger(b)
+	cfg := config.HTTPMiddlewareConfig{
+		RequestIDEnabled:       true,
+		RecovererEnabled:       true,
+		MaxBodyBytes:           1 << 20,
+		SecurityHeadersEnabled: true,
+		RequestTimeout:         5 * time.Second,
+		AccessLog: config.AccessLogConfig{
+			Enabled: false,
+		},
+		ClientIP: config.ClientIPConfig{},
+		CORS:     config.CORSConfig{Enabled: false},
+	}
+
+	tracingSvc := coretracing.NewWithProvider(noop.NewTracerProvider(), nil)
+
+	mux := NewMux()
+	mux.Handle(http.MethodGet, "/healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+
+	handler := AssembleGlobalMiddleware(mux, cfg, logger, tracingSvc)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 

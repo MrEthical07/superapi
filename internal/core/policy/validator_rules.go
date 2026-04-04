@@ -143,6 +143,8 @@ func policyOrderStage(policyType PolicyType) int {
 		return 4
 	case PolicyTypeCacheRead, PolicyTypeCacheInvalidate:
 		return 5
+	case PolicyTypeCacheControl:
+		return 6
 	default:
 		return 0
 	}

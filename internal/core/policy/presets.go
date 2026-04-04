@@ -31,7 +31,7 @@ func TenantRead(opts ...PresetOption) []Policy {
 		RateLimit(cfg.limiter, rule),
 		CacheRead(cfg.cacheManager, cache.CacheReadConfig{
 			TTL:                cfg.cacheTTL,
-			Tags:               append([]string(nil), cfg.cacheTags...),
+			TagSpecs:           append([]cache.CacheTagSpec(nil), cfg.cacheTagSpecs...),
 			AllowAuthenticated: cfg.cacheAllowAuth,
 			VaryBy:             cfg.cacheVaryBy,
 		}),
@@ -50,16 +50,16 @@ func TenantWrite(opts ...PresetOption) []Policy {
 
 	rule := cfg.rateLimitRule
 	rule.Scope = ratelimit.ScopeTenant
-	tags := cfg.invalidateTags
+	tagSpecs := cfg.invalidateTagCfg
 	if !cfg.invalidateTagSet {
-		tags = cfg.cacheTags
+		tagSpecs = cfg.cacheTagSpecs
 	}
 
 	policies := []Policy{
 		AuthRequired(cfg.authEngine, cfg.authMode),
 		TenantRequired(),
 		RateLimit(cfg.limiter, rule),
-		CacheInvalidate(cfg.cacheManager, cache.CacheInvalidateConfig{Tags: append([]string(nil), tags...)}),
+		CacheInvalidate(cfg.cacheManager, cache.CacheInvalidateConfig{TagSpecs: append([]cache.CacheTagSpec(nil), tagSpecs...)}),
 	}
 
 	mustValidatePreset("TenantWrite", http.MethodPost, "/api/v1/resource", policies)
@@ -78,9 +78,9 @@ func PublicRead(opts ...PresetOption) []Policy {
 	policies := []Policy{
 		RateLimit(cfg.limiter, rule),
 		CacheRead(cfg.cacheManager, cache.CacheReadConfig{
-			TTL:    cfg.cacheTTL,
-			Tags:   append([]string(nil), cfg.cacheTags...),
-			VaryBy: cache.CacheVaryBy{Method: true},
+			TTL:      cfg.cacheTTL,
+			TagSpecs: append([]cache.CacheTagSpec(nil), cfg.cacheTagSpecs...),
+			VaryBy:   cache.CacheVaryBy{Method: true},
 		}),
 	}
 

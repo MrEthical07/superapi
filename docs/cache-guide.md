@@ -1,342 +1,304 @@
 # Cache Guide
 
-Deep guide to the cache subsystem — key construction, tag-based invalidation, policy integration, and production tuning.
+Deep guide to Redis-backed route cache behavior: key building, dynamic tag specs, scoped invalidation, and performance tuning.
 
 ---
 
 ## Architecture overview
 
-The cache layer has three components:
+The cache subsystem has three main pieces:
 
 | Component | File | Role |
 |---|---|---|
-| **Manager** | `internal/core/cache/manager.go` | Key building, Redis get/set, tag version management |
-| **CacheRead policy** | `internal/core/policy/cache.go` | Per-route middleware that serves/stores cached responses |
-| **CacheInvalidate policy** | `internal/core/policy/cache.go` | Per-route middleware that bumps tags after writes |
+| **Manager** | `internal/core/cache/manager.go` | Key build, Redis get/set, tag version token fetch, tag version bumps |
+| **CacheRead policy** | `internal/core/policy/cache.go` | Route middleware for read-through cache |
+| **CacheInvalidate policy** | `internal/core/policy/cache.go` | Route middleware for scoped version bumps after successful writes |
 
-Caching is per-route and opt-in. You attach cache policies to individual routes in your module's `routes.go`. There is no automatic caching.
+Caching is route-level and opt-in.
 
 ---
 
-## Enabling the cache
+## Enabling cache
 
-**Required env vars:**
+Required:
 
-```
+```bash
 CACHE_ENABLED=true
-REDIS_ENABLED=true    # Cache requires Redis
+REDIS_ENABLED=true
 ```
 
-**Optional tuning:**
+Optional tuning:
 
 | Env var | Default | Description |
 |---|---|---|
-| `CACHE_DEFAULT_MAX_BYTES` | `262144` (256 KiB) | Max response body size to store |
-| `CACHE_FAIL_OPEN` | `true` | Pass through on Redis errors |
+| `CACHE_DEFAULT_MAX_BYTES` | `262144` | Max response body bytes stored when route `MaxBytes` is not set |
+| `CACHE_FAIL_OPEN` | `true` in non-prod, `false` in prod | Bypass cache on Redis failure (or fail request when false) |
+| `CACHE_TAG_VERSION_CACHE_TTL` | `250ms` | Process-local TTL for cached tag version tokens |
 
 Notes:
-- Route TTL is configured per-route via `CacheReadConfig.TTL` (there is no global `CACHE_DEFAULT_TTL` env var).
-- Key prefixes are currently fixed in code as `cache` (read keys) and `cver` (tag version keys).
-
-### Strict safety guarantees
-
-- `policy.CacheRead(...)` requires a non-nil cache manager and `TTL > 0`; invalid config panics at registration.
-- `policy.CacheInvalidate(...)` requires a non-nil cache manager and at least one tag; invalid config panics at registration.
-- On authenticated routes (`AuthRequired` present), `CacheRead` must set `VaryBy.UserID` or `VaryBy.TenantID`; otherwise route registration fails with `invalid route config`.
-- The same policy invariants are checked statically by `go run ./cmd/superapi-verify ./...`.
+- TTL is route-level (`CacheReadConfig.TTL`).
+- Read key prefix is `cache:{env}:...`.
+- Tag version key prefix is `cver:{env}:...`.
 
 ---
 
 ## Key construction
 
-Every cached response has a unique Redis key built from the route pattern and vary-by dimensions.
+### Final Redis key format
 
-### Key format
-
-```
-cache:{env}:{route_pattern}:{content_hash}
+```text
+cache:{env}:{route_part}:{short_hash}
 ```
 
 Example:
 
+```text
+cache:prod:/api/v1/projects/{id}:2df708dc47c207792eaf2cf732445d75
 ```
-cache:prod:/api/v1/projects/{id}:a3f8b2c1e9d045...
-```
 
-### Content hash (vary-by fingerprint)
+### Canonical string
 
-The content hash is a SHA-256 of a canonical string built from the vary-by config. The canonical string is constructed by `BuildReadKey()` in [internal/core/cache/manager.go](internal/core/cache/manager.go).
+The hash part is computed from a canonical string assembled in manager code. The canonical string includes selected VaryBy dimensions plus tag version token.
 
-**Canonical string components** (in order, separated by `|`):
+Canonical parts are appended in deterministic order:
 
-1. `method={METHOD}` — if `VaryBy.Method` is true
-2. `tenant={TENANT_ID}` — if `VaryBy.TenantID` is true
-3. `user={USER_ID}` — if `VaryBy.UserID` is true
-4. `role={ROLE}` — if `VaryBy.Role` is true
-5. `path:{name}={value}` — for each `VaryBy.PathParams` entry, sorted by name
-6. `query:{name}={value}` — for each `VaryBy.QueryParams` entry, sorted by name
-7. `header:{name}={value}` — for each `VaryBy.Headers` entry, sorted by name (lowercase)
-8. `tags:{tag1}={ver1},{tag2}={ver2}` — tag version tokens for all `Tags`
+1. `route=...`
+2. `method=...` when `VaryBy.Method`
+3. `tenant=...` when `VaryBy.TenantID`
+4. `user=...` when `VaryBy.UserID`
+5. `role=...` when `VaryBy.Role`
+6. `path.{name}=...` for configured path params
+7. `header.{name}=...` for configured headers
+8. `query_hash=...` for configured query params
+9. `auth=allowed` when principal exists and `AllowAuthenticated` is true
+10. `tags=...` token from resolved tag specs and Redis versions
 
-Tag versions are fetched from Redis (`MGET cver:{env}:{tag1} cver:{env}:{tag2} ...`). Missing tags get version `"0"`.
-
-### Why tag versions are part of the key
-
-When a tag version changes (via `CacheInvalidate`), the canonical string changes, which produces a different SHA-256 hash, which maps to a different Redis key. The old cached entry simply expires via TTL — no explicit deletion needed.
-
-This is the core invalidation mechanism: **bump the tag version → cache key changes → automatic miss**.
+Then:
+- `SHA-256(canonical)` is computed
+- first 16 bytes are hex-encoded as `short_hash`
 
 ---
 
-## Tag-based invalidation
+## Dynamic tag specs
 
-### How it works
+Static tag arrays were replaced with structured `TagSpecs`.
 
-1. `CacheRead` includes tag versions in the key hash.
-2. `CacheInvalidate` runs `INCR` on tag version keys after successful writes.
-3. Next `CacheRead` request sees a new tag version → different hash → cache miss → fresh response.
-
-### Tag naming conventions
-
-Use a simple noun for the entity:
+### CacheRead config
 
 ```go
-Tags: []string{"project"}           // Single entity
-Tags: []string{"project", "team"}   // Cross-entity invalidation
+TagSpecs []cache.CacheTagSpec
 ```
 
-Do NOT use route-specific tags like `"project-list"` or `"project-detail"`. The version bump should affect all cached entries for that entity.
+### CacheInvalidate config
 
-### Tag version key format
-
-```
-cver:{env}:{tag_name}
+```go
+TagSpecs []cache.CacheTagSpec
 ```
 
-Example: `cver:prod:project`
+### Tag spec shape
 
-### Tag lifecycle
+```go
+type CacheTagSpec struct {
+    Name       string
+    PathParams []string
+    TenantID   bool
+    UserID     bool
+    Literals   []cache.CacheTagLiteral
+}
+```
 
-| Event | What happens |
+V1 supports only:
+- path params
+- auth tenant id
+- auth user id
+- literal key/value dimensions
+
+Query/header-derived tag params are intentionally blocked in v1 to avoid cardinality explosion.
+
+---
+
+## Why tags exist when VaryBy already exists
+
+- `VaryBy` defines **who gets separate cache entries**.
+- `TagSpecs` define **which entries get invalidated together after writes**.
+
+No data bleed is handled by `VaryBy`.
+Freshness on writes is handled by tag version bumps.
+
+---
+
+## Invalidation lifecycle (bump-miss)
+
+1. Read route computes effective tag names from `TagSpecs` and request context.
+2. Manager fetches current versions from Redis (`MGET cver:{env}:{tag}`) and includes token in key hash input.
+3. Write route succeeds (2xx), `CacheInvalidate` resolves effective tag names and calls `INCR` per tag version key.
+4. Next read sees changed tag version token, canonical string changes, key hash changes, cache miss occurs, fresh value is stored.
+
+This is called **bump-miss invalidation**.
+
+---
+
+## Tag naming and scope strategy
+
+Use precise scopes to avoid over-invalidation.
+
+### Recommended patterns
+
+| Route type | Recommended tag spec |
 |---|---|
-| First CacheRead with tag `X` | MGET `cver:{env}:X` → miss, version defaults to `"0"` |
-| First CacheInvalidate with tag `X` | INCR `cver:{env}:X` → key created with value `1` |
-| Subsequent invalidation | INCR → value `2`, `3`, etc. |
-| Tag version overflow | Version continues incrementing. Redis INCR returns up to 2^63-1. |
-| Old cached entries | Expire via TTL. No explicit cleanup needed. |
+| Detail endpoint | `Name: "project", PathParams: ["id"]` |
+| Tenant list endpoint | `Name: "project-list", TenantID: true` |
+| User self endpoint | `Name: "user-profile", UserID: true` |
+| Cross-entity list | `Name: "dashboard-list", TenantID: true, Literals: [{Key:"view",Value:"summary"}]` |
 
----
+### Write route best practice
 
-## VaryBy strategies
+When write can affect both detail and list responses, bump both scopes.
 
-### Choosing the right dimensions
+Example for project update:
 
-| Endpoint pattern | VaryBy config | Why |
-|---|---|---|
-| `GET /api/v1/settings` (global) | `{}` (empty) | Same response for everyone |
-| `GET /api/v1/projects` (tenant list) | `TenantID: true, QueryParams: ["limit","cursor"]` | Different data per tenant, paginated |
-| `GET /api/v1/projects/{id}` (detail) | `TenantID: true, PathParams: ["id"]` | Specific item per tenant |
-| `GET /api/v1/projects/self` (self) | `TenantID: true` | Tenant's own scoped data |
-| `GET /api/v1/users/me` (self) | `UserID: true` | User's own data |
-| `GET /api/v1/projects?status=active` | `TenantID: true, QueryParams: ["status","limit","cursor"]` | Filtered + paginated |
-
-### Common mistakes
-
-**Missing TenantID vary** — Tenant A's data served to Tenant B:
 ```go
-// BAD
-VaryBy: cache.CacheVaryBy{PathParams: []string{"id"}}
-// GOOD
-VaryBy: cache.CacheVaryBy{TenantID: true, PathParams: []string{"id"}}
+policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
+    TagSpecs: []cache.CacheTagSpec{
+        {Name: "project", PathParams: []string{"id"}},
+        {Name: "project-list", TenantID: true},
+    },
+})
 ```
 
-**Too many query params** — Low cache hit rate:
-```go
-// BAD — every unique combination of all params creates a new cache entry
-VaryBy: cache.CacheVaryBy{QueryParams: []string{"limit","cursor","sort","order","filter","q"}}
-// BETTER — only include params that meaningfully change the result
-VaryBy: cache.CacheVaryBy{QueryParams: []string{"limit","cursor"}}
-```
-
-**VaryBy headers with high cardinality** — `Accept-Language` or `User-Agent` will create a cache entry per unique header value. Use sparingly.
+This invalidates the updated project detail and tenant list keys without evicting unrelated projects from other ids.
 
 ---
 
 ## Practical examples
 
-### Caching a tenant-scoped list
+### Tenant project list read cache
 
 ```go
-// routes.go
-func (m *Module) registerRoutes(r httpx.Router) {
-    r.Handle(http.MethodGet, "/api/v1/projects", httpx.Adapter(m.handler.List),
-        policy.AuthRequired(m.authEngine, m.authMode),
-        policy.TenantRequired(),
-        policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
-            TTL:  30 * time.Second,
-            Tags: []string{"project"},
-            VaryBy: cache.CacheVaryBy{
-                TenantID:    true,
-                QueryParams: []string{"limit", "cursor"},
-            },
-        }),
-    )
-}
+policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
+    TTL: 30 * time.Second,
+    TagSpecs: []cache.CacheTagSpec{
+        {Name: "project-list", TenantID: true},
+    },
+    VaryBy: cache.CacheVaryBy{
+        TenantID:    true,
+        QueryParams: []string{"limit", "cursor"},
+    },
+})
 ```
 
-### Caching a detail endpoint
+### Project detail read cache
 
 ```go
-r.Handle(http.MethodGet, "/api/v1/projects/{id}", httpx.Adapter(m.handler.GetByID),
-    policy.AuthRequired(m.authEngine, m.authMode),
-    policy.TenantRequired(),
-    policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
-        TTL:  60 * time.Second,
-        Tags: []string{"project"},
-        VaryBy: cache.CacheVaryBy{
-            TenantID:   true,
-            PathParams: []string{"id"},
-        },
-    }),
-)
+policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
+    TTL: 60 * time.Second,
+    TagSpecs: []cache.CacheTagSpec{
+        {Name: "project", PathParams: []string{"id"}},
+    },
+    VaryBy: cache.CacheVaryBy{
+        TenantID:   true,
+        PathParams: []string{"id"},
+    },
+})
 ```
 
-### Invalidating on create
+### Project update invalidation (detail + list)
 
 ```go
-r.Handle(http.MethodPost, "/api/v1/projects", httpx.Adapter(m.handler.Create),
-    policy.AuthRequired(m.authEngine, m.authMode),
-    policy.TenantRequired(),
-    policy.RequirePerm("project.write"),
-    policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
-        Tags: []string{"project"},
-    }),
-)
-```
-
-### Invalidating on update or delete
-
-```go
-r.Handle(http.MethodPut, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Update),
-    policy.AuthRequired(m.authEngine, m.authMode),
-    policy.TenantRequired(),
-    policy.RequirePerm("project.write"),
-    policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
-        Tags: []string{"project"},
-    }),
-)
-
-r.Handle(http.MethodDelete, "/api/v1/projects/{id}", httpx.Adapter(m.handler.Delete),
-    policy.AuthRequired(m.authEngine, m.authMode),
-    policy.TenantRequired(),
-    policy.RequirePerm("project.delete"),
-    policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
-        Tags: []string{"project"},
-    }),
-)
-```
-
-### Cross-entity invalidation
-
-If updating a team also affects project listings:
-
-```go
-// On team update
 policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
-    Tags: []string{"team", "project"},  // Bumps both tags
+    TagSpecs: []cache.CacheTagSpec{
+        {Name: "project", PathParams: []string{"id"}},
+        {Name: "project-list", TenantID: true},
+    },
+})
+```
+
+### User profile cache with user-scoped tag
+
+```go
+policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
+    TTL: 30 * time.Second,
+    TagSpecs: []cache.CacheTagSpec{
+        {Name: "user-profile", UserID: true},
+    },
+    VaryBy: cache.CacheVaryBy{UserID: true},
+    AllowAuthenticated: true,
 })
 ```
 
 ---
 
-## TTL guidance
+## What is not cached
 
-| Endpoint type | Suggested TTL | Rationale |
-|---|---|---|
-| Tenant config / settings | 60–120s | Low write frequency, high read frequency |
-| Entity list (paginated) | 15–30s | Moderate churn, invalidation handles most staleness |
-| Entity detail | 30–60s | Stable between writes, invalidation handles updates |
-| Self/me endpoints | 10–30s | Per-user, changes on profile update |
-| Public/static data | 120–300s | Rarely changes |
+Cache write is bypassed when:
 
-These are starting points. Monitor cache hit rates and adjust.
+1. Method is not allowed (`Methods`, default GET/HEAD)
+2. Status is not cacheable (`CacheStatuses`, default 200)
+3. Body exceeds `MaxBytes`
+4. Response has `Set-Cookie`
+5. Response is streaming/hijacked
+
+Auth safety rule still applies:
+- authenticated route cache requires `VaryBy.UserID` or `VaryBy.TenantID`.
 
 ---
 
 ## Fail-open behavior
 
-When Redis is unavailable:
+On Redis failures:
 
-- **Fail-open (default):** Request bypasses cache entirely — runs handler directly. No error returned.
-- **Fail-closed:** Returns 500 to the client.
+- fail-open: bypass cache and continue handler
+- fail-closed: return dependency-unavailable response
+
+In prod/prodution-like environments, startup lint rejects `CACHE_FAIL_OPEN=true` when cache is enabled.
 
 Per-route override:
 
 ```go
-failClosed := false
-policy.CacheRead(cacheMgr, cache.CacheReadConfig{
-    TTL:      30 * time.Second,
-    FailOpen: &failClosed,  // Override global setting for this route
+failOpen := false
+policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
+    TTL: 30 * time.Second,
+    FailOpen: &failOpen,
 })
 ```
 
 ---
 
-## What is NOT cached
-
-The cache policy will skip storing a response if:
-
-1. HTTP method is not in `Methods` (default: GET, HEAD)
-2. Response status is not in `CacheStatuses` (default: 200)
-3. Response body exceeds `MaxBytes` (default: 256 KiB)
-4. Response includes `Set-Cookie` header
-5. The response writer was hijacked (WebSocket upgrade) or flushed (streaming)
-
-On authenticated routes, missing `VaryBy.UserID` and `VaryBy.TenantID` is not a runtime skip. It is a startup validation error (`invalid route config`).
-
----
-
 ## Monitoring and debugging
 
-### Cache hit/miss
+Cache outcomes emitted as metrics labels:
+- hit
+- miss
+- set
+- bypass
+- error
 
-The cache policy records outcomes via metrics labels (route + outcome):
-
-- `hit` — served from cache
-- `miss` — cache miss
-- `set` — response stored
-- `bypass` — not cacheable (method/status/streaming/cookie/size)
-- `error` — cache operation failed
-
-No `X-Cache` response header is emitted by default.
-
-### Redis key inspection
-
-To see what's cached:
+Inspect keys:
 
 ```bash
 redis-cli KEYS "cache:dev:*"
 redis-cli KEYS "cver:dev:*"
 ```
 
-To check a tag version:
+Check one version key:
 
 ```bash
-redis-cli GET "cver:dev:project"
+redis-cli GET "cver:dev:project|path.id=proj_123"
 ```
 
-To force-invalidate a tag manually:
+Force a manual bump:
 
 ```bash
-redis-cli INCR "cver:dev:project"
+redis-cli INCR "cver:dev:project|path.id=proj_123"
 ```
 
-### Key space cleanup
+---
 
-Old cache entries expire via TTL. There is no garbage collection. If you need to flush all cache entries:
+## Performance notes
 
-```bash
-redis-cli KEYS "cache:dev:*" | xargs redis-cli DEL
-```
+- static key parts and normalized tag specs are prepared at route registration
+- route label is memoized per resolved route pattern in policy runtime
+- tag version tokens are cached in-process for `CACHE_TAG_VERSION_CACHE_TTL`
+- successful bump clears process-local token cache immediately
 
-Or use `FLUSHDB` in development.
+Tune `CACHE_TAG_VERSION_CACHE_TTL` low for very high-cardinality dynamic tags.

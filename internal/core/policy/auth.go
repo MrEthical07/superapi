@@ -1,7 +1,9 @@
 package policy
 
 import (
+	"bufio"
 	"context"
+	"net"
 	"net/http"
 	"strings"
 
@@ -151,6 +153,38 @@ func (w *authGuardResponseWriter) shouldSuppressUnauthorized() bool {
 		return true
 	}
 	return w.suppressUnauthorized()
+}
+
+// SetRoutePattern forwards route-pattern propagation when supported.
+func (w *authGuardResponseWriter) SetRoutePattern(pattern string) {
+	if setter, ok := w.ResponseWriter.(interface{ SetRoutePattern(string) }); ok {
+		setter.SetRoutePattern(pattern)
+	}
+}
+
+// Flush forwards flush capability when supported by underlying writer.
+func (w *authGuardResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack forwards connection hijack when supported.
+func (w *authGuardResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hijacker.Hijack()
+}
+
+// Push forwards HTTP/2 server push when supported.
+func (w *authGuardResponseWriter) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
 }
 
 func authRequiredWithEngine(engine *goauth.Engine, mode auth.Mode) Policy {

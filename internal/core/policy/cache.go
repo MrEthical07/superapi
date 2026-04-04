@@ -2,9 +2,11 @@ package policy
 
 import (
 	"bufio"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/cache"
@@ -21,6 +23,110 @@ const (
 	cacheOutcomeError  = "error"
 )
 
+type cacheReadRuntime struct {
+	manager           *cache.Manager
+	cfg               cache.CacheReadConfig
+	template          cache.ReadKeyTemplate
+	allowedMethods    map[string]struct{}
+	cacheStatuses     map[int]struct{}
+	maxBytes          int
+	requireAuthSafety bool
+	routeParts        sync.Map
+}
+
+func newCacheReadRuntime(manager *cache.Manager, cfg cache.CacheReadConfig) cacheReadRuntime {
+	template := cache.PrepareReadKeyTemplate(cfg)
+	maxBytes := cfg.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = manager.DefaultMaxBytes()
+	}
+
+	return cacheReadRuntime{
+		manager:           manager,
+		cfg:               cfg,
+		template:          template,
+		allowedMethods:    buildMethodSet(cfg.Methods),
+		cacheStatuses:     buildCacheStatusSet(cfg.CacheStatuses),
+		maxBytes:          maxBytes,
+		requireAuthSafety: !template.UserID && !template.TenantID,
+	}
+}
+
+func buildMethodSet(configured []string) map[string]struct{} {
+	out := make(map[string]struct{}, max(len(configured), 2))
+	if len(configured) == 0 {
+		out[http.MethodGet] = struct{}{}
+		out[http.MethodHead] = struct{}{}
+		return out
+	}
+
+	for _, candidate := range configured {
+		method := strings.ToUpper(strings.TrimSpace(candidate))
+		if method == "" {
+			continue
+		}
+		out[method] = struct{}{}
+	}
+
+	if len(out) == 0 {
+		out[http.MethodGet] = struct{}{}
+		out[http.MethodHead] = struct{}{}
+	}
+
+	return out
+}
+
+func buildCacheStatusSet(statuses []int) map[int]struct{} {
+	out := make(map[int]struct{}, max(len(statuses), 1))
+	if len(statuses) == 0 {
+		out[http.StatusOK] = struct{}{}
+		return out
+	}
+
+	for _, status := range statuses {
+		out[status] = struct{}{}
+	}
+
+	if len(out) == 0 {
+		out[http.StatusOK] = struct{}{}
+	}
+
+	return out
+}
+
+func (c *cacheReadRuntime) methodAllowed(method string) bool {
+	if c == nil {
+		return false
+	}
+	_, ok := c.allowedMethods[strings.ToUpper(strings.TrimSpace(method))]
+	return ok
+}
+
+func (c *cacheReadRuntime) routeLabel(route string) string {
+	if c == nil {
+		return cache.NormalizeRoute(route)
+	}
+	if c.template.RoutePart != "" {
+		return c.template.RoutePart
+	}
+
+	key := strings.TrimSpace(route)
+	if key == "" {
+		key = "unknown"
+	}
+
+	if cached, ok := c.routeParts.Load(key); ok {
+		value, _ := cached.(string)
+		if value != "" {
+			return value
+		}
+	}
+
+	normalized := cache.NormalizeRoute(route)
+	c.routeParts.Store(key, normalized)
+	return normalized
+}
+
 // CacheRead enables route-level response caching backed by cache.Manager.
 //
 // Behavior:
@@ -33,7 +139,7 @@ const (
 //	r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
 //	    policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 //	        TTL: 30 * time.Second,
-//	        Tags: []string{"projects"},
+//	        TagSpecs: []cache.CacheTagSpec{{Name: "project", PathParams: []string{"id"}}},
 //	        VaryBy: cache.CacheVaryBy{TenantID: true, UserID: true},
 //	    }),
 //	)
@@ -48,22 +154,30 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 	if cfg.TTL <= 0 {
 		panicInvalidRouteConfigf("%s requires a TTL greater than zero", PolicyTypeCacheRead)
 	}
+	if err := validateCacheTagSpecs(cfg.TagSpecs, false); err != nil {
+		panicInvalidRouteConfigf("%s tag specs are invalid: %v", PolicyTypeCacheRead, err)
+	}
+
+	runtime := newCacheReadRuntime(manager, cfg)
 
 	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rid := requestid.FromContext(r.Context())
 			route := routePattern(r)
+			routePart := runtime.routeLabel(route)
 			failOpen := manager.ResolveFailOpen(cfg.FailOpen)
 
-			if !methodAllowed(r.Method, cfg.Methods) {
+			if !runtime.methodAllowed(r.Method) {
 				manager.Observe(route, cacheOutcomeBypass)
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			ensureAuthCacheSafety(r, cfg)
+			if runtime.requireAuthSafety {
+				ensureAuthCacheSafety(r)
+			}
 
-			key, err := manager.BuildReadKey(r.Context(), r, route, cfg)
+			key, err := manager.BuildReadKeyWithTemplate(r.Context(), r, routePart, runtime.template)
 			if err != nil {
 				manager.Observe(route, cacheOutcomeError)
 				if !failOpen {
@@ -93,14 +207,10 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 
 			manager.Observe(route, cacheOutcomeMiss)
 
-			maxBytes := cfg.MaxBytes
-			if maxBytes <= 0 {
-				maxBytes = manager.DefaultMaxBytes()
-			}
-			writer := newCachingResponseWriter(w, maxBytes)
+			writer := newCachingResponseWriter(w, runtime.maxBytes, runtime.cacheStatuses)
 			next.ServeHTTP(writer, r)
 
-			if !writer.Cacheable(cfg) {
+			if !writer.Cacheable() {
 				manager.Observe(route, cacheOutcomeBypass)
 				return
 			}
@@ -135,15 +245,19 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 // Usage:
 //
 //	r.Handle(http.MethodPost, "/api/v1/projects", handler,
-//	    policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{Tags: []string{"projects"}}),
+//	    policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
+//	        TagSpecs: []cache.CacheTagSpec{{Name: "project", PathParams: []string{"id"}}},
+//	    }),
 //	)
 func CacheInvalidate(manager *cache.Manager, cfg cache.CacheInvalidateConfig) Policy {
 	if manager == nil {
 		panicInvalidRouteConfigf("%s requires a non-nil cache manager", PolicyTypeCacheInvalidate)
 	}
-	if len(cfg.Tags) == 0 {
-		panicInvalidRouteConfigf("%s requires at least one cache tag", PolicyTypeCacheInvalidate)
+	if err := validateCacheTagSpecs(cfg.TagSpecs, true); err != nil {
+		panicInvalidRouteConfigf("%s tag specs are invalid: %v", PolicyTypeCacheInvalidate, err)
 	}
+
+	preparedTagSpecs := cache.PrepareTagSpecs(cfg.TagSpecs)
 
 	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +268,15 @@ func CacheInvalidate(manager *cache.Manager, cfg cache.CacheInvalidateConfig) Po
 			if recorder.statusCode < http.StatusOK || recorder.statusCode >= http.StatusMultipleChoices {
 				return
 			}
-			if err := manager.BumpTags(r.Context(), cfg.Tags); err != nil {
+			resolvedTags, err := cache.ResolveTagNames(r, preparedTagSpecs)
+			if err != nil {
+				manager.Observe(route, cacheOutcomeError)
+				return
+			}
+			if len(resolvedTags) == 0 {
+				return
+			}
+			if err := manager.BumpTags(r.Context(), resolvedTags); err != nil {
 				manager.Observe(route, cacheOutcomeError)
 			}
 		})
@@ -164,7 +286,7 @@ func CacheInvalidate(manager *cache.Manager, cfg cache.CacheInvalidateConfig) Po
 		Type: PolicyTypeCacheInvalidate,
 		Name: "CacheInvalidate",
 		CacheInvalidate: CacheInvalidateMetadata{
-			TagCount: len(cfg.Tags),
+			TagSpecCount: len(preparedTagSpecs),
 		},
 	})
 }
@@ -182,18 +304,20 @@ func (w *statusCodeRecorder) WriteHeader(statusCode int) {
 
 type cachingResponseWriter struct {
 	http.ResponseWriter
-	statusCode int
-	maxBytes   int
-	body       []byte
-	tooLarge   bool
-	streaming  bool
+	statusCode    int
+	maxBytes      int
+	cacheStatuses map[int]struct{}
+	body          []byte
+	tooLarge      bool
+	streaming     bool
 }
 
-func newCachingResponseWriter(w http.ResponseWriter, maxBytes int) *cachingResponseWriter {
+func newCachingResponseWriter(w http.ResponseWriter, maxBytes int, cacheStatuses map[int]struct{}) *cachingResponseWriter {
 	return &cachingResponseWriter{
 		ResponseWriter: w,
 		statusCode:     http.StatusOK,
 		maxBytes:       maxBytes,
+		cacheStatuses:  cacheStatuses,
 		body:           make([]byte, 0, min(maxBytes, 2048)),
 	}
 }
@@ -256,7 +380,7 @@ func (w *cachingResponseWriter) Body() []byte {
 }
 
 // Cacheable reports whether response satisfies cache policy constraints.
-func (w *cachingResponseWriter) Cacheable(cfg cache.CacheReadConfig) bool {
+func (w *cachingResponseWriter) Cacheable() bool {
 	if w.streaming {
 		return false
 	}
@@ -267,16 +391,8 @@ func (w *cachingResponseWriter) Cacheable(cfg cache.CacheReadConfig) bool {
 		return false
 	}
 	status := w.Status()
-	statuses := cfg.CacheStatuses
-	if len(statuses) == 0 {
-		return status == http.StatusOK
-	}
-	for _, candidate := range statuses {
-		if candidate == status {
-			return true
-		}
-	}
-	return false
+	_, ok := w.cacheStatuses[status]
+	return ok
 }
 
 func hasAuthPrincipal(r *http.Request) bool {
@@ -287,32 +403,39 @@ func hasAuthPrincipal(r *http.Request) bool {
 	return strings.TrimSpace(principal.UserID) != "" || strings.TrimSpace(principal.TenantID) != "" || strings.TrimSpace(principal.Role) != ""
 }
 
-func ensureAuthCacheSafety(r *http.Request, cfg cache.CacheReadConfig) {
+func ensureAuthCacheSafety(r *http.Request) {
 	if !hasAuthPrincipal(r) {
-		return
-	}
-	if cfg.VaryBy.UserID || cfg.VaryBy.TenantID {
 		return
 	}
 	panicInvalidRouteConfigf("%s on authenticated routes requires VaryBy.UserID or VaryBy.TenantID", PolicyTypeCacheRead)
 }
 
-func methodAllowed(method string, configured []string) bool {
-	if len(configured) == 0 {
-		return method == http.MethodGet || method == http.MethodHead
+func validateCacheTagSpecs(specs []cache.CacheTagSpec, requireAtLeastOne bool) error {
+	if len(specs) == 0 {
+		if requireAtLeastOne {
+			return fmt.Errorf("at least one tag spec is required")
+		}
+		return nil
 	}
-	m := strings.ToUpper(strings.TrimSpace(method))
-	for _, candidate := range configured {
-		if m == strings.ToUpper(strings.TrimSpace(candidate)) {
-			return true
+
+	for i, spec := range specs {
+		if strings.TrimSpace(spec.Name) == "" {
+			return fmt.Errorf("tag spec at index %d has empty name", i)
+		}
+		for _, param := range spec.PathParams {
+			if strings.TrimSpace(param) == "" {
+				return fmt.Errorf("tag spec %q contains empty path param", spec.Name)
+			}
+		}
+		for _, literal := range spec.Literals {
+			if strings.TrimSpace(literal.Key) == "" {
+				return fmt.Errorf("tag spec %q contains literal with empty key", spec.Name)
+			}
+			if strings.TrimSpace(literal.Value) == "" {
+				return fmt.Errorf("tag spec %q contains literal %q with empty value", spec.Name, literal.Key)
+			}
 		}
 	}
-	return false
-}
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	return nil
 }
