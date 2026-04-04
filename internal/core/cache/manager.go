@@ -696,11 +696,6 @@ func normalizeRoute(route string) string {
 	return r
 }
 
-func queryParamHash(values url.Values, selected []string) (string, error) {
-	selected = normalizedNames(selected)
-	return queryParamHashSelected(values, selected)
-}
-
 func queryParamHashSelected(values url.Values, selected []string) (string, error) {
 	if len(selected) == 0 {
 		return "", nil
