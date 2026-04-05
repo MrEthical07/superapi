@@ -1,577 +1,375 @@
-# Architecture — Under the Hood
-
-This document explains how SuperAPI works internally: request lifecycle, middleware pipeline, policy chain, dependency wiring, error model, and observability flow.
-
----
-
-## 1. Repository layout
-
-```
-cmd/
-  api/main.go              # Real server entry point
-  authgen/main.go          # Auth bootstrap generator CLI
-  migrate/main.go          # Migration CLI
-  modulegen/main.go        # Module scaffolder CLI
-  modulesync/main.go       # Sync module-local SQL into db/schema + db/queries
-internal/
-  core/
-    app/                   # App container, lifecycle, dependency init
-      app.go               # App struct, New(), Run(), module registration
-      deps.go              # Dependencies struct, initDependencies(), closeDependencies()
-    config/config.go       # Env-based config + Lint() validation
-    httpx/                 # Router, global middleware, unified handler adapter/context, tracing middleware
-    response/response.go   # Response envelope + error mapping
-    errors/errors.go       # Typed AppError model
-    auth/                  # goAuth adapter, AuthContext, Provider interface
-    policy/                # Route-level policies (auth, tenant, rate limit, cache, cache-control, JSON, headers)
-    ratelimit/             # Redis-backed limiter + keying strategies
-    cache/                 # Redis-backed cache manager + key builder
-    db/                    # pgxpool wiring, tx helpers, sqlc query wrappers, migrations
-    tenant/tenant.go       # Tenant scope helpers
-    logx/logx.go           # zerolog wrapper
-    metrics/metrics.go     # Prometheus metrics service
-    netx/                  # Client IP context helpers
-    requestid/             # Request ID context helpers
-    tracing/service.go     # OpenTelemetry tracing service
-    readiness/service.go   # Dependency health check aggregator
-    params/params.go       # URL param extraction (chi wrapper)
-  modules/
-    modules.go             # Centralized module registry
-    health/                # Liveness + readiness module
-    system/                # System utilities (whoami, parse-duration)
-  devx/modulegen/          # Module generator logic
-db/
-  migrations/              # Versioned SQL migration files
-  schema/                  # Canonical schema for sqlc
-  queries/                 # SQL query definitions for sqlc
-docs/                      # This documentation
-```
-
----
-
-## 2. Startup sequence
-
-Entry point: `cmd/api/main.go`
-
-```
-1. config.Load()          — Read all env vars into Config struct
-2. config.Lint()          — Validate config (fail-fast on bad values)
-3. logx.New()             — Initialize zerolog logger
-4. app.New(cfg, logger, modules.All())
-   a. httpx.NewMux()      — Create chi-backed router
-   b. initDependencies()  — Wire Postgres, Redis, Metrics, Auth, RateLimit, Cache, Tracing
-   c. router.Use(CaptureRoutePattern)  — Register route pattern capture middleware
-   d. Register metrics endpoint (/metrics) if enabled
-   e. AssembleGlobalMiddleware() — Wrap router with global middleware stack
-   f. Wrap with metrics instrumentation (InstrumentHTTP)
-   g. Create http.Server with configured timeouts
-   h. For each module:
-      - If DependencyBinder: call BindDependencies(deps)
-      - Call module.Register(router)
-5. signal.NotifyContext()  — Listen for SIGINT/SIGTERM
-6. app.Run(ctx)           — Start server, wait for shutdown signal
-```
-
-### Dependency initialization order (in `initDependencies`)
-
-1. **Readiness service** — always created
-2. **Postgres pool** — if `POSTGRES_ENABLED=true`; startup ping with timeout; registered in readiness
-3. **Redis client** — if `REDIS_ENABLED=true`; startup ping with timeout; registered in readiness
-4. **Metrics service** — if `METRICS_ENABLED=true`; registers Prometheus collectors (including pgxpool if Postgres enabled)
-5. **Auth provider** — parse auth mode; if `AUTH_ENABLED=true`, build goAuth engine provider (requires Redis + Postgres)
-6. **Rate limiter** — if `RATELIMIT_ENABLED=true`, create Redis-backed limiter (requires Redis)
-7. **Cache manager** — if `CACHE_ENABLED=true`, create Redis-backed cache manager (requires Redis)
-8. **Tracing service** — if `TRACING_ENABLED=true`, init OTLP gRPC exporter + tracer provider
-
-If any enabled dependency fails to initialize, all previously created resources are cleaned up and startup fails.
-
-### Shutdown sequence
-
-1. Context cancelled (SIGINT/SIGTERM)
-2. `http.Server.Shutdown()` with configured timeout — drains in-flight requests
-3. `closeDependencies()`: Redis close → Postgres close → Tracing shutdown → Auth close
-
----
-
-## 3. Request lifecycle
-
-### 3.1 Global middleware pipeline
-
-Middleware is applied in `AssembleGlobalMiddleware()` (file: `internal/core/httpx/globalmiddleware.go`).
-
-**Execution order (outermost → innermost):**
-
-1. **RequestID** — Accepts `X-Request-Id` only when <= 64 chars and `[A-Za-z0-9._-]`, otherwise generates a 32-hex-char ID; injects into context and response header
-2. **ClientIP** — Resolves client IP from trusted proxy headers when `HTTP_TRUSTED_PROXIES` is set; otherwise uses `RemoteAddr`
-3. **Recoverer** — Catches panics, logs with structured context (request_id, method, path, panic value), returns sanitized 500
-4. **CORS** — Applies CORS headers and preflight handling (if enabled)
-5. **SecurityHeaders** — Sets `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` (if enabled)
-6. **MaxBodyBytes** — Limits request body size for write methods and any request that carries a body (if configured > 0)
-7. **RequestTimeout** — Sets `context.WithTimeout` on the request context (if configured > 0); returns 504 if deadline exceeded before response
-8. **Tracing** — Extracts W3C traceparent, creates server span, records attributes and status on defer (if enabled)
-9. **AccessLog** — Logs request method, route pattern, status, duration, bytes; sampled by deterministic request-id hash
-
-Then: **Metrics instrumentation** wraps the entire stack (measures in-flight, total requests, duration by method/route/status).
-
-Then: **Router** (chi) matches the route pattern and invokes the handler.
-
-### 3.2 Route-level policy chain
-
-When a route is registered with policies:
-
-- `httpx.Mux.Handle(...)` validates policy invariants via `policy.MustValidateRoute(...)` before registration.
-- Invalid policy stacks panic immediately with `invalid route config: ...` during startup.
-
-```go
-r.Handle(http.MethodGet, "/api/v1/resource/{id}", handler,
-    policy.AuthRequired(authEngine, mode),      // P1 (outermost)
-    policy.TenantRequired(),                   // P2
-    policy.RateLimit(limiter, rule),           // P3
-  policy.CacheRead(cacheMgr, cfg),           // P4
-  policy.CacheControl(policy.CacheControlConfig{Private: true, MaxAge: 30 * time.Second}), // P5
-)
-```
-
-Execution for `[P1, P2, P3, P4, P5]`:
-
-- **Request flow:** P1 → P2 → P3 → P4 → P5 → handler
-- **Response unwind:** handler → P5 → P4 → P3 → P2 → P1
-
-The first policy listed is outermost. Any policy can short-circuit by writing a response and NOT calling `next.ServeHTTP()`.
-
-Implementation: `policy.Chain()` in `internal/core/policy/policy.go` iterates policies in reverse to build the handler chain, so the first policy wraps everything else.
-
-### 3.3 Complete request flow diagram
-
-```
-Client request
-  │
-  ├─ RequestID middleware (assign/propagate X-Request-Id)
-  ├─ ClientIP (resolve client IP, trusted proxies optional)
-  ├─ Recoverer (catch panics → 500)
-  ├─ CORS (preflight + CORS headers)
-  ├─ SecurityHeaders (optional response headers)
-  ├─ MaxBodyBytes (limit body size for write methods)
-  ├─ RequestTimeout (context deadline → 504 on timeout)
-  ├─ Tracing (create span, extract traceparent)
-  ├─ AccessLog (log on defer: method, route, status, duration)
-  ├─ Metrics instrumentation (counters, histograms, in-flight gauge)
-  │
-  ├─ Chi router (pattern match)
-  │   │
-  │   ├─ Route policies (auth → tenant → rate limit → cache → cache-control → ...)
-  │   │   │
-  │   │   └─ Handler (decode input, call service, write response)
-  │   │
-  │   ├─ 404 Not Found (no route matched)
-  │   └─ 405 Method Not Allowed (route exists, wrong method)
-  │
-  └─ Response flows back through middleware stack
-```
-
----
-
-### 3.4 Cache and browser-cache model
-
-SuperAPI now separates API response caching concerns into two explicit layers:
-
-- **Redis response cache layer** (`CacheRead` / `CacheInvalidate`):
-  - Isolation dimensions are defined with `VaryBy`.
-  - Freshness domains are defined with `TagSpecs`.
-  - Invalidation uses version-bump keys (`cver:{env}:{tag}`) and bump-miss behavior.
-- **Browser/proxy cache layer** (`CacheControl`):
-  - Sets HTTP `Cache-Control` and optional `Vary` headers.
-  - Works independently from Redis cache and should be placed after cache policies.
-
-`TagSpecs` are resolved at request time from path params, auth tenant/user context, and literal dimensions, allowing precise invalidation scopes without broad over-eviction.
-
----
-
-## 4. Error model
-
-### 4.1 Typed errors
-
-All application errors use `AppError` (file: `internal/core/errors/errors.go`):
-
-```go
-type AppError struct {
-    Code       Code    // e.g., "bad_request", "not_found"
-    Message    string  // Safe message for clients
-    StatusCode int     // HTTP status code
-    Details    any     // Optional structured details
-    Cause      error   // Internal cause (never exposed to clients)
-}
-```
-
-**Error codes** (all defined in `internal/core/errors/errors.go`):
-
-| Code | Typical HTTP Status | Usage |
-|---|---|---|
-| `internal_error` | 500 | Unexpected server errors |
-| `bad_request` | 400 | Validation failures, malformed input |
-| `not_found` | 404 | Resource not found |
-| `method_not_allowed` | 405 | Wrong HTTP method |
-| `unauthorized` | 401 | Missing or invalid authentication |
-| `forbidden` | 403 | Authenticated but insufficient permissions |
-| `too_many_requests` | 429 | Rate limit exceeded |
-| `conflict` | 409 | Unique constraint violation |
-| `timeout` | 504 | Request deadline exceeded |
-| `dependency_unavailable` | 503 | Database/Redis unavailable |
-
-### 4.2 Error mapping (centralized)
-
-File: `internal/core/response/response.go`
-
-The `response.Error()` function handles all error-to-HTTP mapping:
-
-1. **`context.DeadlineExceeded`** → 504 with code `timeout`
-2. **`*AppError`** → Uses the error's own `StatusCode`, `Code`, `Message`, and `Details`
-3. **Any other error** → 500 with code `internal_error` and generic message `"internal server error"` (internal details never leaked)
-
-### 4.3 Response envelope
-
-All responses use a consistent JSON envelope:
-
-```json
-{
-  "ok": true,
-  "data": { ... },
-  "meta": { ... },
-  "request_id": "abc123..."
-}
-```
-
-`meta` is optional and can be used for envelope-level metadata (for example pagination cursors).
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "bad_request",
-    "message": "name is required",
-    "details": null
-  },
-  "request_id": "abc123..."
-}
-```
-
-Helper functions: `response.OK()`, `response.Created()`, `response.Error()`, `response.JSON()`.
-
----
-
-## 5. Dependency wiring
-
-### 5.1 Postgres
-
-File: `internal/core/db/postgres.go`
-
-- Uses `pgxpool` for connection pooling
-- Configuration parsed from `POSTGRES_URL`; pool parameters from env vars
-- **Startup behavior:** Pool is created, then a startup ping is sent with `POSTGRES_STARTUP_PING_TIMEOUT` (default 3s). If ping fails, startup aborts.
-- **Health check:** Registered in readiness service with `POSTGRES_HEALTH_CHECK_TIMEOUT` (default 1s). Called on `/readyz`.
-- **When disabled:** `deps.Postgres` is nil; modules that need it check for nil and return `dependency_unavailable` (503).
-
-Pool tuning env vars:
-
-| Env | Default | Description |
-|---|---|---|
-| `POSTGRES_MAX_CONNS` | 10 | Maximum pool connections |
-| `POSTGRES_MIN_CONNS` | 0 | Minimum idle connections |
-| `POSTGRES_CONN_MAX_LIFETIME` | 30m | Max connection age |
-| `POSTGRES_CONN_MAX_IDLE_TIME` | 5m | Max idle time before close |
-
-### 5.2 Redis
-
-File: `internal/core/cache/redis.go`
-
-- Uses `redis.NewClient` with configured timeouts and pool settings
-- **Startup behavior:** Client is created, then startup ping with `REDIS_STARTUP_PING_TIMEOUT` (default 3s). If ping fails, startup aborts.
-- **Health check:** Registered in readiness with `REDIS_HEALTH_CHECK_TIMEOUT` (default 1s).
-- **Cache tag token caching:** `CACHE_TAG_VERSION_CACHE_TTL` controls process-local caching for tag version tokens used in key generation.
-- **Fail-open behaviors:**
-  - Rate limiting: `RATELIMIT_FAIL_OPEN` defaults to `true` in non-prod and `false` in prod.
-  - Caching: `CACHE_FAIL_OPEN` defaults to `true` in non-prod and `false` in prod.
-  - In prod, startup lint rejects fail-open for enabled rate-limit/cache.
-  - Auth (strict mode): If Redis is unreachable, authentication fails (no fail-open for security)
-
-### 5.3 Readiness signals
-
-File: `internal/core/readiness/service.go`
-
-The readiness service aggregates dependency health checks:
-
-- Each dependency is registered with `Add(name, enabled, timeout, checkFn)`
-- `Check(ctx)` returns a `Report` with per-dependency status
-- If any enabled dependency check fails → overall status is `not_ready`
-- Disabled dependencies report `disabled` (not counted as failures)
-
-**`/readyz` response** (HTTP 200 when ready, 503 when not):
-
-```json
-{
-  "ok": true,
-  "data": {
-    "status": "ready",
-    "dependencies": {
-      "postgres": { "status": "ok" },
-      "redis": { "status": "ok" }
-    }
-  }
-}
-```
-
-Error messages are sanitized: `context.DeadlineExceeded` becomes `"timeout"`, all others become `"unavailable"`.
-
-### 5.4 Metrics
-
-File: `internal/core/metrics/metrics.go`
-
-Prometheus metrics registered (namespace: `superapi`):
-
-| Metric | Type | Labels | Description |
-|---|---|---|---|
-| `http_requests_total` | Counter | method, route, status | Total HTTP requests |
-| `http_request_duration_seconds` | Histogram | method, route, status | Request latency |
-| `http_in_flight_requests` | Gauge | — | Current in-flight requests |
-| `rate_limit_requests_total` | Counter | route, outcome | Rate limit decisions |
-| `cache_operations_total` | Counter | route, outcome | Cache operations |
-| `ready` | Gauge | — | Service readiness (1=ready, 0=not_ready) |
-| `dependency_ready` | Gauge | dependency, status | Per-dependency readiness |
-| `db_pool_*` | Gauge | — | Postgres pool stats (if enabled) |
+# Architecture
+
+This document explains how SuperAPI works internally, from process startup to request handling to data access.
+
+It is written for both:
+
+- beginners who want a mental model of the system
+- contributors who need precise behavior before changing core code
+
+## 1. Architecture Principles
+
+The enforced data flow is:
 
-Route labels use **low-cardinality route patterns** (e.g., `/api/v1/projects/{id}`), not raw paths. This prevents metric cardinality explosion.
+Service -> Repository -> Store -> Backend
 
-### 5.5 Tracing
+Layer boundaries are strict:
 
-File: `internal/core/tracing/service.go`
+- Handler layer:
+	- transport concerns only
+	- no business or data-access logic
+- Service layer:
+	- business workflows and orchestration
+	- calls repositories only
+- Repository layer:
+	- query logic and storage mapping
+	- calls store interfaces only
+- Store layer:
+	- execution and transaction semantics
+	- no domain-level behavior
+
+These boundaries are not style suggestions. They are the architecture contract for this repository.
 
-- Uses OpenTelemetry SDK with OTLP/gRPC exporter
-- Propagation: W3C `traceparent` + `baggage`
-- One server span per request, named `METHOD /route/pattern`
-- Span attributes: `http.method`, `http.route`, `http.status_code`, `request.id`, `server.address`, `server.port`
-- 5xx responses are recorded as span errors
-- Sampler options: `always_on`, `always_off`, `traceidratio` (default: `traceidratio` at 5%)
-- If OTLP endpoint is unreachable, API still starts; spans are best-effort
+## 2. Repository Layout
+
+High-impact paths:
 
-### 5.6 Access logging
+- cmd/api/main.go
+	- process entrypoint
+- internal/core/app
+	- runtime app container and dependency wiring
+- internal/core/httpx
+	- router integration and global middleware assembly
+- internal/core/policy
+	- route policy chain, metadata, and route validation
+- internal/core/storage
+	- store contracts and store implementations
+- internal/core/auth
+	- goAuth integration, store-backed user provider, auth repository
+- internal/modules
+	- feature modules and route registration
 
-File: `internal/core/httpx/accesslog.go`
-
-- Structured JSON logs via zerolog
-- **Sampling:** Deterministic hash of request_id against configured sample rate (default 5%). Same request_id always produces the same sample decision.
-- **Always logged regardless of sampling:** 5xx responses, requests exceeding slow threshold
-- **Excluded paths:** `/healthz`, `/readyz`, `/metrics` by default (configurable)
-- **Route labels:** Uses captured route patterns, not raw URL paths
-- **Log level:** Info for normal, Warn for 4xx or slow, Error for 5xx
-- **Security:** Request bodies, Authorization headers, Cookie headers, and query strings are NOT logged
-- **Client IP:** Remote IP logging uses the resolved client IP (trusted proxy headers only when `HTTP_TRUSTED_PROXIES` is set)
-
----
-
-## 6. Module system
+## 3. Startup Sequence
 
-### 6.1 Module interface
-
-File: `internal/core/app/app.go`
-
-```go
-type Module interface {
-    Name() string
-    Register(r httpx.Router) error
-}
-```
-
-Optional interface for receiving dependencies:
+Startup begins in cmd/api/main.go.
 
-```go
-type DependencyBinder interface {
-    BindDependencies(*Dependencies)
-}
-```
-
-### 6.2 Module lifecycle
-
-1. Module is listed in `internal/modules/modules.go` (`All()` function)
-2. During `app.New()`:
-   a. If the module implements `DependencyBinder`, `BindDependencies(deps)` is called
-   b. `Register(router)` is called — module registers routes via `router.Handle()`
-3. Module is active for the lifetime of the server
-
-### 6.3 Dependency injection
-
-Modules receive dependencies through `BindDependencies(*app.Dependencies)`. The `Dependencies` struct provides:
-
-| Field | Type | Description |
-|---|---|---|
-| `Postgres` | `*pgxpool.Pool` | Nil if Postgres disabled |
-| `Redis` | `*redis.Client` | Nil if Redis disabled |
-| `Readiness` | `*readiness.Service` | Always available |
-| `Metrics` | `*metrics.Service` | Always available (may be disabled internally) |
-| `Tracing` | `*tracing.Service` | Always available (may be disabled internally) |
-| `AuthEngine` | `*goauth.Engine` | Nil if auth disabled |
-| `AuthMode` | `auth.Mode` | Configured auth mode |
-| `RateLimit` | `config.RateLimitConfig` | Rate limit configuration values |
-| `Cache` | `config.CacheConfig` | Cache configuration values |
-| `Limiter` | `ratelimit.Limiter` | Nil if rate limiting disabled |
-| `CacheMgr` | `*cache.Manager` | Nil if caching disabled |
+Process flow:
 
----
+1. Load config from environment.
+2. Lint config and fail fast on invalid combinations.
+3. Initialize logger.
+4. Build app via app.New(...).
+5. Register modules from internal/modules/modules.go.
+6. Start server and wait for shutdown signal.
 
-## 7. sqlc and transaction helpers
+### 3.1 app.New responsibilities
 
-### 7.1 Query access
+app.New performs:
 
-File: `internal/core/db/queries.go`
+- router initialization
+- dependency initialization via initDependencies
+- optional metrics route registration
+- global middleware assembly
+- module dependency binding
+- module route registration
 
-```go
-// From pool (non-transactional reads)
-q := db.NewQueries(pool)
+If any module registration fails, initialized dependencies are closed and startup aborts.
 
-// From transaction
-q := db.QueriesFrom(tx)
-q := db.QueriesFromTx(pgxTx)
-```
+### 3.2 Dependency initialization order
 
-The key insight: `sqlcgen.Queries` accepts `DBTX` interface, which both `*pgxpool.Pool` and `pgx.Tx` satisfy. Repositories always receive `*sqlcgen.Queries` and never care whether they're inside a transaction or not.
+Dependency wiring is in internal/core/app/deps.go.
 
-### 7.2 Transaction helpers
+Order:
 
-File: `internal/core/db/tx.go`
+1. Create readiness service.
+2. If Postgres enabled:
+	 - create pgx pool
+	 - create PostgresRelationalStore
+	 - set Dependencies.Postgres, Dependencies.RelationalStore, Dependencies.Store
+	 - register readiness probe
+3. If Redis enabled:
+	 - create redis client
+	 - register readiness probe
+4. Create metrics service.
+5. Parse auth mode.
+6. If auth enabled:
+	 - create auth user repository over relational store
+	 - create store-backed user provider
+	 - create goAuth engine
+7. If rate-limit enabled:
+	 - create redis limiter
+8. If cache enabled:
+	 - create cache manager
+9. Create tracing service.
 
-**`WithTx`** — for write operations that don't return a value:
+Failure model:
 
-```go
-err := db.WithTx(ctx, pool, func(q *sqlcgen.Queries) error {
-    _, err := q.CreateTenant(ctx, params)
-    return err
-})
-```
+- Any enabled critical dependency failing startup aborts the process.
+- Resources initialized earlier are closed before returning startup error.
 
-**`WithTxResult`** — for write operations that return a value:
+## 4. Request Lifecycle
 
-```go
-tenant, err := db.WithTxResult(ctx, pool, func(q *sqlcgen.Queries) (Tenant, error) {
-    row, err := q.CreateTenant(ctx, params)
-    if err != nil {
-        return Tenant{}, err
-    }
-    return fromRow(row), nil
-})
-```
+### 4.1 Global middleware pipeline
 
-**Transaction semantics:**
-- Begin → run callback → commit on success / rollback on error
-- On panic: rollback (best effort), then re-panic
-- Rollback failures are intentionally swallowed (do not mask callback error)
-- Commit failure is returned when callback succeeds but commit fails
+Global middleware assembly is in internal/core/httpx/globalmiddleware.go.
 
-### 7.3 Repository pattern
+Execution order (outermost to innermost):
 
-Repositories accept `*sqlcgen.Queries` and perform data access only. They never start transactions.
+1. RequestID
+2. ClientIP
+3. Recoverer
+4. CORS
+5. SecurityHeaders
+6. MaxBodyBytes
+7. RequestTimeout
+8. Tracing
+9. AccessLog
+10. Router dispatch
 
-```go
-type repository struct {
-    q *sqlcgen.Queries
-}
+Why this order matters:
 
-func NewRepository(q *sqlcgen.Queries) Repository {
-    return &repository{q: q}
-}
-```
-
-Services own transaction boundaries:
-
-```go
-type service struct {
-    pool *pgxpool.Pool
-    repo Repository
-}
-
-// Read path: repo uses queries bound to pool directly
-func (s *service) GetByID(ctx context.Context, id string) (Tenant, error) {
-    return s.repo.GetByID(ctx, id)
-}
-
-// Write path: service wraps in transaction
-func (s *service) Create(ctx context.Context, req Request) (Result, error) {
-    return db.WithTxResult(ctx, s.pool, func(q *sqlcgen.Queries) (Result, error) {
-        return NewRepository(q).Create(ctx, input)
-    })
-}
-```
-
----
-
-## 8. Unified handler adapter
-
-Files: `internal/core/httpx/adapter.go`, `internal/core/httpx/context.go`, `internal/core/httpx/typedjson.go`
-
-`httpx.Adapter[Req, Resp]()` converts a unified typed handler into an `http.Handler`:
-
-```go
-func Adapter[Req any, Resp any](fn HandlerFunc[Req, Resp]) http.Handler
-```
-
-Where `HandlerFunc` is:
-
-```go
-type HandlerFunc[Req any, Resp any] func(ctx *httpx.Context, req Req) (Resp, error)
-```
-
-For routes without a request body, use `httpx.NoBody`:
-
-```go
-func (h *Handler) GetByID(ctx *httpx.Context, _ httpx.NoBody) (responseDTO, error)
-```
-
-**What it does automatically:**
-
-1. Decodes JSON strictly (unknown fields rejected) for non-`NoBody` requests
-2. Rejects multiple JSON values in body
-3. Calls `Validate()` if request implements `Validatable`
-4. Maps errors through `response.Error()` (AppError passthrough, internal sanitized)
-5. Writes envelope responses through `response.OK()`
-6. Supports status-aware responses via `httpx.Result[T]`
-
-**Decode error mapping:**
-
-| Condition | AppError |
-|---|---|
-| Empty body | `bad_request`: "request body is required" |
-| Body too large | `bad_request`: "request body too large" |
-| Syntax error | `bad_request`: "malformed JSON body" |
-| Type mismatch | `bad_request`: "invalid JSON field type" |
-| Unknown field | `bad_request`: "unknown field in request body" |
-| Multiple objects | `bad_request`: "request body must contain a single JSON object" |
-
----
-
-## 9. Production notes
-
-### Failure modes
-
-| Dependency down | Behavior |
-|---|---|
-| Postgres unreachable at startup | **Startup fails** (fail-fast) |
-| Postgres unreachable at runtime | `/readyz` returns 503; DB-dependent endpoints return 503 (`dependency_unavailable`) |
-| Redis unreachable at startup | **Startup fails** (fail-fast) if Redis is enabled |
-| Redis unreachable at runtime | Rate limiting/cache behavior follows `*_FAIL_OPEN` config (defaults: fail-open in non-prod, fail-closed in prod). Auth (strict mode): fails closed (401). `/readyz` returns 503. |
-| Tracing endpoint unreachable | Startup succeeds; spans are lost silently |
-
-### Security considerations
-
-- Internal errors are never leaked to clients (centralized sanitization in `response.Error()`)
-- Bearer tokens are never stored in rate limit keys (SHA-256 hash prefix only)
-- Request bodies and auth headers are never logged
-- Cache keys never contain raw tokens, IPs, or full query strings
-- `Set-Cookie` responses are never cached
-- Unsafe authenticated cache configs are rejected at route registration (`CacheRead` on authenticated routes must vary by user or tenant)
-- Tenant mismatch returns 404 (not 403) to prevent tenant enumeration
-
-### Cardinality safety
-
-- Route labels in metrics and logs use chi route patterns (e.g., `/api/v1/projects/{id}`), not raw paths
-- Rate limit keys use low-cardinality scopes (`ip`, `user`, `tenant`, `token`, `anon`)
-- Cache keys use route pattern + selected vary dimensions + query param hash + resolved tag-version token — not raw URLs
-- Tag invalidation scopes are explicit via `TagSpecs` (path/auth/literal dimensions)
-- Access logs are sampled by default (5%) with always-log exceptions for errors and slow requests
+- request id is available to downstream logs/errors
+- panic recovery wraps route execution safely
+- timeout/tracing/logging capture actual route execution behavior
+
+### 4.2 Route policy chain
+
+Route policies are composed using policy.Chain in internal/core/policy/policy.go.
+
+If route registers policies [P1, P2, P3], execution is:
+
+- request: P1 -> P2 -> P3 -> handler
+- response unwind: handler -> P3 -> P2 -> P1
+
+### 4.3 Route validation
+
+Before route behavior is finalized, policy validation enforces safe stacks.
+
+Validation code is in:
+
+- internal/core/policy/validator.go
+- internal/core/policy/validator_rules.go
+
+Key validations:
+
+- policy stage ordering
+- auth prerequisites for RBAC/tenant policies
+- tenant path rules for routes with tenant_id path params
+- cache safety rules on authenticated routes (must vary by user or tenant)
+
+## 5. Handler, Adapter, and Response Model
+
+Handlers are typed and adapted through internal/core/httpx/adapter.go.
+
+Adapter behavior:
+
+- decode JSON (for body-carrying request types)
+- run request validation
+- execute typed handler function
+- map errors through response.Error
+- wrap output in standard envelope
+
+Standard response envelope is defined in internal/core/response/response.go.
+
+Success shape:
+
+- ok: true
+- data: payload
+- request_id
+
+Error shape:
+
+- ok: false
+- error.code
+- error.message
+- optional error.details
+- request_id
+
+### 5.1 Error mapping summary
+
+response.Error maps:
+
+- context deadline exceeded -> timeout response
+- typed AppError -> explicit status/code/message
+- unknown errors -> internal_error (sanitized)
+
+## 6. Store Contracts And Data Layer
+
+Store contracts are in internal/core/storage/contracts.go.
+
+Core contracts:
+
+- Store
+	- Kind() for backend family identity
+- TransactionalStore
+	- WithTx(ctx, fn)
+- RelationalStore
+	- Execute(ctx, RelationalOperation)
+- DocumentStore
+	- Execute(ctx, DocumentOperation)
+
+Important design goal:
+
+- stores are execution-only contracts
+- repository owns query meaning and mapping semantics
+
+### 6.1 Relational store implementation
+
+Current relational implementation is in internal/core/storage/postgres_store.go.
+
+Key behavior:
+
+- Execute chooses transaction runner from context when present
+- otherwise uses pool runner
+- WithTx starts pgx transaction, injects tx runner in context, commits or rolls back
+
+### 6.2 Document store status
+
+internal/core/storage/document_noop.go provides NoopDocumentStore.
+
+Purpose:
+
+- preserve the architecture contract for document modules now
+- allow compilation and interface wiring before concrete document backend arrives
+
+### 6.3 Repository-owned operations
+
+Operation helpers in internal/core/storage/operations.go provide wrappers like:
+
+- RelationalExec
+- RelationalQueryOne
+- RelationalQueryMany
+- DocumentRun
+
+Repositories use these helpers to describe operations while keeping domain logic in repository methods.
+
+## 7. Transaction Model
+
+Transaction rule set:
+
+- transaction API is mandatory at store layer
+- write paths should run inside store.WithTx
+- read paths are direct by default
+- services select transaction boundary; repositories execute operations
+
+Write path example:
+
+1. handler calls service.Create
+2. service starts store.WithTx
+3. repository executes write operations via store.Execute
+4. store commits or rolls back
+
+Read path example:
+
+1. handler calls service.Get/List
+2. service calls repository directly
+3. repository executes read operation via store.Execute
+
+## 8. Auth Architecture With goAuth
+
+Auth integration entrypoint: internal/core/auth/goauth_provider.go.
+
+goAuth boundary remains stable: it still receives a goauth.UserProvider.
+
+Current provider implementation: internal/core/auth/provider_sqlc.go.
+
+Provider path:
+
+StoreUserProvider -> UserRepository -> RelationalStore -> Postgres
+
+Auth repository implementation: internal/core/auth/user_repository.go.
+
+This preserves goAuth compatibility while removing direct query-object coupling from auth wiring.
+
+## 9. Route-Level Flow Examples
+
+### 9.1 POST /api/v1/system/auth/login
+
+Files involved:
+
+- internal/modules/system/routes.go
+- internal/core/auth/provider_sqlc.go
+- internal/core/auth/user_repository.go
+- internal/core/storage/postgres_store.go
+
+Runtime path:
+
+1. route handler receives login payload
+2. handler calls goAuth engine Login
+3. goAuth asks StoreUserProvider for user by identifier
+4. provider calls auth repository
+5. repository executes relational query operation via store
+6. store executes against pgx runner
+7. result maps back to goAuth user record
+8. goAuth issues tokens
+
+### 9.2 POST /api/v1/system/auth/refresh
+
+High-level path:
+
+- handler calls goAuth refresh
+- goAuth performs token/session validation
+- provider/repository/store path is used when user persistence reads are required
+
+### 9.3 GET /api/v1/system/whoami
+
+Path:
+
+1. AuthRequired validates request and injects auth context
+2. handler reads auth context and returns payload
+3. no repository/store call required for this endpoint
+
+## 10. Readiness, Health, And Shutdown
+
+### 10.1 Liveness vs readiness
+
+- /healthz:
+	- process-level liveness
+- /readyz:
+	- dependency readiness from readiness service checks
+
+### 10.2 Shutdown sequence
+
+During app shutdown:
+
+1. server shutdown with configured timeout
+2. close redis
+3. close postgres
+4. shutdown tracing
+5. close auth engine resources
+
+## 11. Behavioral Changes After Store-First Redesign
+
+What changed:
+
+- no service-level dependency on query helper wrappers
+- auth persistence now follows repository + store architecture
+- transaction orchestration unified at store layer
+- runtime exposes generic store surfaces to modules
+
+What did not change:
+
+- module registration model
+- route policy system
+- goAuth integration boundary
+- response envelope semantics
+
+## 12. Contributor Guardrails
+
+When changing architecture-sensitive code, keep these guardrails:
+
+- do not bypass policy validation
+- do not move business logic into handlers
+- do not expose backend-specific driver/query objects in service/repository interfaces
+- do not mix relational and document backends in one module
+- do not manually edit generated files under internal/core/db/sqlcgen
+
+## 13. Related Docs
+
+- [docs/overview.md](overview.md)
+- [docs/modules.md](modules.md)
+- [docs/module_guide.md](module_guide.md)
+- [docs/crud-examples.md](crud-examples.md)
+- [docs/auth-goauth.md](auth-goauth.md)
+- [docs/workflows.md](workflows.md)
+- [docs/environment-variables.md](environment-variables.md)

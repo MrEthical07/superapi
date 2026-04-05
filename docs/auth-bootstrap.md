@@ -29,14 +29,15 @@ Auth Bootstrap Configuration:
 | `db/migrations/NNNNNN_auth_users.down.sql` | Users table migration (down) |
 | `db/schema/auth_users.sql` | Schema mirror for sqlc |
 | `db/queries/auth_users.sql` | sqlc query definitions |
-| `internal/core/auth/provider_sqlc.go` | DB-backed UserProvider for goAuth |
+| `internal/core/auth/provider_sqlc.go` | Store-backed UserProvider for goAuth |
+| `internal/core/auth/user_repository.go` | Auth UserRepository implementation over RelationalStore |
 
 ## Modified Files
 
 | File | Change |
 |---|---|
 | `internal/core/auth/goauth_provider.go` | Updated to accept UserProvider parameter |
-| `internal/core/app/deps.go` | Wires SQLCUserProvider when auth is enabled |
+| `internal/core/app/deps.go` | Wires StoreUserProvider + RelationalUserRepository when auth is enabled |
 
 ## Schema
 

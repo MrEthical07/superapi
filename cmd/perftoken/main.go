@@ -17,6 +17,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/cache"
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/db"
+	"github.com/MrEthical07/superapi/internal/core/storage"
 )
 
 type tokenOutput struct {
@@ -73,7 +74,17 @@ func main() {
 		log.Fatalf("invalid auth mode: %v", err)
 	}
 
-	engine, closeEngine, err := buildEngine(redisClient, parsedMode, coreauth.NewSQLCUserProvider(db.NewQueries(pgPool)))
+	relStore, err := storage.NewPostgresRelationalStore(pgPool)
+	if err != nil {
+		log.Fatalf("relational store init failed: %v", err)
+	}
+
+	userRepo := coreauth.NewRelationalUserRepository(relStore)
+	if userRepo == nil {
+		log.Fatal("user repository init failed")
+	}
+
+	engine, closeEngine, err := buildEngine(redisClient, parsedMode, coreauth.NewStoreUserProvider(userRepo))
 	if err != nil {
 		log.Fatalf("build auth engine failed: %v", err)
 	}

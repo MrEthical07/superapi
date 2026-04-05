@@ -1,2 +1,2 @@
-// Package db provides Postgres/sqlc integration, migrations, and transaction helpers.
+// Package db provides Postgres connectivity and migrations for storage backends.
 package db

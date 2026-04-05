@@ -1,451 +1,229 @@
 # Day-to-Day Workflows
 
----
+This guide documents common development workflows for contributors working on SuperAPI.
 
-For the full runtime environment variable matrix (defaults, behavior, and constraints), see [docs/environment-variables.md](environment-variables.md).
+Use it as a practical checklist during daily development.
 
-## 1. Running the server
+## 1. Running The API
 
-### Minimal (no external dependencies)
+### 1.1 Minimal local run (no external dependencies)
+
+Use this when you only need process-level behavior and basic routes.
 
 ```bash
 go run ./cmd/api
 ```
 
-Server starts on `:8080`. Postgres and Redis features are disabled. Built-in health and system endpoints are available.
+What to expect:
 
-### Using config profiles
+- API starts on configured HTTP_ADDR (default :8080)
+- health and readiness routes are available
+- external dependency features are disabled unless enabled via env
 
-```bash
-# Minimal local mode (no Redis/Postgres wiring)
-APP_PROFILE=minimal go run ./cmd/api
-
-# Dev profile (auth/cache/ratelimit/postgres/redis enabled defaults)
-APP_PROFILE=dev go run ./cmd/api
-
-# Prod-like profile (strict auth + fail-closed cache/ratelimit defaults)
-APP_PROFILE=prod go run ./cmd/api
-```
-
-Explicit env vars still override profile defaults.
-
-### With all features
+### 1.2 Full local run (Postgres + Redis + auth + cache + rate-limit)
 
 ```bash
-export POSTGRES_ENABLED=true
-export POSTGRES_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
-export REDIS_ENABLED=true
-export REDIS_ADDR="127.0.0.1:6379"
-export AUTH_ENABLED=true
-export AUTH_MODE=hybrid
-export RATELIMIT_ENABLED=true
-export CACHE_ENABLED=true
-
-go run ./cmd/api
+POSTGRES_ENABLED=true POSTGRES_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable" REDIS_ENABLED=true REDIS_ADDR="127.0.0.1:6379" AUTH_ENABLED=true RATELIMIT_ENABLED=true CACHE_ENABLED=true go run ./cmd/api
 ```
 
-### Changing listen address
+Use this mode when testing realistic route behavior.
 
-```bash
-HTTP_ADDR=":3000" go run ./cmd/api
-```
+### 1.3 Useful startup checks
 
-### Dev-friendly logging
+After startup verify:
 
-```bash
-LOG_FORMAT=text LOG_LEVEL=debug go run ./cmd/api
-```
+- GET /healthz
+- GET /readyz
+- GET /metrics (if metrics enabled)
 
----
+## 2. Creating A New Module
 
-## 2. Creating a new module
-
-### Using the scaffolder (recommended)
+### 2.1 Generate module scaffold
 
 ```bash
 make module name=projects
 ```
 
-This creates `internal/modules/projects/` with:
-- `module.go` — Module struct, `Name()`, `app.Module` interface
-- `routes.go` — `Register()` with a default ping endpoint and policy examples
-- `dto.go` — Request/response types with `Validate()` example
-- `handler.go` — Handler struct with `Ping()` method
-- `service.go` — Service struct with `Ping()` method
-- `repo.go` — Empty repo struct
-- `handler_test.go` — Ping handler test
-- `service_test.go` — Ping service test
+This creates module files and updates module registry.
 
-It also updates `internal/modules/modules.go`:
-- Adds the import: `"github.com/MrEthical07/superapi/internal/modules/projects"`
-- Adds to `All()`: `projects.New()`
+### 2.2 Immediately after scaffold
 
-### Overwriting an existing module
+Before writing business logic, do these checks:
 
-```bash
-make module name=projects force=1
-```
+1. confirm route path and package name are correct
+2. confirm module appears in internal/modules/modules.go
+3. confirm generated files compile
 
-### Advanced scaffolding flags
+### 2.3 Architecture alignment pass
 
-```bash
-# Add module-local db/schema.sql + db/queries.sql stubs
-make module name=projects db=1
+Scaffold output is a starting point. Update it to follow enforced flow:
 
-# Add policy-ready route wiring examples
-make module name=projects auth=1 tenant=1 ratelimit=1 cache=1
+- handler -> service -> repository -> store
+- service does not call store execution methods (Execute, Query, etc.) directly; it may only call store.WithTx to define write transaction boundaries
+- repositories must not control transaction boundaries
+- repository public interface is domain-focused
 
-# Also create a global migration scaffold (requires db=1)
-make module name=projects db=1 migration=1
-```
+## 3. Implementing Data Access
 
-Generator constraints:
-- `tenant=1` requires `auth=1`
-- `migration=1` requires `db=1`
+For each module:
 
-### Name normalization rules
+1. Choose storage type (relational or document).
+2. Define repository contract in domain language.
+3. Implement repository using store operations.
+4. Wire repository/service in module dependency binding.
+5. Keep write paths transactional and read paths direct.
 
-| Input | Package name | Route path |
-|---|---|---|
-| `projects` | `projects` | `/api/v1/projects` |
-| `project_tasks` | `project_tasks` | `/api/v1/project-tasks` |
-| `project-tasks` | `project_tasks` | `/api/v1/project-tasks` |
+## 4. Transaction Workflow
 
-Requirements:
-- Must be lowercase
-- Only `a-z`, `0-9`, `-`, `_` allowed
-- Must start with a letter
+### 4.1 Write paths
 
-### After scaffolding
+Pattern:
 
-1. Verify: `go build ./...`
-2. Run tests: `go test ./...`
-3. Run static policy checks: `make verify`
-4. Start server and test the ping endpoint: `curl http://localhost:8080/api/v1/projects/ping`
-5. Begin adding real routes, handlers, services, and repos
+- service calls store.WithTx to define the transaction boundary
+- service invokes repository write method(s) inside the transaction callback context
+- repository performs all store.Execute calls within that context
+- store handles commit/rollback
+- service must not call store execution methods (Execute, Query, etc.) directly
 
-### Bootstrapping auth schema/provider (optional)
+### 4.2 Read paths
+
+Pattern:
+
+- service calls repository read method
+- repository executes read operation through store
+- no forced tx wrapper by default
+
+## 5. Relational Backend Workflow
+
+### 5.1 Migration flow
+
+Create migration:
 
 ```bash
-# Interactive auth bootstrap wizard
-make auth
-
-# Config-driven auth bootstrap
-make auth-config file=authgen.example.yaml
-```
-
-This generates/updates auth bootstrap outputs, including `docs/auth-bootstrap.md`.
-
----
-
-## 3. Database workflow
-
-### Creating a migration
-
-```bash
-# Using golang-migrate CLI
-migrate create -ext sql -dir db/migrations -seq add_projects_table
-
-# Using make
 make migrate-create NAME=add_projects_table
 ```
 
-This creates two empty files:
-- `db/migrations/000003_add_projects_table.up.sql`
-- `db/migrations/000003_add_projects_table.down.sql`
-
-### Writing migration SQL
-
-**Up migration** (`000003_add_projects_table.up.sql`):
-```sql
-CREATE TABLE projects (
-    id          TEXT PRIMARY KEY,
-    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
-    name        TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'active',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_projects_tenant_id ON projects(tenant_id);
-```
-
-**Down migration** (`000003_add_projects_table.down.sql`):
-```sql
-DROP TABLE IF EXISTS projects;
-```
-
-### Updating schema mirror
-
-After writing migrations, update `db/schema/` to reflect the final table shape. sqlc reads from `db/schema/`, not from migrations.
-
-Create `db/schema/projects.sql`:
-```sql
-CREATE TABLE projects (
-    id          TEXT PRIMARY KEY,
-    tenant_id   TEXT NOT NULL REFERENCES tenants(id),
-    name        TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'active',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
-
-### Adding SQL queries
-
-Create `db/queries/projects.sql`:
-```sql
--- name: CreateProject :one
-INSERT INTO projects (id, tenant_id, name, status)
-VALUES ($1, $2, $3, $4)
-RETURNING *;
-
--- name: GetProjectByID :one
-SELECT * FROM projects WHERE id = $1;
-
--- name: ListProjectsByTenant :many
-SELECT * FROM projects WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2;
-
--- name: DeleteProject :exec
-DELETE FROM projects WHERE id = $1;
-```
-
-### Regenerating sqlc
+Apply migrations:
 
 ```bash
-# With sqlc installed
-sqlc generate
+make migrate-up DB_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
+```
 
-# Without sqlc installed
-go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+Roll back as needed:
 
-# Using make
+```bash
+make migrate-down DB_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
+```
+
+### 5.2 Query source flow
+
+If using sqlc-generated internals in repository implementation:
+
+1. update db/schema files
+2. update db/queries files
+3. regenerate code
+
+```bash
 make sqlc-generate
 ```
 
-This regenerates files in `internal/core/db/sqlcgen/`. **Never edit those files manually.**
+Important:
 
-### Running migrations
+- sqlc output is implementation detail
+- do not expose sqlc types in service/repository public contracts
 
-```bash
-# Apply all pending migrations
-POSTGRES_ENABLED=true POSTGRES_URL="$DB_URL" go run ./cmd/migrate up
+## 6. Auth Workflow
 
-# Roll back one step
-POSTGRES_ENABLED=true POSTGRES_URL="$DB_URL" go run ./cmd/migrate down --steps=1
+Auth integration is store-backed but goAuth boundary is unchanged.
 
-# Check current version
-POSTGRES_ENABLED=true POSTGRES_URL="$DB_URL" go run ./cmd/migrate version
+Runtime sequence:
 
-# Force a version (for fixing dirty state)
-POSTGRES_ENABLED=true POSTGRES_URL="$DB_URL" go run ./cmd/migrate force --version=2
+- app wiring creates auth repository over relational store
+- app wiring creates StoreUserProvider from repository
+- goAuth engine is built with redis + provider
 
-# Using make
-make migrate-up DB_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
-make migrate-down DB_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
-make migrate-version DB_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
-```
+When testing auth routes:
 
-### Complete DB workflow checklist
+- POST /api/v1/system/auth/login
+- POST /api/v1/system/auth/refresh
+- GET /api/v1/system/whoami (requires auth)
 
-1. `migrate create -ext sql -dir db/migrations -seq add_feature_table`
-2. Write up/down SQL in the new migration files
-3. Mirror final schema in `db/schema/<table>.sql`
-4. Add queries in `db/queries/<table>.sql`
-5. Run `sqlc generate`
-6. Run `go build ./...` to verify generated code
-7. Apply migration: `go run ./cmd/migrate up`
-8. Run `go test ./...`
+See [docs/auth-goauth.md](auth-goauth.md) for details.
 
----
+## 7. Verification Workflow Before PR
 
-## 4. Enabling/disabling features via env
-
-All features are controlled by environment variables. No code changes needed to toggle features.
-
-### Auth
-
-```bash
-AUTH_ENABLED=true AUTH_MODE=hybrid   # Enable with hybrid mode
-AUTH_ENABLED=false                    # Disable (default)
-```
-
-Requires: `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`
-
-### Rate limiting
-
-```bash
-RATELIMIT_ENABLED=true               # Enable
-RATELIMIT_FAIL_OPEN=true             # Default in non-prod; prod default is false
-RATELIMIT_DEFAULT_LIMIT=100           # Requests per window
-RATELIMIT_DEFAULT_WINDOW=1m           # Window duration
-```
-
-Requires: `REDIS_ENABLED=true`
-
-### Response caching
-
-```bash
-CACHE_ENABLED=true                    # Enable
-CACHE_FAIL_OPEN=true                  # Default in non-prod; prod default is false
-CACHE_DEFAULT_MAX_BYTES=262144        # Max cached response size (256 KiB)
-CACHE_TAG_VERSION_CACHE_TTL=250ms     # In-process TTL for tag version token cache
-```
-
-Requires: `REDIS_ENABLED=true`
-
-### Tracing
-
-```bash
-TRACING_ENABLED=true
-TRACING_EXPORTER=otlpgrpc
-TRACING_OTLP_ENDPOINT=localhost:4317
-TRACING_SAMPLER=traceidratio
-TRACING_SAMPLE_RATIO=0.05
-TRACING_INSECURE=true
-```
-
-### Security headers
-
-```bash
-HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED=true
-```
-
-### Request timeout
-
-```bash
-HTTP_MIDDLEWARE_REQUEST_TIMEOUT=10s     # Must be <= HTTP_WRITE_TIMEOUT
-```
-
-### Body size limit
-
-```bash
-HTTP_MIDDLEWARE_MAX_BODY_BYTES=1048576  # 1 MiB global limit
-```
-
-### Access logging
-
-```bash
-HTTP_MIDDLEWARE_ACCESS_LOG_ENABLED=true
-HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE=1.0   # Log all requests (dev)
-HTTP_MIDDLEWARE_ACCESS_LOG_SLOW_THRESHOLD=500ms
-```
-
----
-
-## 5. Testing workflows
-
-### Run all tests
+Run standard checks:
 
 ```bash
 go test ./...
-
-# With race detector
-go test ./... -race
-
-# Using make
-make test
-```
-
-### Run a specific package
-
-```bash
-go test ./internal/modules/system/...
-```
-
-### Run a specific test
-
-```bash
-go test ./internal/modules/system/ -run TestWhoamiRequiresAuth
-```
-
-### Build check (no tests)
-
-```bash
 go build ./...
-```
-
-### Policy static verification
-
-```bash
-go run ./cmd/superapi-verify ./...
-
-# JSON output for CI tooling
-go run ./cmd/superapi-verify -format json ./...
-
-# Using make
 make verify
 ```
 
-### Format and vet
+Architecture review checks:
 
-```bash
-make fmt
-make vet
-```
+- no handler bypass to data layer
+- no service direct call to store execution methods (Execute, Query, etc.) or driver
+- no repository direct driver usage
+- no repository controlling transaction boundaries (WithTx)
+- one storage type per module
+- policy order is valid
 
-### Full pre-commit check
+## 8. Troubleshooting Playbook
 
-```bash
-make fmt
-make vet
-make test
-make verify
-go build ./...
-```
+### 8.1 Startup fails at config lint
 
-### Load testing for 10K RPS readiness
+Likely causes:
 
-Generate an auth token for `GET /api/v1/system/whoami` traffic:
+- auth enabled without redis/postgres
+- invalid duration/boolean env value
+- prod fail-open configuration for cache/rate-limit
 
-```bash
-go run ./cmd/perftoken --output json
-```
+Action:
 
-Run k6 (10m ramp + 30m sustain by default):
+- check error message
+- compare env values against [docs/environment-variables.md](environment-variables.md)
 
-```bash
-make load-k6-10k PERF_AUTH_TOKEN="<token>"
-```
+### 8.2 Startup fails at dependency init
 
-Run Vegeta (same profile):
+Likely causes:
 
-```bash
-make load-vegeta-10k PERF_AUTH_TOKEN="<token>"
-```
+- Postgres URL invalid/unreachable
+- Redis addr invalid/unreachable
+- tracing endpoint misconfiguration
 
-For complete setup, pass/fail criteria, and tuning guidance, see [docs/performance-testing.md](performance-testing.md).
+Action:
 
-### Hot-path benchmarks
+- validate network connectivity
+- validate startup ping timeout values
+- test dependencies independently
 
-```bash
-make bench-hotpath
-```
+### 8.3 Route behavior looks wrong
 
----
+Likely causes:
 
-## 6. Common gotchas
+- policies attached in wrong order
+- missing tenant policy for tenant route
+- cache vary dimensions unsafe for authenticated route
 
-### "auth enabled requires redis enabled"
+Action:
 
-Config lint enforces that `AUTH_ENABLED=true` requires both `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`. Rate limiting and caching still require Redis only.
+- inspect route registration in module routes.go
+- run verifier and review policy errors
 
-### "postgres url cannot be empty when enabled"
+## 9. Suggested Daily Loop
 
-When `POSTGRES_ENABLED=true`, you must also set `POSTGRES_URL`.
+1. sync latest changes
+2. run or restart API
+3. implement one small module change
+4. run focused tests
+5. run full test/build/verify before push
+6. update docs if behavior changed
 
-### sqlc regeneration after schema changes
+## 10. Related Docs
 
-If you change `db/schema/` or `db/queries/` but forget to run `sqlc generate`, the generated code in `internal/core/db/sqlcgen/` will be stale and the build may fail.
-
-### Migration "no change"
-
-If `go run ./cmd/migrate up` reports no change, all migrations are already applied. This is treated as success.
-
-### Module generator won't overwrite
-
-By default, `make module name=existing` fails if the directory exists. Use `force=1` to overwrite.
-
-### Nil pool / nil service checks
-
-Modules must handle the case where dependencies are disabled. Check for nil pool/service and return `apperr.New(apperr.CodeDependencyFailure, 503, "database is not configured")`.
+- [docs/overview.md](overview.md)
+- [docs/architecture.md](architecture.md)
+- [docs/modules.md](modules.md)
+- [docs/module_guide.md](module_guide.md)
+- [docs/environment-variables.md](environment-variables.md)
