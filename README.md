@@ -54,6 +54,22 @@ Hard rules:
 - Store-first data layer contracts in internal/core/storage
 - Built-in scaffolder for generating production-oriented modules
 
+## Acknowledgments
+
+SuperAPI uses **goAuth** as its authentication engine.
+
+`goAuth` is an open-source authentication framework that powers SuperAPI's route-level auth workflows and identity lifecycle integration.
+
+- goAuth repository: [https://github.com/MrEthical07/goAuth](https://github.com/MrEthical07/goAuth)
+
+## Showcase
+
+The following project uses SuperAPI as its backend foundation in production-oriented development:
+
+- **ProjectBook**: A design thinking-first workspace for building people-centric projects without context fragmentation.
+  - Frontend repository: [https://github.com/MrEthical07/projectbook](https://github.com/MrEthical07/projectbook)
+  - Backend repository (built on SuperAPI): [https://github.com/MrEthical07/projectbook-backend](https://github.com/MrEthical07/projectbook-backend)
+
 ## Quick Start
 
 ```bash
