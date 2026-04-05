@@ -102,3 +102,150 @@ Never:
 - Cache: docs/cache-guide.md
 - Auth: docs/auth-goauth.md, docs/authDocs/
 - Runtime/config: docs/environment-variables.md, docs/workflows.md
+
+## 11. How To Add A New Feature (Primary Workflow)
+
+Use this sequence for most feature work:
+
+1. Define behavior first:
+- endpoint shape (request/response)
+- auth/tenant/rbac requirements
+- cache/rate-limit requirements
+
+2. Add or update module code in this order:
+- dto.go (transport contract)
+- handler.go (HTTP only)
+- service.go (business workflow)
+- repo.go (query + mapping logic)
+
+3. Keep data flow enforced:
+- handler -> service -> repository -> store
+
+4. Register routes and policies explicitly in routes.go.
+
+5. Validate and test:
+- go test ./...
+- go build ./...
+- go run ./cmd/superapi-verify ./...
+
+6. Update documentation when behavior/config/API architecture changes.
+
+## 12. How To Add A New Module
+
+Preferred scaffold command:
+
+- make module name=projects
+
+Optional scaffold flags:
+
+- make module name=projects db=1
+- make module name=projects auth=1 tenant=1 ratelimit=1 cache=1
+
+Post-scaffold hardening checklist:
+
+1. Confirm module registration in internal/modules/modules.go.
+2. Refine generated service/repository contracts to domain-focused methods.
+3. Wire one storage type only (relational or document) in module binding.
+4. Ensure route policies follow required order.
+5. Add tests for handler/service paths.
+
+Do not ship scaffold defaults without architecture pass.
+
+## 13. How To Add Data Storage For A Module
+
+Choose one storage family per module:
+
+- relational module -> storage.RelationalStore
+- document module -> storage.DocumentStore
+
+Required patterns:
+
+- repository builds operations and calls store.Execute(...)
+- service owns transaction boundary for writes via store.WithTx(...)
+- reads are direct repository calls (no forced tx wrapper)
+
+Relational path guidance:
+
+1. Add migration files under db/migrations.
+2. Mirror schema under db/schema.
+3. Add/update query definitions under db/queries.
+4. Regenerate code when required:
+- make sqlc-generate
+
+Constraint reminder:
+
+- sqlc/driver objects are implementation details only
+- never expose them in service/repository public interfaces
+
+## 14. How To Add A New Backend Type (Core Change)
+
+Only do this when necessary. Keep changes explicit and minimal.
+
+Required steps:
+
+1. Implement backend store in internal/core/storage:
+- satisfy Store + TransactionalStore + backend-specific contract
+
+2. Keep store domain-agnostic:
+- no module domain structs in store implementation
+
+3. Wire dependencies in internal/core/app/deps.go:
+- init client/pool
+- init store implementation
+- set Dependencies.Store and typed store surface
+- register readiness checks when applicable
+
+4. Expose runtime access through internal/core/modulekit/runtime.go if needed.
+
+5. Add tests and update architecture/docs pages.
+
+Do not introduce compatibility layers that keep dual access patterns alive.
+
+## 15. Route And Policy Checklist
+
+For protected routes, policy order must be:
+
+1. auth
+2. tenant
+3. rbac
+4. rate limit
+5. cache
+6. cache-control (optional)
+
+Safety checks:
+
+- authenticated cache routes must vary by user or tenant
+- tenant_id path routes must enforce tenant policies
+- do not bypass route validator-backed registration
+
+## 16. Performance Guidance
+
+Hot-path principles:
+
+- keep middleware/policy stacks minimal and intentional
+- avoid high-cardinality cache/rate-limit key dimensions
+- define cache TagSpecs and VaryBy scope deliberately
+- prefer explicit invalidation scope over broad invalidation
+
+Performance checks:
+
+- make bench-hotpath
+- make load-k6-10k (full profile)
+- make load-vegeta-10k (token-based)
+
+Always compare before/after numbers when changing hot paths.
+
+## 17. Release And Publish Checklist
+
+For release-impacting changes:
+
+1. Update CHANGELOG.md with specific, verifiable entries.
+2. Update release metadata in README.md.
+3. Run quality gates:
+- go test ./...
+- go build ./...
+- go run ./cmd/superapi-verify ./...
+4. Ensure docs reflect the final runtime behavior.
+5. Tag release after merge/publish prep:
+- git tag -a vX.Y.Z -m "Release vX.Y.Z"
+- git push origin vX.Y.Z

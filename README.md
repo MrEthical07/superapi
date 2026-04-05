@@ -124,6 +124,7 @@ go run ./cmd/api
 Guides:
 - Module guide: [docs/modules.md](docs/modules.md)
 - CRUD walkthrough: [docs/crud-examples.md](docs/crud-examples.md)
+- Contributor playbook: [AGENTS.md](AGENTS.md)
 
 ## Docs Navigation
 
@@ -137,6 +138,7 @@ Guides:
 - Performance runbook: [docs/performance-testing.md](docs/performance-testing.md)
 - Environment variables: [docs/environment-variables.md](docs/environment-variables.md)
 - Workflows: [docs/workflows.md](docs/workflows.md)
+- Contributor playbook: [AGENTS.md](AGENTS.md)
 
 ## Philosophy
 
