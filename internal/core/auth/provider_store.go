@@ -73,7 +73,7 @@ func (p *StoreUserProvider) UpdatePasswordHash(userID string, newHash string) er
 		if errors.Is(err, ErrAuthUserNotFound) {
 			return goauth.ErrUserNotFound
 		}
-		return err
+		return fmt.Errorf("update password hash: %w", err)
 	}
 	return nil
 }

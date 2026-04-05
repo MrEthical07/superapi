@@ -16,11 +16,17 @@ type postgresRunner interface {
 	QueryRow(ctx context.Context, query string, args ...any) pgx.Row
 }
 
+// txBeginner is an internal interface for beginning transactions, enabling testing.
+type txBeginner interface {
+	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
+}
+
 type txRunnerKey struct{}
 
 // PostgresRelationalStore executes relational repository operations over pgx.
 type PostgresRelationalStore struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	begin txBeginner
 }
 
 // NewPostgresRelationalStore creates a relational store backed by a pgx pool.
@@ -28,7 +34,7 @@ func NewPostgresRelationalStore(pool *pgxpool.Pool) (*PostgresRelationalStore, e
 	if pool == nil {
 		return nil, errors.New("nil postgres pool")
 	}
-	return &PostgresRelationalStore{pool: pool}, nil
+	return &PostgresRelationalStore{pool: pool, begin: pool}, nil
 }
 
 // Kind identifies this store as relational.
@@ -59,7 +65,7 @@ func (s *PostgresRelationalStore) WithTx(ctx context.Context, fn func(ctx contex
 		return errors.New("nil transaction callback")
 	}
 
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.begin.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}

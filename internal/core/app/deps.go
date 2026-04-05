@@ -67,9 +67,10 @@ type DependencyBinder interface {
 
 func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, error) {
 	deps := &Dependencies{
-		Readiness: readiness.NewService(),
-		RateLimit: cfg.RateLimit,
-		Cache:     cfg.Cache,
+		Readiness:     readiness.NewService(),
+		RateLimit:     cfg.RateLimit,
+		Cache:         cfg.Cache,
+		DocumentStore: storage.NoopDocumentStore{},
 	}
 
 	if cfg.Postgres.Enabled {

@@ -35,11 +35,11 @@ Enforced flow:
 Service -> Repository -> Store -> Backend
 
 Hard rules:
-- services call repositories only
-- repositories call stores only
+- services call repositories only; repositories own all store.Execute calls
+- repositories call stores only, using store.WithTx to define write transaction boundaries
 - handlers never call DB/store directly
 - one storage type per module (relational or document)
-- transaction API exists at store layer and is used only for write paths
+- transaction API exists at store layer and is used only for write paths; repositories establish the boundary via store.WithTx and perform all store.Execute calls inside that scope
 
 ## Features
 

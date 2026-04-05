@@ -78,9 +78,10 @@ For each module:
 
 Pattern:
 
-- service starts store.WithTx(ctx, fn)
-- repository write operations execute inside callback context
+- service calls repository write method
+- repository uses store.WithTx to establish the transaction boundary and performs store.Execute calls inside the callback
 - store handles commit/rollback
+- service must not call store.Execute directly; only store.WithTx to define the write scope through repository workflows
 
 ### 4.2 Read paths
 

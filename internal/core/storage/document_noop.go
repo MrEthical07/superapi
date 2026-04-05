@@ -1,6 +1,9 @@
 package storage
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // NoopDocumentStore is a transaction-capable document store placeholder.
 // It executes document operations through a no-op executor contract.
@@ -14,7 +17,7 @@ func (NoopDocumentStore) Kind() Kind {
 // WithTx provides semantic transaction scopes for document backends.
 func (NoopDocumentStore) WithTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	if fn == nil {
-		return nil
+		return errors.New("nil transaction callback")
 	}
 	return fn(ctx)
 }
@@ -22,7 +25,7 @@ func (NoopDocumentStore) WithTx(ctx context.Context, fn func(ctx context.Context
 // Execute runs one document operation with a no-op executor.
 func (NoopDocumentStore) Execute(ctx context.Context, op DocumentOperation) error {
 	if op == nil {
-		return nil
+		return errors.New("nil document operation")
 	}
 	return op.ExecuteDocument(ctx, noopDocumentExecutor{})
 }

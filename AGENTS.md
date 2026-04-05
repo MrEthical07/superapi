@@ -34,7 +34,7 @@ Use current code as reference, but do not preserve legacy SQL-centric patterns.
 ## 4. Transaction Rules
 
 - Transaction API is mandatory at the store layer.
-- Services must use transaction scope only through repository workflows.
+- Services own the write transaction boundary via store.WithTx(...); all store.Execute calls happen inside that scope through repository methods.
 - Transactions apply to write paths only.
 - Read paths must not be forced into transaction context.
 - Backend-specific transaction behavior belongs only to store implementations.
