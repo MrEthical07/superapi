@@ -1,333 +1,196 @@
-# Auth & goAuth Integration
+# Auth and goAuth Integration
 
-How authentication works in SuperAPI with direct goAuth engine integration: auth modes, token flow, route protection, and local development setup.
+This document explains how authentication works in SuperAPI with goAuth, including runtime wiring, route behavior, and data flow through the new store-first architecture.
 
----
+## 1. Big Picture
 
-## Architecture
+SuperAPI uses goAuth as the auth engine.
 
-Authentication uses goAuth as the single engine with a thin SuperAPI integration layer:
+The integration boundary did not change:
 
-| Layer | File | Role |
-|---|---|---|
-| **goAuth engine builder** | `internal/core/auth/goauth_provider.go` | Builds `*goauth.Engine` from config + Redis + SQLC user provider |
-| **AuthContext** | `internal/core/auth/context.go` | Authenticated user data injected into request context |
-| **AuthRequired policy** | `internal/core/policy/auth.go` | Per-route middleware that enforces authentication |
+- goAuth still receives a goauth.UserProvider
 
----
+What changed:
 
-## Enabling authentication
+- user persistence now goes through repository + store layers
 
-**Required env vars:**
+Current path:
 
-```
-AUTH_ENABLED=true
-REDIS_ENABLED=true    # goAuth uses Redis for session storage
-POSTGRES_ENABLED=true
-POSTGRES_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
-```
+StoreUserProvider -> UserRepository -> RelationalStore -> Postgres
 
-**Auth configuration:**
+## 2. Key Files
 
-| Env var | Default | Description |
-|---|---|---|
-| `AUTH_ENABLED` | `false` | Master toggle |
-| `AUTH_MODE` | `hybrid` | Default auth mode: `jwt_only`, `hybrid`, `strict` |
+- internal/core/auth/goauth_provider.go
+	- builds goAuth engine and maps auth mode
+- internal/core/auth/provider_sqlc.go
+	- StoreUserProvider implementation used by goAuth
+- internal/core/auth/user_repository.go
+	- repository implementation over relational store
+- internal/core/storage/postgres_store.go
+	- relational execution and transaction behavior
+- internal/core/app/deps.go
+	- startup wiring of provider/repository/store/engine
+- internal/core/policy/auth.go
+	- route auth policy behavior and context injection
 
-Notes:
-- In this template, startup config exposed via `internal/core/config/config.go` is currently `AUTH_ENABLED` + `AUTH_MODE`.
-- The goAuth engine is built from defaults inside `internal/core/auth/goauth_provider.go`.
+## 3. Startup Wiring Flow
 
----
+Auth wiring is performed during dependency initialization.
 
-## Auth modes
+Sequence when auth is enabled:
 
-The auth mode determines how token validation is performed and is set globally via `AUTH_MODE`, but can be overridden per-route.
+1. Postgres pool is initialized.
+2. Relational store is created from pool.
+3. UserRepository is created from relational store.
+4. StoreUserProvider is created from repository.
+5. goAuth engine is built with redis + provider.
 
-### jwt_only
+If required dependencies are missing, startup fails fast.
 
-```
-AUTH_MODE=jwt_only
-```
+## 4. Runtime Requirements
 
-- Validates JWT signature and claims (issuer, audience, expiry)
-- Does NOT check Redis session state
-- Fastest mode — no Redis round-trip during auth
-- Cannot detect revoked tokens until JWT expires
-- Use for: read-heavy endpoints where slight staleness is acceptable
+From config lint behavior:
 
-### hybrid (default)
+- AUTH_ENABLED=true requires REDIS_ENABLED=true
+- AUTH_ENABLED=true requires POSTGRES_ENABLED=true
 
-```
-AUTH_MODE=hybrid
-```
+Reason:
 
-- Validates JWT first
-- If Redis is available, also checks session is active
-- If Redis is unavailable, falls back to JWT-only
-- Balanced: catches revocations when possible, stays available when Redis is down
-- Use for: most endpoints
+- goAuth uses Redis-backed session behavior
+- current provider persistence path uses relational store over Postgres
 
-### strict
+## 5. Auth Modes
 
-```
-AUTH_MODE=strict
-```
+AUTH_MODE values:
 
-- Requires both valid JWT AND active Redis session
-- Fails closed: if Redis is unavailable, auth fails with 401
-- Most secure: guarantees revoked tokens are rejected immediately
-- Use for: sensitive operations (payments, admin actions, tenant data mutations)
+- jwt_only
+- hybrid
+- strict
 
-### Per-route override
+Mode parsing and mapping happen in internal/core/auth/goauth_provider.go.
 
-```go
-// Module binds the default mode from config
-func (m *Module) BindDependencies(d *app.Dependencies) {
-    m.authEngine = d.AuthEngine
-    m.authMode = d.AuthMode  // Global default from AUTH_MODE
-}
+At route level, policy.AuthRequired(engine, mode) enforces the selected mode.
 
-// Override for a specific sensitive route
-r.Handle(http.MethodPost, "/api/v1/payments", handler,
-    policy.AuthRequired(m.authEngine, auth.ModeStrict),  // Override to strict
-)
-```
+## 6. Route Protection Behavior
 
----
+Auth policy implementation is in internal/core/policy/auth.go.
 
-## Token flow
+AuthRequired behavior:
 
-### Request → Response
-
-```
-Client                         SuperAPI                        goAuth Engine
-  │                              │                                  │
-  │  Authorization: Bearer <jwt> │                                  │
-  │─────────────────────────────>│                                  │
-  │                              │  engine.Validate(token, mode)    │
-  │                              │─────────────────────────────────>│
-  │                              │                                  │
-  │                              │  AuthContext{UserID, TenantID,   │
-  │                              │    Role, Permissions}            │
-  │                              │<─────────────────────────────────│
-  │                              │                                  │
-  │                              │  ctx = auth.WithContext(ctx, ac) │
-  │                              │  next.ServeHTTP(w, r.WithCtx)   │
-  │                              │                                  │
-  │  200 OK + response body      │                                  │
-  │<─────────────────────────────│                                  │
-```
+- validates bearer token through goAuth middleware guard
+- returns 401 for missing/invalid auth
+- injects auth.AuthContext into request context
 
-### Token extraction
+AuthContext includes:
 
-The `AuthRequired` policy extracts the token from the `Authorization` header:
+- UserID
+- TenantID
+- Role
+- Permissions
 
-```
-Authorization: Bearer eyJhbGciOiJIUzI1N...
-```
+That context is then consumed by downstream handlers and tenant/RBAC policies.
 
-- Only `Bearer` scheme is accepted
-- Missing header → 401
-- Non-Bearer scheme → 401
-- Empty token after `Bearer ` → 401
+## 7. Auth Routes In System Module
 
-### AuthContext injection
+Routes are registered in internal/modules/system/routes.go.
 
-On successful validation, goAuth middleware returns an auth result and SuperAPI injects `AuthContext` into the request context:
+### 7.1 POST /api/v1/system/auth/login
 
-```go
-type AuthContext struct {
-    UserID      string   // e.g., "usr_abc123"
-    TenantID    string   // e.g., "tnt_xyz789" (may be empty)
-    Role        string   // e.g., "admin"
-    Permissions []string // e.g., ["system.whoami", "project.write"]
-}
-```
+Flow:
 
----
+1. handler validates identifier/password
+2. handler calls goAuth engine Login
+3. goAuth uses StoreUserProvider for user lookup
+4. provider calls UserRepository
+5. repository executes relational operation via store
+6. store executes against pgx runner
+7. goAuth validates and issues tokens
 
-## Reading auth context in handlers
+### 7.2 POST /api/v1/system/auth/refresh
 
-```go
-func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-    principal, ok := auth.FromContext(r.Context())
-    if !ok {
-        // Should not happen after AuthRequired policy
-        response.Error(w, r, apperrors.Unauthorized("not authenticated"))
-        return
-    }
+Flow:
 
-    // Use principal fields
-    userID := principal.UserID
-    tenantID := principal.TenantID
-    role := principal.Role
-    perms := principal.Permissions
-}
-```
+1. handler validates refresh token
+2. handler calls goAuth engine Refresh
+3. goAuth validates token/session state
+4. provider/repository/store path is used when user persistence lookup is needed
 
-### Reading tenant ID (convenience)
+### 7.3 GET /api/v1/system/whoami
 
-For tenant-scoped operations, you can use the tenant helper:
+Flow:
 
-```go
-import "github.com/MrEthical07/superapi/internal/core/tenant"
+1. AuthRequired validates request and injects auth context
+2. optional rate-limit policy runs
+3. handler returns principal data from context
 
-tenantID, ok := tenant.TenantIDFromContext(r.Context())
-if !ok {
-    response.Error(w, r, apperrors.Forbidden("tenant scope required"))
-    return
-}
-```
+This route demonstrates policy-driven auth context usage.
 
-This reads from the same `AuthContext` — it's a shortcut that extracts only the tenant ID.
+## 8. UserProvider Compatibility
 
----
+StoreUserProvider methods cover goAuth user-provider needs:
 
-## goAuth engine integration
+- GetUserByIdentifier
+- GetUserByID
+- UpdatePasswordHash
+- CreateUser
+- UpdateAccountStatus
+- TOTP/backup-code methods (currently stubs)
 
-### What goAuth provides
+Mapping behavior:
 
-goAuth is the auth and RBAC engine (`github.com/MrEthical07/goAuth`) and handles:
+- repository not-found error is translated to goauth.ErrUserNotFound
+- storage projection is mapped to goauth.UserRecord
 
-- JWT creation and validation
-- Session management in Redis
-- Token refresh
-- Session revocation
-- Multi-session tracking
+Result:
 
-### Engine initialization
+- goAuth contract remains compatible
+- persistence internals are architecture-compliant
 
-The goAuth engine is initialized in `internal/core/auth/goauth_provider.go`:
+## 9. Why The Store-Backed Provider Matters
 
-```go
-func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (*goauth.Engine, func(), error)
-```
+Benefits:
 
-Runtime wiring details in this template:
+- auth persistence follows same architecture as modules
+- no direct query-object coupling in provider construction
+- easier future backend evolution behind store contracts
+- cleaner testability at repository and provider boundaries
 
-- Uses `goauth.DefaultConfig()` and sets validation mode from `AUTH_MODE`.
-- Wires Redis client + SQL-backed user provider (`auth.NewSQLCUserProvider(...)`).
-- Enables role and permission extraction in auth results.
+## 10. Common Integration Mistakes
 
-`policy.AuthRequired(engine, mode)` now calls goAuth middleware guard directly and stores both goAuth auth result and `auth.AuthContext` on request context for downstream handlers.
+Mistake: implementing custom token parsing in module handlers
 
-### User provider
+- Correct approach: use AuthRequired policy and auth context extraction
 
-goAuth requires a `UserProvider` during validation. This template uses the DB-backed implementation:
+Mistake: bypassing provider/repository to hit DB directly for auth user reads
 
-- `internal/core/auth/provider_sqlc.go` (`SQLCUserProvider`)
-- wired in `internal/core/app/deps.go` via `auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres))`
+- Correct approach: keep all auth persistence in auth repository + store path
 
-This is why `AUTH_ENABLED=true` requires both Redis and Postgres at startup.
+Mistake: putting RBAC checks before auth policy
 
----
+- Correct approach: attach policies in correct order (auth before tenant/RBAC)
 
-## Route protection patterns
+## 11. Troubleshooting Checklist
 
-### Basic authenticated route
+Login returns 401:
 
-```go
-r.Handle(http.MethodGet, "/api/v1/profile", handler,
-    policy.AuthRequired(m.authEngine, m.authMode),
-)
-```
+- confirm AUTH_ENABLED=true
+- confirm Redis and Postgres are enabled
+- verify identifier/password input
 
-### Role-restricted route
+All protected routes return 401:
 
-```go
-r.Handle(http.MethodPost, "/api/v1/admin/users", handler,
-    policy.AuthRequired(m.authEngine, auth.ModeStrict),
-    policy.RequirePerm("admin.users.write"),
-)
-```
+- confirm auth policy attached to routes correctly
+- verify token is sent as Bearer token
+- verify auth mode and engine startup logs
 
-### Permission-restricted route
+Auth startup fails:
 
-```go
-r.Handle(http.MethodPost, "/api/v1/projects", handler,
-    policy.AuthRequired(m.authEngine, m.authMode),
-    policy.RequirePerm("project.write"),
-)
-```
+- check config lint output for missing required env vars
+- check Redis/Postgres connectivity and startup ping timeouts
 
-### Tenant-scoped route
+## 12. Related References
 
-```go
-r.Handle(http.MethodGet, "/api/v1/tenants/{tenant_id}/projects", handler,
-    policy.AuthRequired(m.authEngine, auth.ModeStrict),
-    policy.TenantRequired(),
-    policy.TenantMatchFromPath("tenant_id"),
-)
-```
-
-### Optional auth (public with context)
-
-There is no built-in "optional auth" policy. If you need endpoints that work for both authenticated and anonymous users, check the auth context in the handler:
-
-```go
-func (h *Handler) PublicList(w http.ResponseWriter, r *http.Request) {
-    principal, authenticated := auth.FromContext(r.Context())
-    if authenticated {
-        // Show user-specific data
-    } else {
-        // Show public data
-    }
-}
-```
-
-For this pattern, do NOT add `AuthRequired` — let the handler decide.
-
----
-
-## Local development
-
-### Auth disabled (simplest)
-
-```
-AUTH_ENABLED=false
-```
-
-No authentication is performed. All `AuthRequired` policies will return 401. Do not put `AuthRequired` on routes you want to test without auth.
-
-### Auth enabled locally
-
-```
-AUTH_ENABLED=true
-AUTH_MODE=jwt_only
-REDIS_ENABLED=true
-REDIS_ADDR=localhost:6379
-POSTGRES_ENABLED=true
-POSTGRES_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
-```
-
-Use `jwt_only` mode locally to reduce strict session coupling during request validation. In this template, auth still requires Redis + Postgres to be enabled at startup.
-
-### Generating test tokens
-
-For integration tests, create a goAuth engine in test setup and mint tokens through the normal login flow:
-
-```go
-accessToken, refreshToken, err := engine.Login(ctx, "test@example.com", "test-password")
-if err != nil {
-    t.Fatal(err)
-}
-
-_ = refreshToken // use for refresh-flow tests as needed
-req.Header.Set("Authorization", "Bearer "+accessToken)
-```
-
----
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| 401 on all requests | `AUTH_ENABLED=false` with `AuthRequired` policy | Enable auth or remove policy |
-| 401 with valid token | Token was signed/issued with incompatible key material or claims | Regenerate token with the same goAuth configuration used by the running API |
-| 401 in strict mode | Redis down | Switch to hybrid mode or fix Redis |
-| 403 "tenant scope required" | Token has no `tenant_id` | Ensure user is assigned to a tenant |
-| 403 "forbidden" | Missing role or permission | Check token claims and route policy requirements |
-| 404 on tenant routes | Tenant ID mismatch in path | User's tenant doesn't match URL tenant_id |
-| Empty `AuthContext` | Token valid but claims missing | Check goAuth token generation includes all claims |
-When auth is enabled in this template, both Redis and Postgres must also be enabled because the runtime wires a SQL-backed user provider for goAuth.
+- [docs/architecture.md](architecture.md)
+- [docs/policies.md](policies.md)
+- [docs/auth-bootstrap.md](auth-bootstrap.md)
+- [docs/environment-variables.md](environment-variables.md)

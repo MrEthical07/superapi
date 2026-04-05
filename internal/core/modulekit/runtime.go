@@ -2,7 +2,6 @@ package modulekit
 
 import (
 	goauth "github.com/MrEthical07/goAuth"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/MrEthical07/superapi/internal/core/app"
@@ -10,6 +9,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/cache"
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
+	"github.com/MrEthical07/superapi/internal/core/storage"
 )
 
 // Runtime gives modules a single injected surface for optional infrastructure
@@ -28,12 +28,28 @@ func (r Runtime) Dependencies() *app.Dependencies {
 	return r.deps
 }
 
-// Postgres returns configured pgx pool when Postgres is enabled.
-func (r Runtime) Postgres() *pgxpool.Pool {
+// Store returns the primary configured storage backend.
+func (r Runtime) Store() storage.Store {
 	if r.deps == nil {
 		return nil
 	}
-	return r.deps.Postgres
+	return r.deps.Store
+}
+
+// RelationalStore returns the relational storage backend.
+func (r Runtime) RelationalStore() storage.RelationalStore {
+	if r.deps == nil {
+		return nil
+	}
+	return r.deps.RelationalStore
+}
+
+// DocumentStore returns the document storage backend.
+func (r Runtime) DocumentStore() storage.DocumentStore {
+	if r.deps == nil {
+		return nil
+	}
+	return r.deps.DocumentStore
 }
 
 // Redis returns configured redis client when Redis is enabled.

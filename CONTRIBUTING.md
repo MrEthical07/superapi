@@ -44,3 +44,18 @@ This repository is published as a template for production-grade Go APIs.
 - Relevant docs updated
 - Changelog updated when release-impacting
 - Backward compatibility considered or clearly documented
+
+## Release Preparation Checklist
+- Update `CHANGELOG.md` with a new top release section (breaking changes, added, changed, removed, docs).
+- Update release metadata in `README.md`:
+	- release badge version
+	- current public template baseline version
+- Run quality gates:
+	- `go test ./...`
+	- `go build ./...`
+	- `make verify`
+- Confirm docs that describe architecture/runtime behavior are aligned with current code paths.
+- Create a release commit.
+- Create annotated release tag after merge/publish prep:
+	- `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+	- `git push origin vX.Y.Z`

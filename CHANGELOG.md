@@ -2,6 +2,71 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.7.0 (2026-04-05)
+
+### Breaking Changes
+- Enforced store-first data-layer architecture across runtime wiring and module guidance.
+	- Required flow: Service -> Repository -> Store -> Backend
+- Removed legacy core DB helper APIs from `internal/core/db`.
+	- Removed `db.NewQueries(...)`
+	- Removed `db.QueriesFrom(...)`
+	- Removed `db.QueriesFromTx(...)`
+	- Removed `db.WithTx(...)`
+	- Removed `db.WithTxResult(...)`
+- `modulekit.Runtime` storage access surface changed.
+	- Removed `Runtime.Postgres()` accessor
+	- Added `Runtime.Store()`, `Runtime.RelationalStore()`, `Runtime.DocumentStore()`
+- goAuth provider constructor and wiring path changed.
+	- Replaced `auth.NewSQLCUserProvider(...)` with `auth.NewStoreUserProvider(...)`
+	- Auth persistence now goes through repository + store contracts
+
+### Added
+- New storage contracts package at `internal/core/storage`.
+	- Backend kind contract (`Store.Kind()`)
+	- Mandatory transaction contract (`TransactionalStore.WithTx(...)`)
+	- Relational/document operation execution contracts
+- New relational store implementation over pgx.
+	- `storage.PostgresRelationalStore`
+- New document contract placeholder implementation.
+	- `storage.NoopDocumentStore`
+- New auth repository over relational store.
+	- `internal/core/auth/user_repository.go`
+- New operation helpers for repository-defined execution.
+	- `storage.RelationalExec(...)`
+	- `storage.RelationalQueryOne(...)`
+	- `storage.RelationalQueryMany(...)`
+	- `storage.DocumentRun(...)`
+
+### Changed
+- App dependency wiring now initializes store surfaces when Postgres is enabled.
+	- Added `Dependencies.Store`
+	- Added `Dependencies.RelationalStore`
+	- Added `Dependencies.DocumentStore`
+- Auth engine wiring now uses store-backed provider path.
+	- `StoreUserProvider -> UserRepository -> RelationalStore -> Postgres`
+- `cmd/perftoken` updated to match new auth/store wiring.
+- Core DB package scope narrowed to Postgres connectivity and migrations for storage backends.
+
+### Removed
+- Legacy core DB helper files:
+	- `internal/core/db/queries.go`
+	- `internal/core/db/queries_test.go`
+	- `internal/core/db/tx.go`
+	- `internal/core/db/tx_test.go`
+
+### Documentation
+- Rewrote architecture/docs set for store-first model with beginner-focused detail:
+	- `docs/overview.md`
+	- `docs/architecture.md`
+	- `docs/modules.md`
+	- `docs/module_guide.md`
+	- `docs/crud-examples.md`
+	- `docs/workflows.md`
+	- `docs/environment-variables.md`
+	- `docs/auth-goauth.md`
+- Updated auth bootstrap docs for store-backed provider and repository wiring.
+- Updated governance instructions in `AGENTS.md` for enforced data-layer constraints.
+
 ## v0.6.0 (2026-04-05)
 
 ### Breaking Changes

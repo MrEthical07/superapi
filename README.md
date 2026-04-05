@@ -1,6 +1,6 @@
 [![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.6.0-brightgreen)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.7.0-brightgreen)](CHANGELOG.md)
 
 # SuperAPI
 
@@ -22,20 +22,34 @@ It provides:
 - a module-oriented API architecture
 - policy-based middleware wiring
 - built-in auth, caching, rate limiting, and observability primitives
+- a store-first data layer with strict boundaries
 
 Start here:
 - Overview: [docs/overview.md](docs/overview.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
+
+## Data Layer Architecture
+
+Enforced flow:
+
+Service -> Repository -> Store -> Backend
+
+Hard rules:
+- services call repositories only
+- repositories call stores only
+- handlers never call DB/store directly
+- one storage type per module (relational or document)
+- transaction API exists at store layer and is used only for write paths
 
 ## Features
 
 - Module system for explicit, composable API domains
 - Strict startup validation for runtime and policy configuration
 - goAuth integration for route-level authentication workflows
-- Redis-backed response cache with dynamic `TagSpecs` invalidation and Redis-backed rate limiting
-- Browser/proxy cache directives with `policy.CacheControl(...)`
+- Redis-backed response cache with dynamic TagSpecs invalidation and Redis-backed rate limiting
+- Browser/proxy cache directives with policy.CacheControl(...)
 - Observability stack: metrics, tracing, and structured logs
-- sqlc + pgx workflow for typed query access
+- Store-first data layer contracts in internal/core/storage
 - Built-in scaffolder for generating production-oriented modules
 
 ## Quick Start
@@ -47,8 +61,8 @@ Start here:
 ```
 
 After startup:
-- Liveness: `GET /healthz`
-- Readiness: `GET /readyz`
+- Liveness: GET /healthz
+- Readiness: GET /readyz
 
 ### Minimal mode (no external dependencies)
 
@@ -64,18 +78,18 @@ go run ./cmd/api
 
 ### Full mode (Postgres + Redis + auth)
 
-Use `.env.example` full-mode defaults, then run:
+Use .env.example full-mode defaults, then run:
 
 ```bash
 go run ./cmd/api
 ```
 
-Required full-mode toggles are already shown in `.env.example`:
-- `POSTGRES_ENABLED=true` + valid `POSTGRES_URL`
-- `REDIS_ENABLED=true` + valid `REDIS_ADDR`
-- `AUTH_ENABLED=true`
-- `RATELIMIT_ENABLED=true`
-- `CACHE_ENABLED=true`
+Required full-mode toggles are already shown in .env.example:
+- POSTGRES_ENABLED=true with valid POSTGRES_URL
+- REDIS_ENABLED=true with valid REDIS_ADDR
+- AUTH_ENABLED=true
+- RATELIMIT_ENABLED=true
+- CACHE_ENABLED=true
 
 ## How To Build APIs
 
@@ -91,20 +105,9 @@ Expected output:
 generated module "projects" (package="projects" route=/api/v1/projects)
 ```
 
-This creates:
-
-- `internal/modules/projects/module.go`
-- `internal/modules/projects/routes.go`
-- `internal/modules/projects/dto.go`
-- `internal/modules/projects/handler.go`
-- `internal/modules/projects/service.go`
-- `internal/modules/projects/repo.go`
-- `internal/modules/projects/handler_test.go`
-- `internal/modules/projects/service_test.go`
-
 2. Confirm module wiring
 
-`internal/modules/modules.go` is updated automatically with import + `projects.New()` entry.
+internal/modules/modules.go is updated automatically with import + projects.New() entry.
 
 3. Verify and run
 
@@ -114,9 +117,9 @@ go run ./cmd/superapi-verify ./internal/modules/projects
 go run ./cmd/api
 ```
 
-4. Add handlers and service logic in the generated module files under `internal/modules/projects/`.
+4. Add handlers and service logic in the generated module files.
 
-5. Add routes in `routes.go` and attach policies as needed (auth, tenant, rate limit, cache, cache-control).
+5. Add repositories that execute store operations and keep query logic inside repository.
 
 Guides:
 - Module guide: [docs/modules.md](docs/modules.md)
@@ -140,14 +143,14 @@ Guides:
 - Secure by default in production-sensitive paths
 - Explicit policies over implicit behavior
 - Fail-fast validation at startup for unsafe configurations
-- No hidden magic or global side effects where avoidable
+- One enforced data-layer architecture over compatibility layers
 
 ## Versioning And Updates
 
 - This template is distributed as a snapshot.
 - Generated repositories do not receive automatic upstream updates.
 - Upgrades are manual: compare changes, port intentionally, and validate with tests/build.
-- Current public template baseline: `v0.6.0` (pre-1.0 by intent).
+- Current public template baseline: v0.7.0 (pre-1.0 by intent).
 
 ## Release Hygiene
 

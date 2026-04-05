@@ -1,128 +1,198 @@
 # Module Data Layer Guide
 
-This project uses a global baseline for schema + typed SQL generation:
+This guide focuses on one thing: how to implement module data access correctly under the store-first architecture.
 
-- Migrations: `db/migrations/`
-- sqlc schema source: `db/schema/`
-- sqlc query files: `db/queries/`
-- Generated code: `internal/core/db/sqlcgen/`
+If you only need practical rules for service/repository/store code, this is the right document.
 
-## Rules
+## 1. Non-Negotiable Architecture Rules
 
-- Do not edit generated files in `internal/core/db/sqlcgen/` manually.
-- Add schema changes through versioned migrations first.
-- Keep SQL in `.sql` files; avoid runtime string-built SQL in module code.
-- Run `sqlc generate` after changing schema/query files and commit generated output.
+Required flow:
 
-## Typical workflow
+Service -> Repository -> Store -> Backend
 
-1. Create migration:
+Hard constraints:
 
-   - `migrate create -ext sql -dir db/migrations -seq add_my_table`
+- service calls repository only
+- repository calls store only
+- handler does not bypass service/repository
+- one storage type per module
 
-2. Update schema mirror in `db/schema/` to reflect final table/queryable shape.
+Why this exists:
 
-3. Add/update SQL files in `db/queries/`.
+- prevents architecture drift over time
+- keeps business code backend-agnostic
+- allows backend implementation changes with lower blast radius
 
-4. Regenerate typed queries:
+## 2. Storage Contracts You Should Know
 
-   - `sqlc generate`
+Storage contracts are in internal/core/storage/contracts.go.
 
-5. Run checks:
+Core interfaces:
 
-   - `go fmt ./...`
-   - `go test ./...`
-   - `go build ./...`
+- Store
+	- Kind() Kind
+- TransactionalStore
+	- WithTx(ctx, fn)
+- RelationalStore
+	- Execute(ctx, RelationalOperation)
+- DocumentStore
+	- Execute(ctx, DocumentOperation)
 
-## Integration
+Key idea:
 
-- Construct query set from pool/transaction-compatible DBTX via `internal/core/db.NewQueries(...)`.
-- Keep module service/repository layers thin and typed around generated query methods.
+- stores execute operations
+- repositories define operations
 
-## Module data access conventions
+## 3. Choosing A Storage Type Per Module
 
-## Route policies (core engine)
+At module wiring time, choose one backend family:
 
-Routes can attach per-route policies during registration through `httpx.Router`:
+- relational module -> RelationalStore
+- document module -> DocumentStore
 
-```go
-r.Handle(http.MethodPost, "/api/v1/example", handler,
-   policy.RequireJSON(),
-   policy.WithHeader("X-Example", "1"),
-)
-```
+Do not branch inside business flow with "if sql else document".
 
-### Scaffold quick start
+If you need both for a feature, split into separate modules with explicit boundaries.
 
-```bash
-make module name=projects
-```
+## 4. Service Layer Pattern
 
-Expected output:
+Service responsibilities:
 
-```text
-generated module "projects" (package="projects" route=/api/v1/projects)
-```
+- validate business-level input and rules
+- orchestrate sequence of repository calls
+- control write transaction boundaries
 
-Quick checks after generation:
+Service should not:
 
-```bash
-go test ./internal/devx/modulegen ./internal/modules/projects
-go run ./cmd/superapi-verify ./internal/modules/projects
-```
+- construct queries
+- call store execution methods directly
+- depend on driver/query-object types
 
-Or run `make module` with no `name` to use the interactive wizard. Create files manually only if you want a custom layout.
+### 4.1 Write path service skeleton
 
-Policy type:
+Pattern:
 
-- `type Policy func(http.Handler) http.Handler`
+1. validate request
+2. start store.WithTx
+3. call repository write methods inside callback
+4. return domain output
 
-Ordering rule (deterministic):
+### 4.2 Read path service skeleton
 
-- For route policies `[P1, P2, P3]`, execution is:
-   - request: `P1 -> P2 -> P3 -> handler`
-   - response unwind: `handler -> P3 -> P2 -> P1`
+Pattern:
 
-This means the first listed policy is outermost. Use this convention consistently:
+1. validate request
+2. call repository read method directly
+3. return domain output
 
-- Place authentication/authorization policies first (outermost) once introduced.
-- Place mutation/caching policies carefully after auth checks.
-- Policies may short-circuit by writing a response and not calling `next`.
+No transaction wrapper unless you have a specific reason.
 
-Built-in utility policies currently available:
+## 5. Repository Layer Pattern
 
-- `policy.Noop()`
-- `policy.RequireJSON()`
-- `policy.WithHeader(key, value)`
+Repository responsibilities:
 
-Service layer owns transaction boundaries. Repositories should never begin/commit transactions.
+- own query/filter/projection logic
+- translate domain inputs into storage operations
+- map row/document results to domain models
+- map backend/storage errors to domain/app errors where needed
 
-Recommended shape:
+Repository should not:
 
-- `internal/modules/<module>/repo.go`
-   - accepts `*sqlcgen.Queries` (or narrow interface over generated methods)
-   - performs DB operations only
-- `internal/modules/<module>/service.go`
-   - orchestrates business logic
-   - for read-only paths, use queries bound to pool: `db.NewQueries(pool)`
-   - for transactional paths, use `db.WithTx(...)` / `db.WithTxResult(...)`
+- orchestrate high-level business workflows
+- expose backend-specific types in public interfaces
 
-### Read-only flow
+### 5.1 Relational repository pattern
 
-1. Service creates query handle bound to pool.
-2. Service/repo executes typed sqlc methods.
-3. Errors propagate to handler mapping layer.
+Use operation helpers from internal/core/storage/operations.go:
 
-### Transactional flow
+- RelationalExec
+- RelationalQueryOne
+- RelationalQueryMany
 
-1. Service calls `db.WithTx(ctx, pool, fn)` (or result variant).
-2. Helper begins transaction with context.
-3. Helper binds `sqlc` queries to tx and passes them to callback.
-4. On callback success: commit.
-5. On callback error: rollback and return original callback error.
-6. On panic: rollback (best effort) and re-panic.
+Repository creates operation with query and scan callback, then calls store.Execute.
 
-### Error semantics
+### 5.2 Document repository pattern
 
-- Rollback failures are intentionally best effort and do not mask callback errors.
-- Commit failure is returned when callback succeeds but commit fails.
+Use DocumentRun to execute command/payload patterns via DocumentStore.
+
+Keep domain mapping in repository, not in store executor.
+
+## 6. Transaction Rules (Detailed)
+
+Transaction API exists at store layer for all backends.
+
+Rules:
+
+- write paths use store.WithTx
+- read paths are direct repository calls by default
+- repository methods should be transaction-context aware through context propagation
+- backend-specific commit/rollback behavior remains store concern
+
+## 7. Interface Design Rules
+
+Good repository interface:
+
+- domain nouns and verbs
+- clear use-case semantics
+- no backend leakage
+
+Examples:
+
+- CreateOrder(ctx, input) (Order, error)
+- GetOrderByID(ctx, tenantID, orderID) (Order, error)
+- ListOrders(ctx, tenantID, filter) ([]Order, error)
+
+Bad examples:
+
+- ExecSQL(ctx, query, args...)
+- QueryRows(ctx, stmt) (...)
+- Find(ctx, bson.M)
+
+## 8. Mapping Rules
+
+Repository mapping direction:
+
+- domain input -> storage payload/query args
+- storage row/doc -> domain output
+
+Store layer remains domain-agnostic and execution-focused.
+
+This rule keeps storage changes local to repository/store implementation.
+
+## 9. Using The Module Scaffold Safely
+
+The generator gives a fast starter layout.
+
+Before shipping:
+
+- adjust generated service/repo contracts to domain-focused signatures
+- ensure service does not drift into store/driver calls
+- implement real repository operations and mappings
+- add tests for read and write behaviors
+
+## 10. Validation Checklist Before PR
+
+1. Service file contains no direct store or driver calls.
+2. Repository interface uses domain methods only.
+3. Repository implementation owns query/filter logic.
+4. Store implementation contains no domain structures.
+5. Write paths are wrapped in transaction flow.
+6. Read paths avoid unnecessary transaction wrappers.
+7. Policy stacks are valid for protected routes.
+8. go test ./..., go build ./..., and make verify pass.
+
+## 11. Quick Anti-Pattern Table
+
+| Anti-pattern | Why it is bad | Correct replacement |
+|---|---|---|
+| Service directly executes SQL | Breaks architecture boundary | Move query code to repository |
+| Repository returns driver rows | Leaks backend details upward | Return domain models |
+| Handler performs business decisions | Hard to test and reuse | Move to service |
+| One module switches between SQL/doc backends | Increases branch complexity and risk | Separate module or explicit backend choice |
+
+## 12. Related References
+
+- [docs/modules.md](modules.md)
+- [docs/crud-examples.md](crud-examples.md)
+- [docs/architecture.md](architecture.md)
+- [docs/policies.md](policies.md)

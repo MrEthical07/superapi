@@ -1,125 +1,171 @@
 # Overview
 
-## What this template is
+SuperAPI is a production-grade Go API template designed for teams that want a strong architecture baseline from day one.
 
-SuperAPI is a production-grade Go API template for SaaS projects. It provides a fully wired HTTP server with:
+This page is intentionally beginner-friendly. If you are new to this repository, read this first, then continue into the deeper docs linked at the end.
 
-- Module-based architecture (add features without touching core wiring)
-- Route-level policy engine (auth, rate limiting, caching, tenant isolation, RBAC)
-- Route-level cache-control policy for browser/proxy directives
-- Strict route policy validation (invalid policy stacks fail fast at startup)
-- Postgres (pgx v5 + sqlc) and Redis (go-redis v9) integration
-- Prometheus metrics, OpenTelemetry tracing, structured logging (zerolog)
-- goAuth-backed authentication (JWT validation, session checks, MFA-aware)
-- Feature toggles via environment variables (most optional features disabled by default, opt-in)
-- Module scaffolder (`make module name=projects`) for zero-boilerplate module creation
+## 1. What This Template Gives You
 
-## What problems it solves
+Out of the box, SuperAPI provides:
 
-| Problem | How the template addresses it |
-|---|---|
-| Repetitive API boilerplate | Modules implement a 2-method interface; routes, middleware, deps are wired automatically |
-| Auth/RBAC scattered in handlers | Declarative per-route policies (`AuthRequired`, `RequireRole`, `TenantRequired`, etc.) |
-| Cache stampedes and invalidation | Scoped `TagSpecs` + version-bump invalidation, vary-by dimensions, authenticated cache safety guards |
-| Rate limit concerns mixed with business logic | Redis-backed per-route rate limiting as a policy; configurable scopes (IP, user, tenant, token) |
-| Inconsistent error responses | Typed `AppError` model with centralized HTTP mapping; no internal error leaks |
-| Observability afterthoughts | Metrics, tracing, structured access logs built in from day 1 |
-| DB migration chaos | `golang-migrate` CLI + `cmd/migrate` wrapper; sqlc for type-safe queries |
+- A module-based API structure so features are isolated and easy to maintain.
+- A policy system for route behavior (auth, tenant, RBAC, rate-limit, cache, cache-control).
+- A standard response envelope and typed application errors.
+- Built-in goAuth integration for login, refresh, and protected routes.
+- Redis-backed response caching and rate limiting.
+- Observability primitives (metrics, tracing, structured logs).
+- A store-first data layer architecture with clear boundaries.
 
-## Technology stack
+In short: it gives you a "production-ready skeleton" where architecture rules are enforced, not optional.
 
-| Component | Library | Why |
+## 2. The Core Mental Model
+
+There are two core flows you should remember.
+
+### 2.1 Request flow
+
+Client Request
+-> Global middleware
+-> Route-level policies
+-> Handler
+-> Service
+-> Repository
+-> Store
+-> Backend (Postgres/Document backend)
+-> Response envelope
+
+### 2.2 Data flow
+
+Service
+-> Repository
+-> Store
+-> Backend
+
+This second flow is the most important architecture rule in the repo.
+
+## 3. Data Layer Rules In Plain English
+
+The enforced architecture is:
+
+Service -> Repository -> Store -> Backend
+
+What each layer does:
+
+- Handler:
+	- HTTP only (decode request, call service, encode response)
+	- No business logic, no DB access.
+- Service:
+	- Business workflow and validation logic.
+	- Calls repository only.
+	- Chooses transaction boundaries for write paths.
+- Repository:
+	- Data access logic and query composition.
+	- Maps storage rows/documents to domain models.
+	- Calls store only.
+- Store:
+	- Execution and transaction mechanism.
+	- Knows backend behavior, not domain behavior.
+
+Hard constraints:
+
+- Services must not call stores directly.
+- Repositories must not call drivers directly.
+- Handlers must not call DB/store.
+- One storage type per module (relational or document).
+
+## 4. Current Backend Status
+
+As of now:
+
+- Relational store is fully wired through Postgres startup initialization.
+- Document store contracts exist and can be used by modules.
+- A document no-op store implementation exists as a contract-safe placeholder.
+- Auth persistence now goes through repository + store layers.
+
+## 5. Built-In Routes You Can Test Immediately
+
+| Method | Path | Purpose |
 |---|---|---|
-| HTTP router | `net/http` + `chi` v5 | Standard, fast, middleware-compatible |
-| JSON | `encoding/json` | Correctness first; strict decode, unknown field rejection |
-| Database | PostgreSQL via `pgx/v5` pool + `sqlc` | Type-safe queries, no ORM reflection overhead |
-| Cache / Rate limit / Sessions | Redis via `go-redis/v9` | Atomic Lua scripts for rate limiting, JSON cache storage |
-| Auth | goAuth (`github.com/MrEthical07/goAuth`) | JWT + session validation, MFA, role/permission extraction |
-| Logging | zerolog | Zero-allocation structured JSON logs |
-| Metrics | Prometheus client | Counter/histogram/gauge for HTTP, cache, rate limit, DB pool, readiness |
-| Tracing | OpenTelemetry (OTLP/gRPC) | W3C trace context propagation, per-request spans |
-| Migrations | golang-migrate | Versioned up/down SQL migrations |
+| GET | /healthz | Process liveness check |
+| GET | /readyz | Dependency readiness check |
+| GET | /metrics | Prometheus metrics endpoint |
+| POST | /system/parse-duration | Simple demo endpoint for typed handler flow |
+| POST | /api/v1/system/auth/login | Login through goAuth engine |
+| POST | /api/v1/system/auth/refresh | Token refresh through goAuth |
+| GET | /api/v1/system/whoami | Protected endpoint returning principal info |
 
-## How to run
+## 6. What Makes This Different From "Basic CRUD Templates"
 
-### Minimal (no dependencies)
+Many templates provide basic folders but leave architecture optional.
 
-```bash
-go run ./cmd/api
-```
+SuperAPI enforces behavior through:
 
-Server starts on `:8080` with health/system endpoints. Postgres and Redis features are disabled.
+- Route validation for policy order and safety.
+- Startup config linting (invalid combinations fail fast).
+- Shared response/error semantics.
+- Dependency wiring that prevents bypassing architecture by default.
 
-### With Postgres + Redis
+This means fewer hidden regressions as your codebase grows.
 
-```bash
-export POSTGRES_ENABLED=true
-export POSTGRES_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
-export REDIS_ENABLED=true
-export REDIS_ADDR="127.0.0.1:6379"
+## 7. Beginner-Friendly First Steps
 
-# Apply migrations
-go run ./cmd/migrate up
+If this is your first day with the repo, follow this sequence:
 
-# Start server
-go run ./cmd/api
-```
+1. Run the API in minimal mode.
+2. Hit health endpoints and one system endpoint.
+3. Read module author guide and inspect one existing module.
+4. Generate a new module with module scaffolder.
+5. Add one read route and one write route using service -> repository -> store flow.
+6. Add policies in correct order and run verifier/build/tests.
 
-### With auth enabled
+## 8. Quick Start Modes
 
-```bash
-export AUTH_ENABLED=true
-export AUTH_MODE=hybrid          # jwt_only | hybrid | strict
-export REDIS_ENABLED=true
-export REDIS_ADDR="127.0.0.1:6379"
-export POSTGRES_ENABLED=true
-export POSTGRES_URL="postgres://user:pass@localhost:5432/mydb?sslmode=disable"
-go run ./cmd/api
-```
+### 8.1 Minimal mode
 
-### Feature toggles summary
+Use this when you only want API process and no external dependencies yet.
 
-| Feature | Env var | Default | Requires |
-|---|---|---|---|
-| Postgres | `POSTGRES_ENABLED` | `false` | `POSTGRES_URL` |
-| Redis | `REDIS_ENABLED` | `false` | `REDIS_ADDR` |
-| Auth (goAuth) | `AUTH_ENABLED` | `false` | Redis + Postgres |
-| Rate limiting | `RATELIMIT_ENABLED` | `false` | Redis |
-| Response caching | `CACHE_ENABLED` | `false` | Redis |
-| Prometheus metrics | `METRICS_ENABLED` | `true` | — |
-| OpenTelemetry tracing | `TRACING_ENABLED` | `false` | OTLP endpoint |
-| Security headers | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `true` in `prod`, otherwise `false` | — |
-| Request timeout | `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` | `0` (disabled) | — |
-| Max body bytes | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | `1048576` (1 MiB) | — |
-| CORS middleware | `HTTP_MIDDLEWARE_CORS_ENABLED` | `false` | — |
-| Trusted proxies | `HTTP_TRUSTED_PROXIES` | empty | — |
+- Postgres disabled
+- Redis disabled
+- Auth/cache/rate-limit disabled
 
-Notes:
-- `APP_ENV` defaults to `dev`; `prod`/`production` changes some defaults (for example, security headers enabled and tracing insecure transport disabled).
-- In `prod`/`production`, `RATELIMIT_FAIL_OPEN` and `CACHE_FAIL_OPEN` default to `false`, and startup lint rejects fail-open when those subsystems are enabled.
-- `CACHE_TAG_VERSION_CACHE_TTL` controls in-process tag version token caching for cache key generation.
-- `HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS` and `METRICS_EXCLUDE_PATHS` exclude low-value paths from tracing/HTTP metrics instrumentation.
-- Client IP resolution trusts `Forwarded` / `X-Forwarded-For` only when `HTTP_TRUSTED_PROXIES` is configured.
-- `HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS=true` cannot be used with `HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS=*`.
-- See [docs/environment-variables.md](environment-variables.md) for the full env matrix.
+### 8.2 Full mode
 
-## Key endpoints (built-in)
+Use this when you want realistic behavior.
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/healthz` | Process liveness (always 200) |
-| GET | `/readyz` | Dependency readiness (200 or 503) |
-| GET | `/metrics` | Prometheus metrics |
-| POST | `/system/parse-duration` | Unified adapter JSON endpoint example |
-| POST | `/api/v1/system/auth/login` | Session login (returns access + refresh tokens) |
-| POST | `/api/v1/system/auth/refresh` | Session refresh (rotates access + refresh tokens) |
-| GET | `/api/v1/system/whoami` | Auth-protected principal info |
+- Postgres enabled
+- Redis enabled
+- Auth enabled
+- Rate-limit and cache enabled
 
-## Where to start
+See environment docs for exact variables and defaults.
 
-1. Read [docs/architecture.md](architecture.md) for under-the-hood understanding
-2. Read [docs/modules.md](modules.md) to learn how to add a module
-3. Read [docs/policies.md](policies.md) for auth/rate-limit/cache/tenant policy reference
-4. Read [docs/crud-examples.md](crud-examples.md) for full CRUD with recommended policy stacks
-5. Use `make module` for the interactive wizard, or `make module name=<your_module>` for flags-only scaffolding
-6. Run `go run ./cmd/superapi-verify ./...` (or `make verify`) before pushing route changes
+## 9. Where New Contributors Usually Get Confused
+
+Common confusion points:
+
+- "Can I call store from service?"
+	- No. Service should call repository only.
+- "Can repository return driver rows?"
+	- No. Repository should return domain models/errors.
+- "Should reads always use transactions?"
+	- No. Write paths use transactions; reads are direct unless there is a specific requirement.
+- "Can one module support SQL and document at once?"
+	- No. Pick one storage type per module.
+
+## 10. Documentation Path
+
+Read these in order:
+
+1. [docs/architecture.md](architecture.md)
+2. [docs/modules.md](modules.md)
+3. [docs/module_guide.md](module_guide.md)
+4. [docs/crud-examples.md](crud-examples.md)
+5. [docs/auth-goauth.md](auth-goauth.md)
+6. [docs/workflows.md](workflows.md)
+7. [docs/environment-variables.md](environment-variables.md)
+
+## 11. Final Takeaway
+
+If you remember only one thing, remember this:
+
+SuperAPI is not just "Go folders + helpers". It is an enforced architecture where route behavior, dependency wiring, and data-access boundaries are designed to stay maintainable as your API grows.

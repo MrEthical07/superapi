@@ -4,36 +4,42 @@
 
 This repository is a production-grade Go API template for SaaS backends.
 
-It is structured around explicit modules, explicit dependency wiring, and policy-based route behavior.
+The enforced architecture is:
 
-How agents should interact with this repo:
-- Follow existing patterns before introducing new abstractions.
-- Prefer small, explicit changes in module scope.
-- Treat policy validation and startup linting as hard constraints.
+Service -> Repository -> Store -> Backend
+
+Use current code as reference, but do not preserve legacy SQL-centric patterns.
 
 ## 2. Core Architecture Rules
 
-- The runtime bootstrap entrypoint is `cmd/api/main.go`.
-- App wiring lives in `internal/core/app`.
-- Modules are registered in `internal/modules/modules.go`.
-- Module internals must follow handler/service/repo separation.
-- Policies are mandatory for behavioral guarantees (auth, tenant, RBAC, rate-limit, cache, cache-control).
+- Runtime bootstrap entrypoint is cmd/api/main.go.
+- App wiring lives in internal/core/app.
+- Modules are registered in internal/modules/modules.go.
+- Module internals must follow handler/service/repository separation.
+- Policies remain mandatory for behavioral guarantees (auth, tenant, RBAC, rate-limit, cache, cache-control).
 
-## 3. How to Add a New Feature (PRIMARY WORKFLOW)
+## 3. Data Layer Rules (Hard Constraints)
 
-1. Create a new module.
-2. Define DTOs.
-3. Implement handler.
-4. Implement service logic.
-5. Implement repo queries.
-6. Register routes with proper policies.
+- Services must call repositories only.
+- Services must not call stores directly.
+- Repositories must call stores only.
+- Repositories must not call database drivers directly.
+- Store interfaces are execution-only and must not encode domain semantics.
+- Store interfaces must not expose generic CRUD/query-language APIs as the module contract.
+- Repositories own query logic and storage-model to domain-model mapping.
+- Store implementations must remain unaware of domain structures.
+- One storage type per module; do not mix relational and document logic inside one module.
+- No direct DB access in handlers.
 
-Implementation references:
-- `docs/modules.md`
-- `docs/crud-examples.md`
-- `docs/module_guide.md`
+## 4. Transaction Rules
 
-## 4. Route Creation Rules (VERY IMPORTANT)
+- Transaction API is mandatory at the store layer.
+- Services must use transaction scope only through repository workflows.
+- Transactions apply to write paths only.
+- Read paths must not be forced into transaction context.
+- Backend-specific transaction behavior belongs only to store implementations.
+
+## 5. Route Creation Rules
 
 Always attach policies explicitly when route behavior requires auth/isolation/control.
 
@@ -45,100 +51,54 @@ Required policy order:
 5. cache
 6. cache-control (optional, after cache)
 
-Do not bypass `policy.MustValidateRoute` / validator-backed route checks.
-
-Reference:
-- `internal/core/policy`
-- `docs/policies.md`
-
-## 5. Policy Usage Guidelines
-
-- Use `AuthRequired` for all protected routes.
-- Use tenant policies (`TenantRequired`, `TenantMatchFromPath`) for tenant-scoped endpoints.
-- Use `RequirePerm` / `RequireAnyPerm` for RBAC constraints.
-- Use rate limits on abuse-prone endpoints (auth, write-heavy, expensive reads).
-- Use cache only with safe vary dimensions (`VaryBy.UserID` or `VaryBy.TenantID` when authenticated).
-
-References:
-- `docs/policies.md`
-- `docs/cache-guide.md`
+Do not bypass policy.MustValidateRoute / validator-backed route checks.
 
 ## 6. Auth Integration Rules
 
-- Use the goAuth provider integration in `internal/core/auth`.
+- Use goAuth integration in internal/core/auth.
+- Keep goAuth user provider data-store independent from service/module layers.
+- Auth persistence must go through auth repository + store contracts.
 - Do not reimplement token parsing/validation in modules.
-- Keep auth mode behavior explicit (`jwt_only`, `hybrid`, `strict`).
-
-Reference:
-- `docs/auth-goauth.md`
-- `docs/authDocs/`
+- Keep auth mode behavior explicit (jwt_only, hybrid, strict).
 
 ## 7. Cache Usage Rules
 
-- Define `TagSpecs` and TTL intentionally.
-- Use `VaryBy` for cache isolation and `TagSpecs` for freshness/invalidation scope.
+- Define TagSpecs and TTL intentionally.
+- Use VaryBy for cache isolation and TagSpecs for freshness/invalidation scope.
 - Never cache authenticated responses without identity-safe key variation.
-- Invalidate matching `TagSpecs` on successful writes.
+- Invalidate matching TagSpecs on successful writes.
 
-Reference:
-- `docs/cache-guide.md`
-- `docs/policies.md`
-
-## 8. Data Layer Rules
-
-- Use sqlc-generated query access from `internal/core/db/sqlcgen` via wrappers.
-- Do not write raw SQL in handlers.
-- Keep DB access in repo/service layer, not transport layer.
-- Follow migration + schema + queries + generate workflow.
-
-Reference:
-- `docs/workflows.md`
-- `docs/module_guide.md`
-
-## 9. Performance Rules
-
-- Keep hot path lean (middleware and policy execution).
-- Avoid unnecessary Redis calls and high-cardinality keys.
-- Avoid heavy middleware for routes that do not need it.
-- Validate hot-path changes with benchmarks and load scripts.
-
-Reference:
-- `docs/performance-testing.md`
-
-## 10. What NOT to Do
+## 8. What Not To Do
 
 - Do not bypass policy layers for protected routes.
 - Do not put business logic in handlers.
-- Do not duplicate authentication logic.
-- Do not modify core infrastructure without a clear need and validation.
-- Do not edit generated sqlc files under `internal/core/db/sqlcgen/`.
+- Do not expose sqlc or driver query objects to service/repository interfaces.
+- Do not keep dual data-access patterns alive.
+- Do not introduce module-level branching like if sql else mongo.
+- Do not modify core infrastructure without clear need and validation.
+- Do not edit generated files manually under internal/core/db/sqlcgen/.
 
-## 11. Where to Look for Docs
+## 9. Modification Rules
 
-- auth: `docs/auth-goauth.md`, `docs/authDocs/`
-- cache: `docs/cache-guide.md`
-- modules: `docs/modules.md`, `docs/crud-examples.md`, `docs/module_guide.md`
-- performance: `docs/performance-testing.md`
-- environment/runtime: `docs/environment-variables.md`
-- workflows: `docs/workflows.md`
-
-## 12. Modification Rules
-
-- Prefer extending modules over changing core.
-- If core must change, keep changes explicit and minimal.
-- Preserve constructor + method patterns and existing public contracts.
-- Update docs when behavior or configuration changes.
+- Prefer existing patterns over introducing alternatives.
+- If core changes are required, keep changes explicit and minimal.
+- Preserve constructor and method contracts unless task explicitly changes them.
+- Update docs when behavior or architecture changes.
 
 Always prefer:
-- existing patterns over new abstractions
-- policy-based solutions over custom logic
+- one enforced architecture over compatibility layers
+- policy-based solutions over custom middleware logic
 
 Never:
 - duplicate authentication logic
 - bypass validation layers
-- introduce global state
+- introduce global mutable state
 
-Decision rules:
-- If task involves authentication, refer auth docs.
-- If task involves caching, refer cache guide.
-- If task involves database changes, use sqlc patterns.
+## 10. Where To Look
+
+- Architecture: docs/architecture.md
+- Modules: docs/modules.md, docs/module_guide.md, docs/crud-examples.md
+- Policies: docs/policies.md
+- Cache: docs/cache-guide.md
+- Auth: docs/auth-goauth.md, docs/authDocs/
+- Runtime/config: docs/environment-variables.md, docs/workflows.md
