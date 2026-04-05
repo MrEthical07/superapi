@@ -23,7 +23,7 @@ internal/
     response/response.go   # Response envelope + error mapping
     errors/errors.go       # Typed AppError model
     auth/                  # goAuth adapter, AuthContext, Provider interface
-    policy/                # Route-level policies (auth, tenant, rate limit, cache, JSON, headers)
+    policy/                # Route-level policies (auth, tenant, rate limit, cache, cache-control, JSON, headers)
     ratelimit/             # Redis-backed limiter + keying strategies
     cache/                 # Redis-backed cache manager + key builder
     db/                    # pgxpool wiring, tx helpers, sqlc query wrappers, migrations
@@ -127,14 +127,15 @@ r.Handle(http.MethodGet, "/api/v1/resource/{id}", handler,
     policy.AuthRequired(authEngine, mode),      // P1 (outermost)
     policy.TenantRequired(),                   // P2
     policy.RateLimit(limiter, rule),           // P3
-    policy.CacheRead(cacheMgr, cfg),           // P4 (innermost before handler)
+  policy.CacheRead(cacheMgr, cfg),           // P4
+  policy.CacheControl(policy.CacheControlConfig{Private: true, MaxAge: 30 * time.Second}), // P5
 )
 ```
 
-Execution for `[P1, P2, P3, P4]`:
+Execution for `[P1, P2, P3, P4, P5]`:
 
-- **Request flow:** P1 → P2 → P3 → P4 → handler
-- **Response unwind:** handler → P4 → P3 → P2 → P1
+- **Request flow:** P1 → P2 → P3 → P4 → P5 → handler
+- **Response unwind:** handler → P5 → P4 → P3 → P2 → P1
 
 The first policy listed is outermost. Any policy can short-circuit by writing a response and NOT calling `next.ServeHTTP()`.
 
@@ -158,7 +159,7 @@ Client request
   │
   ├─ Chi router (pattern match)
   │   │
-  │   ├─ Route policies (auth → tenant → rate limit → cache → ...)
+  │   ├─ Route policies (auth → tenant → rate limit → cache → cache-control → ...)
   │   │   │
   │   │   └─ Handler (decode input, call service, write response)
   │   │
@@ -167,6 +168,22 @@ Client request
   │
   └─ Response flows back through middleware stack
 ```
+
+---
+
+### 3.4 Cache and browser-cache model
+
+SuperAPI now separates API response caching concerns into two explicit layers:
+
+- **Redis response cache layer** (`CacheRead` / `CacheInvalidate`):
+  - Isolation dimensions are defined with `VaryBy`.
+  - Freshness domains are defined with `TagSpecs`.
+  - Invalidation uses version-bump keys (`cver:{env}:{tag}`) and bump-miss behavior.
+- **Browser/proxy cache layer** (`CacheControl`):
+  - Sets HTTP `Cache-Control` and optional `Vary` headers.
+  - Works independently from Redis cache and should be placed after cache policies.
+
+`TagSpecs` are resolved at request time from path params, auth tenant/user context, and literal dimensions, allowing precise invalidation scopes without broad over-eviction.
 
 ---
 
@@ -270,9 +287,11 @@ File: `internal/core/cache/redis.go`
 - Uses `redis.NewClient` with configured timeouts and pool settings
 - **Startup behavior:** Client is created, then startup ping with `REDIS_STARTUP_PING_TIMEOUT` (default 3s). If ping fails, startup aborts.
 - **Health check:** Registered in readiness with `REDIS_HEALTH_CHECK_TIMEOUT` (default 1s).
+- **Cache tag token caching:** `CACHE_TAG_VERSION_CACHE_TTL` controls process-local caching for tag version tokens used in key generation.
 - **Fail-open behaviors:**
-  - Rate limiting: If `RATELIMIT_FAIL_OPEN=true` (default), Redis errors allow requests through
-  - Caching: If `CACHE_FAIL_OPEN=true` (default), Redis errors bypass cache (request goes to handler)
+  - Rate limiting: `RATELIMIT_FAIL_OPEN` defaults to `true` in non-prod and `false` in prod.
+  - Caching: `CACHE_FAIL_OPEN` defaults to `true` in non-prod and `false` in prod.
+  - In prod, startup lint rejects fail-open for enabled rate-limit/cache.
   - Auth (strict mode): If Redis is unreachable, authentication fails (no fail-open for security)
 
 ### 5.3 Readiness signals
@@ -536,7 +555,7 @@ func (h *Handler) GetByID(ctx *httpx.Context, _ httpx.NoBody) (responseDTO, erro
 | Postgres unreachable at startup | **Startup fails** (fail-fast) |
 | Postgres unreachable at runtime | `/readyz` returns 503; DB-dependent endpoints return 503 (`dependency_unavailable`) |
 | Redis unreachable at startup | **Startup fails** (fail-fast) if Redis is enabled |
-| Redis unreachable at runtime | Rate limiting: fail-open by default (requests pass through). Caching: fail-open by default (bypass cache). Auth (strict mode): fails closed (401). `/readyz` returns 503. |
+| Redis unreachable at runtime | Rate limiting/cache behavior follows `*_FAIL_OPEN` config (defaults: fail-open in non-prod, fail-closed in prod). Auth (strict mode): fails closed (401). `/readyz` returns 503. |
 | Tracing endpoint unreachable | Startup succeeds; spans are lost silently |
 
 ### Security considerations
@@ -553,5 +572,6 @@ func (h *Handler) GetByID(ctx *httpx.Context, _ httpx.NoBody) (responseDTO, erro
 
 - Route labels in metrics and logs use chi route patterns (e.g., `/api/v1/projects/{id}`), not raw paths
 - Rate limit keys use low-cardinality scopes (`ip`, `user`, `tenant`, `token`, `anon`)
-- Cache keys use route pattern + selected vary dimensions + query param hash — not raw URLs
+- Cache keys use route pattern + selected vary dimensions + query param hash + resolved tag-version token — not raw URLs
+- Tag invalidation scopes are explicit via `TagSpecs` (path/auth/literal dimensions)
 - Access logs are sampled by default (5%) with always-log exceptions for errors and slow requests

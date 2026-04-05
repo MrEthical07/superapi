@@ -17,7 +17,7 @@ How agents should interact with this repo:
 - App wiring lives in `internal/core/app`.
 - Modules are registered in `internal/modules/modules.go`.
 - Module internals must follow handler/service/repo separation.
-- Policies are mandatory for behavioral guarantees (auth, tenant, RBAC, rate-limit, cache).
+- Policies are mandatory for behavioral guarantees (auth, tenant, RBAC, rate-limit, cache, cache-control).
 
 ## 3. How to Add a New Feature (PRIMARY WORKFLOW)
 
@@ -43,6 +43,7 @@ Required policy order:
 3. rbac
 4. rate limit
 5. cache
+6. cache-control (optional, after cache)
 
 Do not bypass `policy.MustValidateRoute` / validator-backed route checks.
 
@@ -74,10 +75,10 @@ Reference:
 
 ## 7. Cache Usage Rules
 
-- Define route tags and TTL intentionally.
-- Use `VaryBy` explicitly for identity-sensitive responses.
+- Define `TagSpecs` and TTL intentionally.
+- Use `VaryBy` for cache isolation and `TagSpecs` for freshness/invalidation scope.
 - Never cache authenticated responses without identity-safe key variation.
-- Invalidate tags on successful writes.
+- Invalidate matching `TagSpecs` on successful writes.
 
 Reference:
 - `docs/cache-guide.md`

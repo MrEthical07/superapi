@@ -243,9 +243,11 @@ Client IP note:
 
 ### Fail-open / fail-closed behavior
 
-Controlled by `RATELIMIT_FAIL_OPEN` (default: `true`).
+Controlled by `RATELIMIT_FAIL_OPEN` (default: `true` in non-prod, `false` in prod).
 
-- **Fail-open (default):** When Redis is unavailable, requests are allowed through. The decision outcome is recorded as `fail_open`.
+In prod, startup lint rejects `RATELIMIT_FAIL_OPEN=true` when rate limiting is enabled.
+
+- **Fail-open:** When Redis is unavailable, requests are allowed through. The decision outcome is recorded as `fail_open`.
 - **Fail-closed:** When Redis is unavailable, the rate limiter returns an error and the policy responds with 500.
 
 ### Retry-After header
@@ -378,7 +380,7 @@ policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
 | Set-Cookie handling | Skip responses with `Set-Cookie` | Prevent session and identity leakage |
 | Max body guard | `CACHE_DEFAULT_MAX_BYTES` | Avoid unbounded Redis memory usage |
 | Authenticated key isolation | Require `VaryBy.UserID` or `VaryBy.TenantID` | Prevent cross-user cache data leaks |
-| Redis error handling | Fail-open by default | Preserve availability during cache outages |
+| Redis error handling | Fail-open in non-prod, fail-closed in prod by default | Balance availability in dev/test with safer prod posture |
 
 ---
 
@@ -699,7 +701,7 @@ Required environment:
 
 Optional tuning:
 
-- `RATELIMIT_FAIL_OPEN` (default `true`)
+- `RATELIMIT_FAIL_OPEN` (default `true` in non-prod, `false` in prod)
 - `RATELIMIT_DEFAULT_LIMIT`
 - `RATELIMIT_DEFAULT_WINDOW`
 
@@ -712,7 +714,7 @@ Required environment:
 
 Optional tuning:
 
-- `CACHE_FAIL_OPEN` (default `true`)
+- `CACHE_FAIL_OPEN` (default `true` in non-prod, `false` in prod)
 - `CACHE_DEFAULT_MAX_BYTES`
 
 ## 12. Extensibility guidelines

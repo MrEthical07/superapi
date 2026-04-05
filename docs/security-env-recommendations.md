@@ -29,6 +29,7 @@ HTTP_MIDDLEWARE_RECOVERER_ENABLED=true
 HTTP_MIDDLEWARE_MAX_BODY_BYTES=1048576
 HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED=true
 HTTP_MIDDLEWARE_REQUEST_TIMEOUT=10s
+HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS=/healthz,/readyz,/metrics
 HTTP_TRUSTED_PROXIES=10.0.0.0/8,192.168.0.0/16
 
 HTTP_MIDDLEWARE_CORS_ENABLED=false
@@ -49,6 +50,7 @@ RATELIMIT_DEFAULT_WINDOW=1m
 CACHE_ENABLED=false
 CACHE_FAIL_OPEN=false
 CACHE_DEFAULT_MAX_BYTES=262144
+CACHE_TAG_VERSION_CACHE_TTL=250ms
 
 POSTGRES_ENABLED=true
 POSTGRES_URL=postgres://<user>:<pass>@<host>:5432/<db>?sslmode=verify-full
@@ -74,6 +76,7 @@ REDIS_HEALTH_CHECK_TIMEOUT=1s
 METRICS_ENABLED=true
 METRICS_PATH=/metrics
 METRICS_AUTH_TOKEN=<strong-random-token>
+METRICS_EXCLUDE_PATHS=/healthz,/readyz
 
 TRACING_ENABLED=true
 TRACING_SERVICE_NAME=superapi-prod
@@ -114,6 +117,7 @@ TRACING_INSECURE=false
 | `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | Explicit non-zero (`1048576` baseline) | Keeps request body abuse bounded. |
 | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `true` | Adds baseline browser hardening headers. |
 | `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` | Enabled (`5s` to `30s`) and `<= HTTP_WRITE_TIMEOUT` | Limits long-running app work and stuck handlers. |
+| `HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS` | Keep `/healthz,/readyz,/metrics` unless tracing these paths is required | Reduces span noise and low-value telemetry overhead. |
 
 ### Access log middleware
 
@@ -176,6 +180,7 @@ TRACING_INSECURE=false
 | `CACHE_ENABLED` | `false` unless explicitly needed | Avoids accidental sensitive-response caching. |
 | `CACHE_FAIL_OPEN` | `false` for strict consistency/security routes | Prevents silent behavior changes on Redis failure. |
 | `CACHE_DEFAULT_MAX_BYTES` | Explicit bounded value (`256KiB` baseline) | Reduces cache memory abuse/oversized objects. |
+| `CACHE_TAG_VERSION_CACHE_TTL` | Low positive duration (`100ms` to `500ms`) | Reduces repeated Redis `MGET` load while keeping invalidation freshness tight. |
 
 ### PostgreSQL
 
@@ -213,6 +218,7 @@ TRACING_INSECURE=false
 | `METRICS_ENABLED` | `true` only if scraped by trusted system; else `false` | Reduces reconnaissance surface when unused. |
 | `METRICS_PATH` | Keep explicit and stable (`/metrics`) | Operational predictability; secure with auth/network controls. |
 | `METRICS_AUTH_TOKEN` | Always set in production and staging | Prevents unauthenticated telemetry scraping. |
+| `METRICS_EXCLUDE_PATHS` | Keep `/healthz,/readyz` excluded unless needed | Avoids metric noise from high-frequency health checks. |
 
 ### Tracing
 

@@ -1,6 +1,6 @@
 [![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.5.0-brightgreen)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.6.0-brightgreen)](CHANGELOG.md)
 
 # SuperAPI
 
@@ -32,7 +32,8 @@ Start here:
 - Module system for explicit, composable API domains
 - Strict startup validation for runtime and policy configuration
 - goAuth integration for route-level authentication workflows
-- Redis-backed response cache and Redis-backed rate limiting
+- Redis-backed response cache with dynamic `TagSpecs` invalidation and Redis-backed rate limiting
+- Browser/proxy cache directives with `policy.CacheControl(...)`
 - Observability stack: metrics, tracing, and structured logs
 - sqlc + pgx workflow for typed query access
 - Built-in scaffolder for generating production-oriented modules
@@ -115,7 +116,7 @@ go run ./cmd/api
 
 4. Add handlers and service logic in the generated module files under `internal/modules/projects/`.
 
-5. Add routes in `routes.go` and attach policies as needed (auth, tenant, rate limit, cache).
+5. Add routes in `routes.go` and attach policies as needed (auth, tenant, rate limit, cache, cache-control).
 
 Guides:
 - Module guide: [docs/modules.md](docs/modules.md)
@@ -146,7 +147,7 @@ Guides:
 - This template is distributed as a snapshot.
 - Generated repositories do not receive automatic upstream updates.
 - Upgrades are manual: compare changes, port intentionally, and validate with tests/build.
-- Current public template baseline: `v0.5.0` (pre-1.0 by intent).
+- Current public template baseline: `v0.6.0` (pre-1.0 by intent).
 
 ## Release Hygiene
 

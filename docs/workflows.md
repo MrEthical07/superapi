@@ -276,7 +276,7 @@ Requires: `REDIS_ENABLED=true` and `POSTGRES_ENABLED=true`
 
 ```bash
 RATELIMIT_ENABLED=true               # Enable
-RATELIMIT_FAIL_OPEN=true             # Allow requests when Redis is down (default)
+RATELIMIT_FAIL_OPEN=true             # Default in non-prod; prod default is false
 RATELIMIT_DEFAULT_LIMIT=100           # Requests per window
 RATELIMIT_DEFAULT_WINDOW=1m           # Window duration
 ```
@@ -287,8 +287,9 @@ Requires: `REDIS_ENABLED=true`
 
 ```bash
 CACHE_ENABLED=true                    # Enable
-CACHE_FAIL_OPEN=true                  # Bypass cache when Redis is down (default)
+CACHE_FAIL_OPEN=true                  # Default in non-prod; prod default is false
 CACHE_DEFAULT_MAX_BYTES=262144        # Max cached response size (256 KiB)
+CACHE_TAG_VERSION_CACHE_TTL=250ms     # In-process TTL for tag version token cache
 ```
 
 Requires: `REDIS_ENABLED=true`

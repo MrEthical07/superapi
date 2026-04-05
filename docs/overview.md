@@ -6,11 +6,12 @@ SuperAPI is a production-grade Go API template for SaaS projects. It provides a 
 
 - Module-based architecture (add features without touching core wiring)
 - Route-level policy engine (auth, rate limiting, caching, tenant isolation, RBAC)
+- Route-level cache-control policy for browser/proxy directives
 - Strict route policy validation (invalid policy stacks fail fast at startup)
 - Postgres (pgx v5 + sqlc) and Redis (go-redis v9) integration
 - Prometheus metrics, OpenTelemetry tracing, structured logging (zerolog)
 - goAuth-backed authentication (JWT validation, session checks, MFA-aware)
-- Feature toggles via environment variables (everything disabled by default, opt-in)
+- Feature toggles via environment variables (most optional features disabled by default, opt-in)
 - Module scaffolder (`make module name=projects`) for zero-boilerplate module creation
 
 ## What problems it solves
@@ -19,7 +20,7 @@ SuperAPI is a production-grade Go API template for SaaS projects. It provides a 
 |---|---|
 | Repetitive API boilerplate | Modules implement a 2-method interface; routes, middleware, deps are wired automatically |
 | Auth/RBAC scattered in handlers | Declarative per-route policies (`AuthRequired`, `RequireRole`, `TenantRequired`, etc.) |
-| Cache stampedes and invalidation | Tag-version-bump invalidation, vary-by dimensions, safe defaults for authenticated caching |
+| Cache stampedes and invalidation | Scoped `TagSpecs` + version-bump invalidation, vary-by dimensions, authenticated cache safety guards |
 | Rate limit concerns mixed with business logic | Redis-backed per-route rate limiting as a policy; configurable scopes (IP, user, tenant, token) |
 | Inconsistent error responses | Typed `AppError` model with centralized HTTP mapping; no internal error leaks |
 | Observability afterthoughts | Metrics, tracing, structured access logs built in from day 1 |
@@ -95,6 +96,9 @@ go run ./cmd/api
 
 Notes:
 - `APP_ENV` defaults to `dev`; `prod`/`production` changes some defaults (for example, security headers enabled and tracing insecure transport disabled).
+- In `prod`/`production`, `RATELIMIT_FAIL_OPEN` and `CACHE_FAIL_OPEN` default to `false`, and startup lint rejects fail-open when those subsystems are enabled.
+- `CACHE_TAG_VERSION_CACHE_TTL` controls in-process tag version token caching for cache key generation.
+- `HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS` and `METRICS_EXCLUDE_PATHS` exclude low-value paths from tracing/HTTP metrics instrumentation.
 - Client IP resolution trusts `Forwarded` / `X-Forwarded-For` only when `HTTP_TRUSTED_PROXIES` is configured.
 - `HTTP_MIDDLEWARE_CORS_ALLOW_CREDENTIALS=true` cannot be used with `HTTP_MIDDLEWARE_CORS_ALLOW_ORIGINS=*`.
 - See [docs/environment-variables.md](environment-variables.md) for the full env matrix.
