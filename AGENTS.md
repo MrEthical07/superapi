@@ -20,10 +20,12 @@ Use current code as reference, but do not preserve legacy SQL-centric patterns.
 
 ## 3. Data Layer Rules (Hard Constraints)
 
-- Services must call repositories only.
-- Services must not call stores directly.
+- Services must call repositories for all data operations.
+- Services may call store.WithTx(...) only to define transaction boundaries for write operations.
+- Services must not call store execution methods (Execute, Query, etc.) directly.
 - Repositories must call stores only.
 - Repositories must not call database drivers directly.
+- Repositories own all data access logic and must not control transaction boundaries.
 - Store interfaces are execution-only and must not encode domain semantics.
 - Store interfaces must not expose generic CRUD/query-language APIs as the module contract.
 - Repositories own query logic and storage-model to domain-model mapping.

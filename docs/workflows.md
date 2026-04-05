@@ -59,7 +59,8 @@ Before writing business logic, do these checks:
 Scaffold output is a starting point. Update it to follow enforced flow:
 
 - handler -> service -> repository -> store
-- service does not call store directly
+- service does not call store execution methods (Execute, Query, etc.) directly; it may only call store.WithTx to define write transaction boundaries
+- repositories must not control transaction boundaries
 - repository public interface is domain-focused
 
 ## 3. Implementing Data Access
@@ -78,10 +79,11 @@ For each module:
 
 Pattern:
 
-- service calls repository write method
-- repository uses store.WithTx to establish the transaction boundary and performs store.Execute calls inside the callback
+- service calls store.WithTx to define the transaction boundary
+- service invokes repository write method(s) inside the transaction callback context
+- repository performs all store.Execute calls within that context
 - store handles commit/rollback
-- service must not call store.Execute directly; only store.WithTx to define the write scope through repository workflows
+- service must not call store execution methods (Execute, Query, etc.) directly
 
 ### 4.2 Read paths
 
@@ -161,8 +163,9 @@ make verify
 Architecture review checks:
 
 - no handler bypass to data layer
-- no service direct call to store or driver
+- no service direct call to store execution methods (Execute, Query, etc.) or driver
 - no repository direct driver usage
+- no repository controlling transaction boundaries (WithTx)
 - one storage type per module
 - policy order is valid
 
