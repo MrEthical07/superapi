@@ -88,7 +88,23 @@ goAuth assumes attackers may:
 
 ---
 
-## 4. What Is NOT Mitigated
+## 4. Public Error Boundary
+
+All exported `Engine` methods enforce a canonical error boundary.
+
+- Public failures are returned as `*AuthError` only.
+- Error categories are normalized to `AUTH_ABUSE`, `AUTH_STATE`, `AUTH_VALIDATION`, and `SYSTEM`.
+- Wrapped/internal dependency errors are mapped to stable public sentinels.
+- Unknown internal failures collapse to `SYSTEM_INTERNAL_ERROR`.
+- Dependency and timeout-style failures map to `SYSTEM_UNAVAILABLE` (or domain-specific `SYSTEM_UNAVAILABLE_*`).
+
+This hard boundary prevents leaking raw internal errors while preserving `errors.Is` compatibility for callers.
+
+See [error-model.md](error-model.md) for the full registry and mapping behavior.
+
+---
+
+## 5. What Is NOT Mitigated
 
 - **Client endpoint compromise** — malware with valid session context.
 - **TLS enforcement** — goAuth does not terminate TLS; this must be handled externally.
@@ -98,19 +114,19 @@ goAuth assumes attackers may:
 
 ---
 
-## 5. Scanner Tooling
+## 6. Scanner Tooling
 
 ### gosec
 
 ```bash
-gosec ./...
+bash security/run_scanners.sh
 ```
 
-Run `gosec` in CI and apply only narrowly justified exclusions:
+Runs `gosec` with exclusions from `security/gosec.excludes`:
 
 | Exclusion | Reason |
 |-----------|--------|
-| G101 | False positives on constant names like `invalid_credentials` |
+| G101 | False positives on constant names like `AUTH_INVALID_CREDENTIALS` |
 | G115 | High-noise integer conversion warnings in bounded code |
 | G117 | Secret-pattern matches on exported fields (`AccessToken`) |
 
@@ -120,24 +136,24 @@ Run `gosec` in CI and apply only narrowly justified exclusions:
 govulncheck ./...
 ```
 
-Use JSON mode if your pipeline tracks allowlists or historical exceptions.
+JSON mode with baseline enforcement. New stdlib CVEs fail the build.
 
 ### Baselines
 
-- Maintain scanner allowlists in your own repository conventions.
-- Keep exceptions small, reviewed, and time-bounded.
+- `security/baselines/gosec.allowlist`
+- `security/baselines/govulncheck.allowlist`
 
-Track findings in a security register or release notes.
+All findings tracked in `SECURITY_FINDINGS.md`.
 
 ---
 
-## 6. Security Configuration Checklist
+## 7. Security Configuration Checklist
 
 - [ ] `Security.ProductionMode = true`
 - [ ] `JWT.SigningMethod = MethodEd25519`
 - [ ] `JWT.RequireIAT = true`
-- [ ] `Security.EnableIPThrottle = true`
-- [ ] `Security.EnableRefreshThrottle = true`
+- [ ] `Security.EnableLoginFailureLimiter = true`
+- [ ] `Security.EnforceRefreshRotation = true`
 - [ ] `Security.AutoLockoutEnabled = true`
 - [ ] `Audit.Enabled = true` with durable sink
 - [ ] `Config.Lint()` returns no HIGH-severity warnings

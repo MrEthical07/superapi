@@ -6,11 +6,12 @@ This directory contains the authoritative documentation for the goAuth authentic
 
 | Goal | Start Here |
 |------|-----------|
-| **First integration** | [README](../../README.md) → [usage.md](usage.md) → [architecture.md](architecture.md) |
+| **First integration** | [README](../README.md) → [usage.md](usage.md) → [examples/http-minimal](../examples/http-minimal/) |
 | **Choose validation mode** | [jwt.md § Validation Modes](jwt.md) → [config.md § Validation Mode](config.md#validation-mode-configvalidationmode) |
 | **Add MFA** | [mfa.md](mfa.md) → [flows.md § TOTP](flows.md#totp-setup) |
 | **Add password reset / email verification** | [password_reset.md](password_reset.md) · [email_verification.md](email_verification.md) |
 | **Understand all flows** | [flows.md](flows.md) (consolidated flow catalog) |
+| **Integrate error handling** | [error-model.md](error-model.md) → [api-reference.md § Error Model](api-reference.md#error-model) |
 | **Ops & scaling** | [ops.md](ops.md) → [performance.md](performance.md) → [capacity.md](capacity.md) |
 | **Security review** | [security.md](security.md) → [security-model.md](security-model.md) |
 | **Full API surface** | [api-reference.md](api-reference.md) |
@@ -31,7 +32,7 @@ Per-module guides covering primitives, usage examples, configuration, strategies
 | [mfa.md](mfa.md) | Multi-factor authentication: TOTP + backup codes |
 | [password_reset.md](password_reset.md) | Password reset lifecycle: strategies, flows, rate limiting |
 | [email_verification.md](email_verification.md) | Email verification lifecycle: strategies, flows |
-| [rate_limiting.md](rate_limiting.md) | Rate limiting: IP throttle, refresh throttle, per-flow limiters |
+| [rate_limiting.md](rate_limiting.md) | Rate limiting: login-failure limiter and per-flow abuse limiters |
 | [audit.md](audit.md) | Audit system: event dispatching, sinks, buffering |
 | [metrics.md](metrics.md) | Metrics system: counters, histograms, exporters |
 | [introspection.md](introspection.md) | Session introspection: active sessions, health checks |
@@ -45,6 +46,7 @@ Per-module guides covering primitives, usage examples, configuration, strategies
 | Document | Description |
 |----------|-------------|
 | [flows.md](flows.md) | **Consolidated flow catalog** — every operation step-by-step |
+| [error-model.md](error-model.md) | Canonical public `AuthError` contract, code registry, and mapping behavior |
 | [performance.md](performance.md) | Benchmark methodology, Redis command budgets, sizing |
 | [security.md](security.md) | Threat model, mitigations, invariants, scanner tooling |
 | [roadmap.md](roadmap.md) | Future improvements and priorities |
@@ -84,10 +86,11 @@ Detailed per-flow documentation (supplementary to [flows.md](flows.md)):
 
 | Document | Location |
 |----------|----------|
-| [README.md](../../README.md) | Quickstart, features, installation |
-| [LICENSE](../../LICENSE) | Apache 2.0 licensing terms |
-| [CHANGELOG.md](../../CHANGELOG.md) | Release changelog |
-| [CONTRIBUTING.md](../../CONTRIBUTING.md) | Contribution process and standards |
-| [environment-variables.md](../environment-variables.md) | Runtime configuration reference |
-| [security-env-recommendations.md](../security-env-recommendations.md) | Production security defaults |
-| [workflows.md](../workflows.md) | Day-to-day development workflows |
+| [README.md](../README.md) | Quickstart, features, installation |
+| [CHANGELOG.md](../CHANGELOG.md) | Release changelog (SemVer) |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Documentation and code conventions |
+| [THREAT_MODEL.md](../THREAT_MODEL.md) | Threat model |
+| [SECURITY.md](../SECURITY.md) | Security policy |
+| [SECURITY_REVIEW_CHECKLIST.md](../SECURITY_REVIEW_CHECKLIST.md) | Review checklist |
+| [SECURITY_FINDINGS.md](../SECURITY_FINDINGS.md) | Findings register |
+| [ARCHITECTURE_INVARIANTS.md](../ARCHITECTURE_INVARIANTS.md) | Architecture invariants |

@@ -118,7 +118,7 @@ ctx = goAuth.WithUserAgent(ctx, "my-app/1.0")
 |---|---|---|---|
 | `ValidateAccess` | `engine.ValidateAccess(ctx, tokenStr)` | `ctx`, `tokenStr string` | `(*AuthResult, error)`; uses engine default validation mode |
 | `Validate` | `engine.Validate(ctx, tokenStr, routeMode)` | `ctx`, `tokenStr string`, `routeMode RouteMode` (`goAuth.ModeInherit`, `goAuth.ModeJWTOnly`, `goAuth.ModeHybrid`, `goAuth.ModeStrict`) | `(*AuthResult, error)` |
-| `HasPermission` | `engine.HasPermission(mask, perm)` | `mask interface{}` (permission mask), `perm string` | `bool`; bitmask permission check |
+| `HasPermission` | `engine.HasPermission(mask, perm)` | `mask interface{}` (permission mask), `perm string` | `bool`; frozen-registry permission lookup + O(1) bitmask check |
 
 ### 5.4 Logout and Session Invalidation
 
