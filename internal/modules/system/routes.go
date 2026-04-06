@@ -138,10 +138,7 @@ func (m *Module) login(ctx *httpx.Context, req authLoginRequest) (authTokenRespo
 
 	accessToken, refreshToken, err := engine.Login(ctx.Context(), strings.TrimSpace(req.Identifier), req.Password)
 	if err != nil {
-		if errors.Is(err, goauth.ErrLoginRateLimited) {
-			return authTokenResponse{}, apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "login rate limited")
-		}
-		return authTokenResponse{}, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "invalid credentials")
+		return authTokenResponse{}, mapAuthEndpointError(err, "invalid credentials")
 	}
 
 	resp, err := buildAuthTokenResponse(accessToken, refreshToken)
@@ -160,10 +157,7 @@ func (m *Module) refresh(ctx *httpx.Context, req authRefreshRequest) (authTokenR
 
 	accessToken, refreshToken, err := engine.Refresh(ctx.Context(), strings.TrimSpace(req.RefreshToken))
 	if err != nil {
-		if errors.Is(err, goauth.ErrRefreshRateLimited) {
-			return authTokenResponse{}, apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "refresh rate limited")
-		}
-		return authTokenResponse{}, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "invalid refresh token")
+		return authTokenResponse{}, mapAuthEndpointError(err, "invalid refresh token")
 	}
 
 	resp, err := buildAuthTokenResponse(accessToken, refreshToken)
@@ -180,6 +174,35 @@ func (m *Module) authEngine() (*goauth.Engine, error) {
 		return nil, apperr.New(apperr.CodeDependencyFailure, http.StatusServiceUnavailable, "auth engine unavailable")
 	}
 	return engine, nil
+}
+
+func mapAuthEndpointError(err error, invalidMessage string) error {
+	if err == nil {
+		return nil
+	}
+
+	var authErr *goauth.AuthError
+	if errors.As(err, &authErr) {
+		switch authErr.Category {
+		case goauth.CategoryAuthAbuse:
+			return apperr.WithCause(apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "authentication temporarily limited"), err)
+		case goauth.CategoryAuthState:
+			return apperr.WithCause(apperr.New(apperr.CodeForbidden, http.StatusForbidden, "authentication state rejected"), err)
+		case goauth.CategorySystem:
+			if authErr.Code == string(goauth.CodeSystemInternalError) {
+				return apperr.WithCause(apperr.New(apperr.CodeInternal, http.StatusInternalServerError, "authentication failed"), err)
+			}
+			return apperr.WithCause(apperr.New(apperr.CodeDependencyFailure, http.StatusServiceUnavailable, "authentication unavailable"), err)
+		default:
+			return apperr.WithCause(apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, invalidMessage), err)
+		}
+	}
+
+	if errors.Is(err, goauth.ErrLoginRateLimited) {
+		return apperr.WithCause(apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "authentication temporarily limited"), err)
+	}
+
+	return apperr.WithCause(apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, invalidMessage), err)
 }
 
 func buildAuthTokenResponse(accessToken, refreshToken string) (authTokenResponse, error) {
