@@ -2,6 +2,26 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.7.1 (2026-04-06)
+
+### Fixed
+- System auth demo routes were aligned with goAuth v0.3.0 error semantics.
+	- Removed usage of deleted `goauth.ErrRefreshRateLimited`.
+	- Added canonical auth error translation for login/refresh endpoints based on goAuth `AuthError` categories.
+	- Mapped auth abuse/state/system categories to stable API responses (`429`/`403`/`503`/`500`) while preserving unauthorized defaults.
+
+### Added
+- New focused tests for system auth route error translation.
+	- Added category-based mapping coverage for `AUTH_ABUSE`, `AUTH_STATE`, `SYSTEM_INTERNAL_ERROR`, and `SYSTEM_UNAVAILABLE`.
+	- Added fallback coverage for legacy `goauth.ErrLoginRateLimited` sentinel matching.
+
+### Changed
+- goAuth dependency was upgraded to `v0.3.0`.
+- Auth docs were migrated to the v0.3.0 model, including:
+	- Canonical `AuthError` boundary and code registry documentation.
+	- Updated limiter and config field naming (`EnableLoginFailureLimiter`, request/confirm limiter split fields, and creation limiter toggle).
+	- Refresh-throttle removal guidance and v0.3.0 migration notes.
+
 ## v0.7.0 (2026-04-05)
 
 ### Breaking Changes
