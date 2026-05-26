@@ -28,9 +28,9 @@ func (s *stubTx) Rollback(ctx context.Context) error {
 	return s.rollbackErr
 }
 
-func (s *stubTx) Begin(ctx context.Context) (pgx.Tx, error)  { return nil, nil }
-func (s *stubTx) Conn() *pgx.Conn                            { return nil }
-func (s *stubTx) LargeObjects() pgx.LargeObjects             { return pgx.LargeObjects{} }
+func (s *stubTx) Begin(ctx context.Context) (pgx.Tx, error) { return nil, nil }
+func (s *stubTx) Conn() *pgx.Conn                           { return nil }
+func (s *stubTx) LargeObjects() pgx.LargeObjects            { return pgx.LargeObjects{} }
 func (s *stubTx) Prepare(_ context.Context, _, _ string) (*pgconn.StatementDescription, error) {
 	return nil, nil
 }
