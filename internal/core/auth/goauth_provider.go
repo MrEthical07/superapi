@@ -2,9 +2,6 @@ package auth
 
 import (
 	"fmt"
-	"os"
-	"strings"
-	"time"
 
 	goauth "github.com/MrEthical07/goAuth"
 	"github.com/redis/go-redis/v9"
@@ -29,42 +26,16 @@ func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, userProvider 
 		return nil, nil, fmt.Errorf("goAuth provider requires redis client")
 	}
 
-	cfg := goauth.DefaultConfig()
-	cfg.ValidationMode = toGoAuthValidationMode(mode)
-	cfg.Result.IncludeRole = true
-	cfg.Result.IncludePermissions = true
-	cfg.Account.Enabled = true
-	cfg.Account.DefaultRole = "user"
-
-	// Optional deterministic signer for local perf tests across multiple processes.
-	if sharedSecret := strings.TrimSpace(os.Getenv("AUTH_TEST_SHARED_SECRET")); sharedSecret != "" {
-		cfg.JWT.SigningMethod = "hs256"
-		cfg.JWT.PrivateKey = []byte(sharedSecret)
-		cfg.JWT.PublicKey = []byte(sharedSecret)
-		cfg.JWT.Issuer = "superapi-perf"
-		cfg.JWT.Audience = "superapi-perf"
-		cfg.JWT.KeyID = "superapi-perf-key"
-	}
-
-	if accessTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_ACCESS_TTL")); accessTTLRaw != "" {
-		if d, err := time.ParseDuration(accessTTLRaw); err == nil && d > 0 {
-			cfg.JWT.AccessTTL = d
-		}
-	}
-	if refreshTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_REFRESH_TTL")); refreshTTLRaw != "" {
-		if d, err := time.ParseDuration(refreshTTLRaw); err == nil && d > 0 {
-			cfg.JWT.RefreshTTL = d
-		}
+	cfg, err := ProjectGoAuthConfig(mode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("initialize goAuth config: %w", err)
 	}
 
 	engine, err := goauth.New().
 		WithConfig(cfg).
 		WithRedis(redisClient).
 		WithPermissions([]string{"system.whoami"}).
-		WithRoles(map[string][]string{
-			"user":  {"system.whoami"},
-			"admin": {"system.whoami"},
-		}).
+		WithRoles(DefaultRoles).
 		WithUserProvider(userProvider).
 		Build()
 	if err != nil {
@@ -78,17 +49,4 @@ func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, userProvider 
 	}
 
 	return engine, shutdown, nil
-}
-
-func toGoAuthValidationMode(mode Mode) goauth.ValidationMode {
-	switch mode {
-	case ModeJWTOnly:
-		return goauth.ModeJWTOnly
-	case ModeStrict:
-		return goauth.ModeStrict
-	case ModeHybrid:
-		return goauth.ModeHybrid
-	default:
-		return goauth.ModeHybrid
-	}
 }
