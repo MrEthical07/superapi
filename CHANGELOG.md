@@ -2,6 +2,25 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.7.3 (2026-06-08)
+
+### Added
+
+#### Auth Customization Layer
+
+Added dedicated goAuth customization points under `internal/core/auth` to make authentication behavior easier to modify without changing provider wiring.
+
+- Added `ProjectGoAuthConfig()` as the primary goAuth configuration entrypoint.
+- Added built-in goAuth lint integration with startup failure on high-severity findings.
+- Added documented customization examples for JWT identity, signing keys, token lifetimes, and security settings.
+- Added explicit role and permission registry definitions via `roles.go`.
+- Added template guidance for project-specific auth configuration and role customization.
+
+#### Documentation
+
+- Improved auth configuration discoverability with inline customization guidance.
+- Added examples for JWT overrides, production hardening, and performance-testing configuration.
+
 ## v0.7.1 (2026-04-06)
 
 ### Fixed

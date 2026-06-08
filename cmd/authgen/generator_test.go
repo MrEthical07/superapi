@@ -159,7 +159,7 @@ func setupTestWorkspace(t *testing.T) string {
 	root := t.TempDir()
 
 	// go.mod
-	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/MrEthical07/superapi\n\ngo 1.26.3\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/MrEthical07/superapi\n\ngo 1.26.4\n"), 0o644)
 
 	// db directories
 	os.MkdirAll(filepath.Join(root, "db", "migrations"), 0o755)
