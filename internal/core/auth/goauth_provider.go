@@ -34,7 +34,7 @@ func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, userProvider 
 	engine, err := goauth.New().
 		WithConfig(cfg).
 		WithRedis(redisClient).
-		WithPermissions([]string{"system.whoami"}).
+		WithPermissions(DefaultPermissions).
 		WithRoles(DefaultRoles).
 		WithUserProvider(userProvider).
 		Build()
