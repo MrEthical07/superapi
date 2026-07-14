@@ -31,12 +31,10 @@ import (
 type Dependencies struct {
 	// Postgres is the optional pgx pool initialized from config.
 	Postgres *pgxpool.Pool
-	// Store is the primary store surface used by modules.
-	Store storage.Store
-	// RelationalStore is the relational execution store.
-	RelationalStore storage.RelationalStore
-	// DocumentStore is the document execution store.
-	DocumentStore storage.DocumentStore
+	// DB is the relational data-access boundary shared with modules. It hands
+	// repositories sqlc queries bound to the pool or an active transaction and
+	// owns the WithTx write boundary.
+	DB *storage.Postgres
 	// Redis is the optional Redis client used by auth/cache/ratelimit.
 	Redis *redis.Client
 	// Readiness aggregates health checks for readiness responses.
@@ -67,10 +65,9 @@ type DependencyBinder interface {
 
 func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, error) {
 	deps := &Dependencies{
-		Readiness:     readiness.NewService(),
-		RateLimit:     cfg.RateLimit,
-		Cache:         cfg.Cache,
-		DocumentStore: storage.NoopDocumentStore{},
+		Readiness: readiness.NewService(),
+		RateLimit: cfg.RateLimit,
+		Cache:     cfg.Cache,
 	}
 
 	if cfg.Postgres.Enabled {
@@ -79,15 +76,14 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init postgres: %w", err)
 		}
 
-		relStore, err := storage.NewPostgresRelationalStore(pool)
+		pg, err := storage.NewPostgres(pool)
 		if err != nil {
 			pool.Close()
-			return nil, fmt.Errorf("init relational store: %w", err)
+			return nil, fmt.Errorf("init postgres boundary: %w", err)
 		}
 
 		deps.Postgres = pool
-		deps.RelationalStore = relStore
-		deps.Store = relStore
+		deps.DB = pg
 		deps.Readiness.Add("postgres", true, cfg.Postgres.HealthCheckTimeout, func(checkCtx context.Context) error {
 			return db.CheckHealth(checkCtx, pool, cfg.Postgres.HealthCheckTimeout)
 		})
@@ -137,17 +133,17 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	deps.AuthEngine = nil
 
 	if cfg.Auth.Enabled {
-		if deps.RelationalStore == nil {
+		if deps.DB == nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()
 			}
 			if deps.Postgres != nil {
 				deps.Postgres.Close()
 			}
-			return nil, fmt.Errorf("init auth provider: relational store unavailable")
+			return nil, fmt.Errorf("init auth provider: relational database unavailable")
 		}
 
-		userRepo := auth.NewRelationalUserRepository(deps.RelationalStore)
+		userRepo := auth.NewRelationalUserRepository(deps.DB)
 		if userRepo == nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()

@@ -131,15 +131,15 @@ Modules receive dependencies via BindDependencies.
 
 Use module runtime surface from internal/core/modulekit/runtime.go.
 
-Available store accessors:
+Available data accessor:
 
-- Store()
-- RelationalStore()
-- DocumentStore()
+- DB() *storage.Postgres — relational boundary; repositories call DB().Queries(ctx), services call DB().WithTx(ctx, fn)
 
 Important rule:
 
-- each module chooses one storage type and wires repository with that backend
+- each module wires its repository over the relational boundary; document/other
+  backends, when needed, are constructed in the module's own binding rather than
+  read from the runtime
 
 ## 6. Route Registration And Policy Order
 
@@ -163,14 +163,14 @@ Why this matters:
 
 Read path pattern:
 
-- handler -> service -> repository -> store.Execute(read operation)
+- handler -> service -> repository -> DB().Queries(ctx).<Query>(...)
 - no transaction wrapper by default
 
 Write path pattern:
 
-- handler -> service -> store.WithTx(...) -> repository write methods -> store.Execute(write operations)
+- handler -> service -> DB().WithTx(ctx, fn) -> repository write methods -> DB().Queries(ctx).<Query>(...)
 
-Service owns workflow boundary; repository owns storage operations.
+Service owns workflow boundary; repository owns query + mapping logic.
 
 ## 8. Repository Contract Design
 

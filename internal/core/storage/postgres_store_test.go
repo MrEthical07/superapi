@@ -54,19 +54,19 @@ func (f *fakeBeginner) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, erro
 	return f.tx, f.err
 }
 
-// newTestStore creates a PostgresRelationalStore with a fake beginner and a
+// newTestPostgres creates a Postgres boundary with a fake beginner and a
 // sentinel non-nil pool (so nil-pool guards pass). The fake pool must never
 // have any methods called on it during these unit tests.
-func newTestStore(b txBeginner) *PostgresRelationalStore {
-	return &PostgresRelationalStore{
+func newTestPostgres(b txBeginner) *Postgres {
+	return &Postgres{
 		pool:  new(pgxpool.Pool),
 		begin: b,
 	}
 }
 
 func TestWithTx_NilFn(t *testing.T) {
-	store := newTestStore(&fakeBeginner{})
-	err := store.WithTx(context.Background(), nil)
+	p := newTestPostgres(&fakeBeginner{})
+	err := p.WithTx(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error for nil fn, got nil")
 	}
@@ -74,9 +74,9 @@ func TestWithTx_NilFn(t *testing.T) {
 
 func TestWithTx_CommitOnSuccess(t *testing.T) {
 	stub := &stubTx{}
-	store := newTestStore(&fakeBeginner{tx: stub})
+	p := newTestPostgres(&fakeBeginner{tx: stub})
 
-	err := store.WithTx(context.Background(), func(ctx context.Context) error {
+	err := p.WithTx(context.Background(), func(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
@@ -92,10 +92,10 @@ func TestWithTx_CommitOnSuccess(t *testing.T) {
 
 func TestWithTx_RollbackOnCallbackError(t *testing.T) {
 	stub := &stubTx{}
-	store := newTestStore(&fakeBeginner{tx: stub})
+	p := newTestPostgres(&fakeBeginner{tx: stub})
 	callbackErr := errors.New("callback error")
 
-	err := store.WithTx(context.Background(), func(ctx context.Context) error {
+	err := p.WithTx(context.Background(), func(ctx context.Context) error {
 		return callbackErr
 	})
 	if !errors.Is(err, callbackErr) {
@@ -111,7 +111,7 @@ func TestWithTx_RollbackOnCallbackError(t *testing.T) {
 
 func TestWithTx_RollbackAndRepanicOnPanic(t *testing.T) {
 	stub := &stubTx{}
-	store := newTestStore(&fakeBeginner{tx: stub})
+	p := newTestPostgres(&fakeBeginner{tx: stub})
 
 	defer func() {
 		rec := recover()
@@ -126,7 +126,7 @@ func TestWithTx_RollbackAndRepanicOnPanic(t *testing.T) {
 		}
 	}()
 
-	_ = store.WithTx(context.Background(), func(ctx context.Context) error {
+	_ = p.WithTx(context.Background(), func(ctx context.Context) error {
 		panic("test panic")
 	})
 }
@@ -134,9 +134,9 @@ func TestWithTx_RollbackAndRepanicOnPanic(t *testing.T) {
 func TestWithTx_CommitErrorPropagated(t *testing.T) {
 	commitErr := errors.New("commit failed")
 	stub := &stubTx{commitErr: commitErr}
-	store := newTestStore(&fakeBeginner{tx: stub})
+	p := newTestPostgres(&fakeBeginner{tx: stub})
 
-	err := store.WithTx(context.Background(), func(ctx context.Context) error {
+	err := p.WithTx(context.Background(), func(ctx context.Context) error {
 		return nil
 	})
 	if err == nil {
@@ -149,9 +149,9 @@ func TestWithTx_CommitErrorPropagated(t *testing.T) {
 
 func TestWithTx_BeginErrorPropagated(t *testing.T) {
 	beginErr := errors.New("begin failed")
-	store := newTestStore(&fakeBeginner{err: beginErr})
+	p := newTestPostgres(&fakeBeginner{err: beginErr})
 
-	err := store.WithTx(context.Background(), func(ctx context.Context) error {
+	err := p.WithTx(context.Background(), func(ctx context.Context) error {
 		return nil
 	})
 	if err == nil {
@@ -162,41 +162,38 @@ func TestWithTx_BeginErrorPropagated(t *testing.T) {
 	}
 }
 
-func TestExecute_NilOp(t *testing.T) {
-	store := newTestStore(&fakeBeginner{})
-	err := store.Execute(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected error for nil operation, got nil")
-	}
-}
+// TestWithTx_BindsTxIntoContext verifies that the callback receives a context
+// carrying the active transaction, so that Queries(ctx) inside the callback
+// binds to the tx rather than the pool.
+func TestWithTx_BindsTxIntoContext(t *testing.T) {
+	stub := &stubTx{}
+	p := newTestPostgres(&fakeBeginner{tx: stub})
 
-func TestNoopDocumentStore_WithTx_NilFn(t *testing.T) {
-	var s NoopDocumentStore
-	err := s.WithTx(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected error for nil fn, got nil")
-	}
-}
-
-func TestNoopDocumentStore_Execute_NilOp(t *testing.T) {
-	var s NoopDocumentStore
-	err := s.Execute(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected error for nil operation, got nil")
-	}
-}
-
-func TestNoopDocumentStore_WithTx_CallsFn(t *testing.T) {
-	var s NoopDocumentStore
-	called := false
-	err := s.WithTx(context.Background(), func(ctx context.Context) error {
-		called = true
+	var boundTx pgx.Tx
+	var ok bool
+	err := p.WithTx(context.Background(), func(ctx context.Context) error {
+		boundTx, ok = ctx.Value(txKey{}).(pgx.Tx)
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !called {
-		t.Fatal("expected fn to be called")
+	if !ok {
+		t.Fatal("expected transaction to be bound into callback context")
+	}
+	if boundTx != pgx.Tx(stub) {
+		t.Fatal("expected the begun transaction to be the one bound into context")
+	}
+}
+
+// TestQueries_UsesTxWhenPresent verifies that Queries binds to the transaction
+// stashed in context. It relies only on the context-key lookup, so no live
+// database or pool method calls are required.
+func TestQueries_UsesTxWhenPresent(t *testing.T) {
+	p := newTestPostgres(&fakeBeginner{})
+
+	ctx := context.WithValue(context.Background(), txKey{}, pgx.Tx(&stubTx{}))
+	if q := p.Queries(ctx); q == nil {
+		t.Fatal("expected non-nil queries bound to tx")
 	}
 }

@@ -6,9 +6,12 @@ This repository is a production-grade Go API template for SaaS backends.
 
 The enforced architecture is:
 
-Service -> Repository -> Store -> Backend
+Service -> Repository -> sqlc queries -> pgx (pool or transaction)
 
-Use current code as reference, but do not preserve legacy SQL-centric patterns.
+Relational data access is standardized on sqlc. Repositories obtain
+sqlc-generated queries from the storage boundary and map storage models to
+domain models; services own the write transaction boundary. Use current code as
+reference, but do not preserve legacy SQL-centric or dual data-access patterns.
 
 ## 2. Core Architecture Rules
 
@@ -21,25 +24,24 @@ Use current code as reference, but do not preserve legacy SQL-centric patterns.
 ## 3. Data Layer Rules (Hard Constraints)
 
 - Services must call repositories for all data operations.
-- Services may call store.WithTx(...) only to define transaction boundaries for write operations.
-- Services must not call store execution methods (Execute, Query, etc.) directly.
-- Repositories must call stores only.
-- Repositories must not call database drivers directly.
+- Services may call storage.Postgres.WithTx(...) only to define transaction boundaries for write operations.
+- Services must not call sqlc queries or pgx directly.
+- Repositories obtain sqlc queries via storage.Postgres.Queries(ctx) and call generated query methods.
+- Repositories must not call pgx/database drivers directly (outside the sqlc queries the boundary hands them).
 - Repositories own all data access logic and must not control transaction boundaries.
-- Store interfaces are execution-only and must not encode domain semantics.
-- Store interfaces must not expose generic CRUD/query-language APIs as the module contract.
-- Repositories own query logic and storage-model to domain-model mapping.
-- Store implementations must remain unaware of domain structures.
-- One storage type per module; do not mix relational and document logic inside one module.
+- The storage boundary (storage.Postgres) is execution-only: it yields sqlc queries and owns tx lifecycle; it must not encode domain semantics.
+- Repositories own query logic and storage-model to domain-model mapping (sqlc row -> domain struct).
+- Do not expose sqlc or pgx types on service/repository public interfaces.
+- One relational data source per module; do not mix relational and document logic inside one module.
 - No direct DB access in handlers.
 
 ## 4. Transaction Rules
 
-- Transaction API is mandatory at the store layer.
-- Services own the write transaction boundary via store.WithTx(...); all store.Execute calls happen inside that scope through repository methods.
+- The transaction API lives on the storage boundary: storage.Postgres.WithTx(ctx, fn).
+- Services own the write transaction boundary via WithTx; repositories that run inside fn obtain tx-bound queries automatically via Queries(ctx).
 - Transactions apply to write paths only.
-- Read paths must not be forced into transaction context.
-- Backend-specific transaction behavior belongs only to store implementations.
+- Read paths must not be forced into transaction context; Queries(ctx) binds to the pool when no tx is active.
+- pgx transaction behavior belongs only to the storage boundary implementation.
 
 ## 5. Route Creation Rules
 
@@ -59,7 +61,7 @@ Do not bypass policy.MustValidateRoute / validator-backed route checks.
 
 - Use goAuth integration in internal/core/auth.
 - Keep goAuth user provider data-store independent from service/module layers.
-- Auth persistence must go through auth repository + store contracts.
+- Auth persistence must go through the auth repository over the storage boundary (sqlc queries).
 - Do not reimplement token parsing/validation in modules.
 - Keep auth mode behavior explicit (jwt_only, hybrid, strict).
 
@@ -155,16 +157,16 @@ Do not ship scaffold defaults without architecture pass.
 
 ## 13. How To Add Data Storage For A Module
 
-Choose one storage family per module:
+Relational persistence uses the sqlc boundary:
 
-- relational module -> storage.RelationalStore
-- document module -> storage.DocumentStore
-
-Required patterns:
-
-- repository builds operations and calls store.Execute(...)
-- service owns transaction boundary for writes via store.WithTx(...)
+- repository obtains queries via runtime.DB().Queries(ctx) and calls generated methods
+- service owns the transaction boundary for writes via runtime.DB().WithTx(ctx, fn)
 - reads are direct repository calls (no forced tx wrapper)
+
+Document persistence, when needed, is provided by the optional standalone
+document package (constructed in the module's own binding), not by the runtime.
+Keep one relational data source per module and do not branch on backend type in
+shared code.
 
 Relational path guidance:
 
@@ -176,30 +178,31 @@ Relational path guidance:
 
 Constraint reminder:
 
-- sqlc/driver objects are implementation details only
+- sqlc/pgx objects are implementation details only
 - never expose them in service/repository public interfaces
 
 ## 14. How To Add A New Backend Type (Core Change)
 
-Only do this when necessary. Keep changes explicit and minimal.
+Only do this when necessary. Keep changes explicit and minimal. Prefer shipping
+an optional standalone package (as the document store does) over widening the
+core storage boundary.
 
 Required steps:
 
-1. Implement backend store in internal/core/storage:
-- satisfy Store + TransactionalStore + backend-specific contract
+1. Implement the backend boundary in its own package:
+- yield a per-operation query/handle surface and own its own tx lifecycle
+- keep it domain-agnostic (no module domain structs in the boundary)
 
-2. Keep store domain-agnostic:
-- no module domain structs in store implementation
-
-3. Wire dependencies in internal/core/app/deps.go:
+2. Wire dependencies where the backend is actually used:
 - init client/pool
-- init store implementation
-- set Dependencies.Store and typed store surface
+- construct the boundary
 - register readiness checks when applicable
 
-4. Expose runtime access through internal/core/modulekit/runtime.go if needed.
+3. Expose runtime access through internal/core/modulekit/runtime.go only if the
+   backend is a first-class core dependency (the relational storage.Postgres is;
+   optional backends are constructed in the module binding instead).
 
-5. Add tests and update architecture/docs pages.
+4. Add tests and update architecture/docs pages.
 
 Do not introduce compatibility layers that keep dual access patterns alive.
 

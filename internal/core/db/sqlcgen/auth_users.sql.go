@@ -91,8 +91,9 @@ func (q *Queries) GetAuthUserByLogin(ctx context.Context, email string) (User, e
 	return i, err
 }
 
-const updateAuthUserPasswordHash = `-- name: UpdateAuthUserPasswordHash :exec
+const updateAuthUserPasswordHash = `-- name: UpdateAuthUserPasswordHash :one
 UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1
+RETURNING id
 `
 
 type UpdateAuthUserPasswordHashParams struct {
@@ -100,9 +101,11 @@ type UpdateAuthUserPasswordHashParams struct {
 	PasswordHash string      `json:"password_hash"`
 }
 
-func (q *Queries) UpdateAuthUserPasswordHash(ctx context.Context, arg UpdateAuthUserPasswordHashParams) error {
-	_, err := q.db.Exec(ctx, updateAuthUserPasswordHash, arg.ID, arg.PasswordHash)
-	return err
+func (q *Queries) UpdateAuthUserPasswordHash(ctx context.Context, arg UpdateAuthUserPasswordHashParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, updateAuthUserPasswordHash, arg.ID, arg.PasswordHash)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const updateAuthUserStatus = `-- name: UpdateAuthUserStatus :one

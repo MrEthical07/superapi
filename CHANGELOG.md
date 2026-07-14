@@ -9,6 +9,42 @@ not yet released. See `docs/v0.8.0-design.md` for the full plan.
 
 ### Changed
 
+- Standardized the relational data layer on sqlc and collapsed the bespoke
+  store/operations abstraction to a single thin transaction boundary.
+  - `internal/core/storage` now exposes one `Postgres` type. `Queries(ctx)`
+    returns sqlc-generated queries bound to the transaction carried in the
+    context (via `WithTx`) or to the pool otherwise; `WithTx(ctx, fn)` owns the
+    write transaction lifecycle with the same panic-safe rollback semantics as
+    before. Repositories obtain `*sqlcgen.Queries` per call, so sqlc/pgx types
+    never leak into service or module interfaces.
+  - Removed the old execution abstraction: `RelationalStore`, `DocumentStore`,
+    `RelationalOperation`, `DocumentOperation`, `RelationalExecutor`,
+    `RowScanner`, the `RelationalExec/QueryOne/QueryMany` and `DocumentRun`
+    builders, `PostgresRelationalStore`, and `NoopDocumentStore`. The
+    `NoopDocumentStore` is no longer wired into core; an optional standalone
+    document package will follow in a later phase.
+  - Rewrote the auth user repository (`internal/core/auth/user_repository.go`)
+    on sqlc queries (`GetAuthUserByLogin`, `GetAuthUserByID`, `CreateAuthUser`,
+    `UpdateAuthUserStatus`, `UpdateAuthUserPasswordHash`), dropping the
+    hand-written SQL constants. `NewRelationalUserRepository` now takes
+    `*storage.Postgres`.
+  - `Dependencies` collapses `Store`, `RelationalStore`, and `DocumentStore`
+    into a single `DB *storage.Postgres`. `modulekit.Runtime` replaces
+    `Store()`/`RelationalStore()`/`DocumentStore()` with `DB()`. `cmd/perftoken`
+    is migrated to the new boundary.
+  - Fixed a not-found parity regression in the sqlc swap: the
+    `UpdateAuthUserPasswordHash` query was changed from `:exec` to
+    `:one … RETURNING id` (and regenerated) so that a password update for a
+    missing/deleted user surfaces `ErrAuthUserNotFound` instead of silently
+    reporting success through goAuth's password-reset path.
+  - Rewrote the `AGENTS.md` data-layer, transaction, auth-persistence, and
+    backend-extension rules (§1/§3/§4/§6/§13/§14) around the sqlc boundary, and
+    corrected the now-invalid runtime store accessors in `docs/modules.md`.
+    Remaining prose doc pages are migrated in the release documentation batch.
+  - Verified with `go build ./...`, `go test ./...`, and
+    `go run ./cmd/superapi-verify ./...`: clean build, green tests, architecture
+    gate passing.
+
 - Upgraded the goAuth dependency from `v0.3.2` to the published `v0.4.0`.
   - Requires `github.com/MrEthical07/goAuth v0.4.0` directly from the module
     proxy; no `replace` directive is used.

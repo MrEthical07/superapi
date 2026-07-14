@@ -28,28 +28,15 @@ func (r Runtime) Dependencies() *app.Dependencies {
 	return r.deps
 }
 
-// Store returns the primary configured storage backend.
-func (r Runtime) Store() storage.Store {
+// DB returns the relational data-access boundary for modules that need
+// relational persistence. Repositories obtain sqlc queries via DB().Queries(ctx)
+// and services own transactions via DB().WithTx(ctx, fn). Document-oriented
+// access is provided by an optional standalone package, not by the runtime.
+func (r Runtime) DB() *storage.Postgres {
 	if r.deps == nil {
 		return nil
 	}
-	return r.deps.Store
-}
-
-// RelationalStore returns the relational storage backend.
-func (r Runtime) RelationalStore() storage.RelationalStore {
-	if r.deps == nil {
-		return nil
-	}
-	return r.deps.RelationalStore
-}
-
-// DocumentStore returns the document storage backend.
-func (r Runtime) DocumentStore() storage.DocumentStore {
-	if r.deps == nil {
-		return nil
-	}
-	return r.deps.DocumentStore
+	return r.deps.DB
 }
 
 // Redis returns configured redis client when Redis is enabled.
