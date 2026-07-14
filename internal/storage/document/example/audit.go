@@ -44,14 +44,15 @@ func NewAuditRepository(docs document.Store) *AuditRepository {
 	return &AuditRepository{docs: docs}
 }
 
-// Save writes an event. Reads/writes go through Collection(ctx); when called
-// inside a service-owned WithTx the write joins that transaction.
+// Save writes an event, overwriting any existing event with the same id
+// (Replace = upsert). Reads/writes go through Collection(ctx); when called
+// inside a service-owned transaction the write joins that transaction.
 func (r *AuditRepository) Save(ctx context.Context, event AuditEvent) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal audit event: %w", err)
 	}
-	return r.docs.Collection(ctx, auditCollection).Put(ctx, document.Document{
+	return r.docs.Collection(ctx, auditCollection).Replace(ctx, document.Document{
 		ID:   event.ID,
 		Data: payload,
 	})
@@ -68,7 +69,7 @@ func (r *AuditRepository) Get(ctx context.Context, id string) (AuditEvent, error
 
 // ListByActor returns all events recorded for an actor.
 func (r *AuditRepository) ListByActor(ctx context.Context, actor string) ([]AuditEvent, error) {
-	docs, err := r.docs.Collection(ctx, auditCollection).Find(ctx, document.Filter{"actor": actor})
+	docs, err := r.docs.Collection(ctx, auditCollection).Find(ctx, document.ByFields(map[string]any{"actor": actor}))
 	if err != nil {
 		return nil, err
 	}
@@ -104,10 +105,13 @@ func NewAuditService(docs document.Store) *AuditService {
 	return &AuditService{docs: docs, repo: NewAuditRepository(docs)}
 }
 
-// RecordBatch writes several events atomically inside one transaction. If any
-// write fails the whole batch is rolled back.
+// RecordBatch writes several events inside one unit of work. On a transactional
+// backend the batch is atomic (all-or-nothing); on a non-transactional backend
+// document.WithTx runs the writes directly. Using the free document.WithTx
+// helper keeps this service portable across backends — swap the store in
+// BindDependencies and this code is unchanged.
 func (s *AuditService) RecordBatch(ctx context.Context, events []AuditEvent) error {
-	return s.docs.WithTx(ctx, func(txCtx context.Context) error {
+	return document.WithTx(ctx, s.docs, func(txCtx context.Context) error {
 		for _, event := range events {
 			if err := s.repo.Save(txCtx, event); err != nil {
 				return err

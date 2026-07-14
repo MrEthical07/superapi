@@ -11,10 +11,24 @@
 // # Shape
 //
 // The package mirrors the relational boundary's ergonomics: a module obtains a
-// per-operation collection handle via Store.Collection and owns write
-// transactions via Store.WithTx. It defines its own small interface so backends
-// (the bundled in-memory store, or a Mongo/other implementation you add) can be
-// swapped without touching module code.
+// per-operation collection handle via Store.Collection and runs a write unit of
+// work via the free WithTx helper. It defines its own small interface so
+// backends (the bundled in-memory store, or a Mongo/other implementation you
+// add) can be swapped without touching module code.
+//
+// The interface is designed to map cleanly onto a real document database:
+//
+//   - Write intent is explicit — Insert (create, fail on duplicate) vs Replace
+//     (upsert) — matching Mongo's InsertOne vs ReplaceOne(upsert). Native
+//     errors map onto ErrNotFound / ErrAlreadyExists.
+//   - Find takes a Query with a portable Fields conjunction plus an optional
+//     backend-specific Native value (e.g. a Mongo bson.M) so a backend can
+//     expose its full query power without this interface leaking driver types.
+//   - Transactions are an optional capability (TxStore). The free WithTx helper
+//     runs a unit of work transactionally when the backend supports it and
+//     directly otherwise, so a standalone MongoDB (no transactions) still works.
+//
+// See docs/document-store.md for a complete MongoDB adapter you can drop in.
 //
 // # Wiring (per module, no shared branching)
 //

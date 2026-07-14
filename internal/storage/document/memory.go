@@ -28,6 +28,12 @@ func NewInMemoryStore() *InMemoryStore {
 	return &InMemoryStore{data: make(map[string]map[string][]byte)}
 }
 
+// InMemoryStore supports transactions, so it satisfies TxStore (and Store).
+var (
+	_ Store   = (*InMemoryStore)(nil)
+	_ TxStore = (*InMemoryStore)(nil)
+)
+
 // Collection returns a handle bound to the transaction in ctx, or to the store.
 func (s *InMemoryStore) Collection(ctx context.Context, name string) Collection {
 	if ctx != nil {
@@ -140,10 +146,27 @@ func (c *memoryCollection) Get(_ context.Context, id string) (Document, error) {
 	return Document{ID: id, Data: cloneBytes(payload)}, nil
 }
 
-func (c *memoryCollection) Put(_ context.Context, doc Document) error {
+func (c *memoryCollection) Insert(ctx context.Context, doc Document) error {
 	if doc.ID == "" {
 		return errors.New("document id is required")
 	}
+	// Fail on a duplicate id, considering staged writes inside a transaction.
+	if _, err := c.Get(ctx, doc.ID); err == nil {
+		return ErrAlreadyExists
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return c.write(doc)
+}
+
+func (c *memoryCollection) Replace(_ context.Context, doc Document) error {
+	if doc.ID == "" {
+		return errors.New("document id is required")
+	}
+	return c.write(doc)
+}
+
+func (c *memoryCollection) write(doc Document) error {
 	payload := cloneBytes(doc.Data)
 	if c.tx != nil {
 		c.tx.stage(c.name, doc.ID, &payload)
@@ -197,7 +220,10 @@ func (c *memoryCollection) getForDelete(id string) (struct{}, error) {
 	return struct{}{}, nil
 }
 
-func (c *memoryCollection) Find(_ context.Context, filter Filter) ([]Document, error) {
+func (c *memoryCollection) Find(_ context.Context, query Query) ([]Document, error) {
+	// The in-memory store supports the portable Fields conjunction and ignores
+	// any backend-specific Native query value.
+	filter := query.Fields
 	// Build the effective view: committed store overlaid with staged writes.
 	view := make(map[string][]byte)
 
@@ -238,7 +264,7 @@ func (c *memoryCollection) Find(_ context.Context, filter Filter) ([]Document, e
 
 // matchesFilter reports whether a JSON payload matches all filter conditions by
 // exact top-level field equality. Non-JSON payloads match only the empty filter.
-func matchesFilter(payload []byte, filter Filter) bool {
+func matchesFilter(payload []byte, filter map[string]any) bool {
 	if len(filter) == 0 {
 		return true
 	}

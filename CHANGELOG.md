@@ -10,20 +10,30 @@ not yet released. See `docs/v0.8.0-design.md` for the full plan.
 ### Added
 
 - Added an optional, self-contained document (NoSQL) store package,
-  `internal/storage/document`, outside `internal/core`.
-  - Defines its own `Store` interface (`Collection(ctx, name)` yielding
-    `Get`/`Put`/`Delete`/`Find`, and `WithTx(ctx, fn)` owning the write
-    transaction boundary), mirroring the relational boundary's ergonomics.
+  `internal/storage/document`, outside `internal/core`, designed for a painless
+  swap to MongoDB or any document backend.
+  - Defines a `Store` interface (`Collection(ctx, name)` yielding
+    `Get`/`Insert`/`Replace`/`Delete`/`Find`) with explicit write intent —
+    `Insert` fails on a duplicate id (`ErrAlreadyExists`), `Replace` upserts —
+    mapping 1:1 onto Mongo's `InsertOne` / `ReplaceOne(upsert)`.
+  - `Find` takes a `Query` with a portable `Fields` exact-match conjunction plus
+    an optional backend-specific `Native` value (e.g. a Mongo `bson.M`), so a
+    backend can expose its full query power without the interface leaking driver
+    types.
+  - Transactions are an optional capability (`TxStore`). The free
+    `document.WithTx(ctx, store, fn)` helper runs a unit of work atomically when
+    the backend supports transactions and directly otherwise, so a standalone
+    MongoDB (no multi-document transactions) still works.
   - Ships a dependency-free `InMemoryStore` reference implementation with
-    copy-on-write transaction staging (atomic commit, rollback on error/panic);
-    swap in a real backend by implementing `Store`.
+    copy-on-write transaction staging (atomic commit, rollback on error/panic).
   - Includes a compiling example (`internal/storage/document/example`) showing
     the handler → service → repository pattern with a transactional batch write
     and no `if sql else mongo` branching. It is not registered as a runtime
     module.
   - Core keeps zero references, so an unused document store is excluded from the
     binary (package-level dead-code elimination) and deleting the folder is a
-    clean removal. See docs/document-store.md.
+    clean removal. It shares nothing with the Redis response cache. See
+    docs/document-store.md, which includes a complete drop-in MongoDB adapter.
 
 - Adopted goAuth v0.4.0 features (all opt-in, wired through the auth
   customization point and the system module).
