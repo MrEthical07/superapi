@@ -9,6 +9,22 @@ not yet released. See `docs/v0.8.0-design.md` for the full plan.
 
 ### Added
 
+- Added an optional, self-contained document (NoSQL) store package,
+  `internal/storage/document`, outside `internal/core`.
+  - Defines its own `Store` interface (`Collection(ctx, name)` yielding
+    `Get`/`Put`/`Delete`/`Find`, and `WithTx(ctx, fn)` owning the write
+    transaction boundary), mirroring the relational boundary's ergonomics.
+  - Ships a dependency-free `InMemoryStore` reference implementation with
+    copy-on-write transaction staging (atomic commit, rollback on error/panic);
+    swap in a real backend by implementing `Store`.
+  - Includes a compiling example (`internal/storage/document/example`) showing
+    the handler → service → repository pattern with a transactional batch write
+    and no `if sql else mongo` branching. It is not registered as a runtime
+    module.
+  - Core keeps zero references, so an unused document store is excluded from the
+    binary (package-level dead-code elimination) and deleting the folder is a
+    clean removal. See docs/document-store.md.
+
 - Adopted goAuth v0.4.0 features (all opt-in, wired through the auth
   customization point and the system module).
   - **Remember-me + session ceiling:** login accepts `remember_me`;
