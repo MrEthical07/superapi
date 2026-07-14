@@ -33,3 +33,20 @@ type User struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
+
+type WebauthnCredential struct {
+	CredentialID    []byte             `json:"credential_id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	PublicKey       []byte             `json:"public_key"`
+	AttestationType string             `json:"attestation_type"`
+	Transports      []string           `json:"transports"`
+	UserPresent     bool               `json:"user_present"`
+	UserVerified    bool               `json:"user_verified"`
+	BackupEligible  bool               `json:"backup_eligible"`
+	BackupState     bool               `json:"backup_state"`
+	Aaguid          []byte             `json:"aaguid"`
+	SignCount       int64              `json:"sign_count"`
+	Attachment      string             `json:"attachment"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt      pgtype.Timestamptz `json:"last_used_at"`
+}

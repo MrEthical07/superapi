@@ -9,6 +9,46 @@ not yet released. See `docs/v0.8.0-design.md` for the full plan.
 
 ### Added
 
+- Adopted goAuth v0.4.0 features (all opt-in, wired through the auth
+  customization point and the system module).
+  - **Remember-me + session ceiling:** login accepts `remember_me`;
+    `AUTH_MAX_SESSION_DURATION` caps absolute session lifetime.
+  - **MFA-aware login + confirm endpoint:** login returns an MFA challenge
+    (`mfa_required` / `mfa_challenge` / `mfa_type` / `mfa_types`) instead of
+    tokens when a second factor is required; complete it at
+    `POST /api/v1/system/auth/mfa/confirm` (`ConfirmLoginMFAWithType`).
+  - **Graceful logout endpoint (new):** `POST /api/v1/system/auth/logout`
+    revokes the session via `LogoutByAccessToken`, accepting an
+    expired-but-authentic access token (token from the body or the
+    `Authorization: Bearer` header). This closes a real gap — there was no
+    logout route before.
+  - **Sliding-window auth limiter:** `AUTH_LIMITER_WINDOW_MODE=sliding` selects
+    goAuth's internal auth-abuse limiter algorithm.
+  - **Ed25519 key rotation:** `AUTH_KEY_ID` + `AUTH_VERIFY_KEYS` populate
+    goAuth's `JWT.KeyID` / `JWT.VerifyKeys`, with the "set both or neither"
+    invariant enforced at startup.
+  - **WebAuthn — scaffolded, disabled by default:** `WebAuthnCredentialProvider`
+    implemented on `StoreUserProvider` over a new WebAuthn credential
+    repository; auth-protected ceremony endpoints under
+    `/api/v1/system/auth/webauthn/*`; an optional migration
+    (`000004_webauthn_credentials`) applied only when enabling. goAuth does not
+    require the WebAuthn capability at Build while disabled, and the endpoints
+    return a "webauthn disabled" error until turned on. See
+    docs/enabling-webauthn.md.
+  - Introduced a thin `system` auth service so login/refresh/logout/MFA and the
+    WebAuthn ceremonies flow through handler -> service, matching the enforced
+    architecture.
+  - Documented the hybrid-mode guarantee and the `ModeJWTOnly` downgrade
+    security caveat in docs/policies.md.
+
+### Changed
+
+- The system module's login response gained an MFA-challenge shape and a
+  `remember_me` request field. `whoami` is now registered once (previously the
+  route was registered via duplicated branches).
+
+### Added
+
 - Decoupled tenancy behind a single config flag with clean seams.
   - New `TENANCY_ENABLED` (default `false`) and `TENANCY_ENFORCE_ISOLATION`
     config, surfaced as `config.TenancyConfig` with a lint rule

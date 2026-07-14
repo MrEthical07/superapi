@@ -36,6 +36,9 @@ type parseDurationResponse struct {
 type authLoginRequest struct {
 	Identifier string `json:"identifier"`
 	Password   string `json:"password"`
+	// RememberMe requests a durable session up to the configured ceiling
+	// (goAuth v0.4.0 remember-me).
+	RememberMe bool `json:"remember_me"`
 }
 
 // Validate ensures login credentials are present.
@@ -61,11 +64,49 @@ func (r authRefreshRequest) Validate() error {
 	return nil
 }
 
+type authMFAConfirmRequest struct {
+	// Challenge is the MFA session/challenge id returned by login.
+	Challenge string `json:"challenge"`
+	// Code is the second-factor code (for example a TOTP code).
+	Code string `json:"code"`
+	// Type selects the factor to complete (for example "totp" or "webauthn").
+	// Optional; empty lets goAuth use the challenge's preferred factor.
+	Type string `json:"type"`
+}
+
+// Validate ensures the challenge id and code are present.
+func (r authMFAConfirmRequest) Validate() error {
+	if strings.TrimSpace(r.Challenge) == "" {
+		return apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, "challenge is required")
+	}
+	if strings.TrimSpace(r.Code) == "" {
+		return apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, "code is required")
+	}
+	return nil
+}
+
+type authLogoutRequest struct {
+	// AccessToken is the token whose session should be revoked. Optional in the
+	// body when supplied via the Authorization header instead.
+	AccessToken string `json:"access_token"`
+}
+
+type authLogoutResponse struct {
+	LoggedOut bool `json:"logged_out"`
+}
+
 type authTokenResponse struct {
 	AccessToken       string `json:"access_token"`
 	RefreshToken      string `json:"refresh_token"`
 	AccessExpiresUTC  string `json:"access_expires_utc"`
 	AccessExpiresUnix int64  `json:"access_expires_unix"`
+	// MFARequired is true when login returned an MFA challenge instead of
+	// tokens. The token fields are empty in that case and the caller must
+	// complete the challenge via the MFA confirm endpoint.
+	MFARequired bool     `json:"mfa_required,omitempty"`
+	MFAChallenge string  `json:"mfa_challenge,omitempty"`
+	MFAType     string   `json:"mfa_type,omitempty"`
+	MFATypes    []string `json:"mfa_types,omitempty"`
 }
 
 // Register mounts system and auth demonstration routes.
@@ -74,25 +115,26 @@ type authTokenResponse struct {
 func (m *Module) Register(r httpx.Router) error {
 	r.Handle(http.MethodPost, "/system/parse-duration", httpx.Adapter(m.parseDuration))
 	r.Handle(http.MethodPost, "/api/v1/system/auth/login", httpx.Adapter(m.login))
+	r.Handle(http.MethodPost, "/api/v1/system/auth/mfa/confirm", httpx.Adapter(m.confirmMFA))
 	r.Handle(http.MethodPost, "/api/v1/system/auth/refresh", httpx.Adapter(m.refresh))
+	r.Handle(http.MethodPost, "/api/v1/system/auth/logout", httpx.Adapter(m.logout))
 
+	// whoami is registered once. Static route verification requires policies to
+	// be passed directly (no variadic spread), so the two policy shapes are
+	// expressed as literal r.Handle calls guarded by the limiter's presence.
 	if limiter := m.runtime.Limiter(); limiter != nil {
-		r.Handle(
-			http.MethodGet,
-			"/api/v1/system/whoami",
-			httpx.Adapter(m.whoami),
+		r.Handle(http.MethodGet, "/api/v1/system/whoami", httpx.Adapter(m.whoami),
 			policy.AuthRequired(m.runtime.AuthEngine(), m.runtime.AuthMode()),
 			policy.RateLimitWithKeyer(limiter, "system.whoami", m.rateRule, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
 		)
-		return nil
+	} else {
+		r.Handle(http.MethodGet, "/api/v1/system/whoami", httpx.Adapter(m.whoami),
+			policy.AuthRequired(m.runtime.AuthEngine(), m.runtime.AuthMode()),
+		)
 	}
 
-	r.Handle(
-		http.MethodGet,
-		"/api/v1/system/whoami",
-		httpx.Adapter(m.whoami),
-		policy.AuthRequired(m.runtime.AuthEngine(), m.runtime.AuthMode()),
-	)
+	m.registerWebAuthnRoutes(r)
+
 	return nil
 }
 
@@ -131,49 +173,55 @@ func (m *Module) parseDuration(_ *httpx.Context, req parseDurationRequest) (pars
 }
 
 func (m *Module) login(ctx *httpx.Context, req authLoginRequest) (authTokenResponse, error) {
-	engine, err := m.authEngine()
+	outcome, err := m.auth.login(ctx.Context(), req.Identifier, req.Password, req.RememberMe)
 	if err != nil {
 		return authTokenResponse{}, err
 	}
+	return buildLoginResponse(outcome)
+}
 
-	accessToken, refreshToken, err := engine.Login(ctx.Context(), strings.TrimSpace(req.Identifier), req.Password)
-	if err != nil {
-		return authTokenResponse{}, mapAuthEndpointError(err, "invalid credentials")
-	}
-
-	resp, err := buildAuthTokenResponse(accessToken, refreshToken)
+func (m *Module) confirmMFA(ctx *httpx.Context, req authMFAConfirmRequest) (authTokenResponse, error) {
+	outcome, err := m.auth.confirmMFA(ctx.Context(), req.Challenge, req.Code, req.Type)
 	if err != nil {
 		return authTokenResponse{}, err
 	}
-
-	return resp, nil
+	return buildLoginResponse(outcome)
 }
 
 func (m *Module) refresh(ctx *httpx.Context, req authRefreshRequest) (authTokenResponse, error) {
-	engine, err := m.authEngine()
+	accessToken, refreshToken, err := m.auth.refresh(ctx.Context(), req.RefreshToken)
 	if err != nil {
 		return authTokenResponse{}, err
 	}
-
-	accessToken, refreshToken, err := engine.Refresh(ctx.Context(), strings.TrimSpace(req.RefreshToken))
-	if err != nil {
-		return authTokenResponse{}, mapAuthEndpointError(err, "invalid refresh token")
-	}
-
-	resp, err := buildAuthTokenResponse(accessToken, refreshToken)
-	if err != nil {
-		return authTokenResponse{}, err
-	}
-
-	return resp, nil
+	return buildAuthTokenResponse(accessToken, refreshToken)
 }
 
-func (m *Module) authEngine() (*goauth.Engine, error) {
-	engine := m.runtime.AuthEngine()
-	if engine == nil {
-		return nil, apperr.New(apperr.CodeDependencyFailure, http.StatusServiceUnavailable, "auth engine unavailable")
+func (m *Module) logout(ctx *httpx.Context, req authLogoutRequest) (authLogoutResponse, error) {
+	token := strings.TrimSpace(req.AccessToken)
+	if token == "" {
+		token = bearerToken(ctx.Header("Authorization"))
 	}
-	return engine, nil
+	if token == "" {
+		return authLogoutResponse{}, apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, "access token is required")
+	}
+
+	if err := m.auth.logout(ctx.Context(), token); err != nil {
+		return authLogoutResponse{}, err
+	}
+	return authLogoutResponse{LoggedOut: true}, nil
+}
+
+// bearerToken extracts the token from an "Authorization: Bearer <token>" header.
+func bearerToken(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ""
+	}
+	const prefix = "Bearer "
+	if len(header) >= len(prefix) && strings.EqualFold(header[:len(prefix)], prefix) {
+		return strings.TrimSpace(header[len(prefix):])
+	}
+	return ""
 }
 
 func mapAuthEndpointError(err error, invalidMessage string) error {
@@ -203,6 +251,21 @@ func mapAuthEndpointError(err error, invalidMessage string) error {
 	}
 
 	return apperr.WithCause(apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, invalidMessage), err)
+}
+
+// buildLoginResponse turns a login/MFA-confirm outcome into the token response.
+// When the outcome is an MFA challenge it returns the challenge shape (no
+// tokens); otherwise it returns the token pair with parsed expiry.
+func buildLoginResponse(outcome loginOutcome) (authTokenResponse, error) {
+	if outcome.MFARequired {
+		return authTokenResponse{
+			MFARequired:  true,
+			MFAChallenge: outcome.MFASession,
+			MFAType:      outcome.MFAType,
+			MFATypes:     outcome.MFATypes,
+		}, nil
+	}
+	return buildAuthTokenResponse(outcome.AccessToken, outcome.RefreshToken)
 }
 
 func buildAuthTokenResponse(accessToken, refreshToken string) (authTokenResponse, error) {

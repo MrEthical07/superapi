@@ -84,6 +84,21 @@ policy.AuthRequired(m.authEngine, m.authMode)
 | Hybrid | `auth.ModeHybrid` | Validates JWT first; if Redis is available, also checks session. Falls back to JWT-only if Redis is down. |
 | Strict | `auth.ModeStrict` | Requires both valid JWT and active Redis session. Fails closed if Redis is unavailable. Most secure. |
 
+**Hybrid guarantee (goAuth v0.4.0).** A per-route mode wins over the engine's
+default. `AuthRequired(engine, ModeHybrid)` passes `ModeInherit` to the guard, so
+the route validates per the engine's configured `ValidationMode`; an explicit
+`ModeJWTOnly` or `ModeStrict` on the route overrides it for that route only.
+
+> **Security caveat — `ModeJWTOnly` is a downgrade.** A route that opts into
+> `auth.ModeJWTOnly` validates the JWT signature and claims only and **skips the
+> Redis session check**. That bypasses revocation, token-version, device-binding,
+> and account-status checks — a logged-out or disabled user's un-expired access
+> token will still pass. Only downgrade routes that are safe to serve from the
+> JWT alone (short-TTL, low-sensitivity reads). Never use `ModeJWTOnly` for
+> logout-sensitive, account-state-sensitive, or mutating routes. The logout
+> endpoint deliberately uses `LogoutByAccessToken`, which accepts an
+> expired-but-authentic token so a user can always end a session.
+
 **Injected AuthContext:**
 
 ```go

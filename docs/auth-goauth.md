@@ -1,6 +1,36 @@
 # Auth and goAuth Integration
 
-This document explains how authentication works in SuperAPI with goAuth, including runtime wiring, route behavior, and data flow through the new store-first architecture.
+This document explains how authentication works in SuperAPI with goAuth, including runtime wiring, route behavior, and data flow through the sqlc data layer.
+
+> Migration note: SuperAPI is on goAuth **v0.4.0**. See §0 for the v0.4.0
+> features wired in (remember-me, MFA-aware login, graceful logout, session
+> ceiling, sliding-window limiter, Ed25519 key rotation, and WebAuthn scaffolded
+> off). Some sections below still describe the pre-v0.4.0 model and are being
+> migrated; the authoritative field/method names are in
+> `internal/core/auth/config.go` and the system module.
+
+## 0. goAuth v0.4.0 features
+
+Configured in `internal/core/auth/config.go` (the customization point) and
+surfaced by the system module:
+
+- **Remember-me + session ceiling.** Login accepts `remember_me`; the absolute
+  lifetime is capped by `AUTH_MAX_SESSION_DURATION`.
+- **MFA-aware login.** When an account requires a second factor, login returns
+  an MFA challenge (`mfa_required`, `mfa_challenge`, `mfa_type`, `mfa_types`)
+  instead of tokens. Complete it at `POST /api/v1/system/auth/mfa/confirm`.
+- **Graceful logout.** `POST /api/v1/system/auth/logout` revokes the session via
+  `LogoutByAccessToken`, which accepts an expired-but-authentic access token.
+- **Sliding-window limiter.** `AUTH_LIMITER_WINDOW_MODE=sliding` switches
+  goAuth's internal auth-abuse limiter algorithm (separate from SuperAPI's route
+  rate limiter).
+- **Ed25519 key rotation.** `AUTH_KEY_ID` + `AUTH_VERIFY_KEYS` populate goAuth's
+  `JWT.KeyID` / `JWT.VerifyKeys` for zero-downtime rotation (set both or neither).
+- **WebAuthn** — scaffolded, disabled by default. See docs/enabling-webauthn.md.
+
+Endpoints (system module): `login`, `mfa/confirm`, `refresh`, `logout`,
+`whoami`, and `webauthn/*`. Login/refresh/logout/MFA flow through a thin
+`authService` (handler -> service), matching the enforced architecture.
 
 ## 1. Big Picture
 
@@ -10,26 +40,28 @@ The integration boundary did not change:
 
 - goAuth still receives a goauth.UserProvider
 
-What changed:
+Data path (sqlc data layer):
 
-- user persistence now goes through repository + store layers
-
-Current path:
-
-StoreUserProvider -> UserRepository -> RelationalStore -> Postgres
+StoreUserProvider -> UserRepository -> storage.Postgres (sqlc queries) -> pgx
 
 ## 2. Key Files
 
 - internal/core/auth/goauth_provider.go
 	- builds goAuth engine and maps auth mode
-- internal/core/auth/provider_sqlc.go
-	- StoreUserProvider implementation used by goAuth
+- internal/core/auth/config.go
+	- goAuth configuration customization point (v0.4.0 features)
+- internal/core/auth/provider_store.go
+	- StoreUserProvider (UserProvider + WebAuthnCredentialProvider)
 - internal/core/auth/user_repository.go
-	- repository implementation over relational store
+	- auth repository over the sqlc storage boundary
+- internal/core/auth/webauthn_repository.go
+	- WebAuthn credential repository (optional; used when WebAuthn is enabled)
 - internal/core/storage/postgres_store.go
-	- relational execution and transaction behavior
+	- sqlc query boundary and transaction behavior
 - internal/core/app/deps.go
-	- startup wiring of provider/repository/store/engine
+	- startup wiring of provider/repository/engine
+- internal/modules/system/service.go
+	- thin auth service (login/refresh/logout/MFA/WebAuthn ceremonies)
 - internal/core/policy/auth.go
 	- route auth policy behavior and context injection
 

@@ -160,10 +160,16 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init auth provider: user repository unavailable")
 		}
 
+		// The provider always carries the WebAuthn credential capability so
+		// enabling WebAuthn is a config + optional migration step. goAuth only
+		// exercises it when WEBAUTHN_ENABLED is set.
+		userProvider := auth.NewStoreUserProvider(userRepo).
+			WithWebAuthnRepository(auth.NewWebAuthnCredentialRepository(deps.DB))
+
 		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{
 			Enabled:          cfg.Tenancy.Enabled,
 			EnforceIsolation: cfg.Tenancy.EnforceIsolation,
-		}, auth.NewStoreUserProvider(userRepo))
+		}, userProvider)
 		if err != nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()
