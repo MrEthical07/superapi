@@ -116,6 +116,29 @@ Lint dependency rules:
 - AUTH_ENABLED=true requires REDIS_ENABLED=true
 - AUTH_ENABLED=true requires POSTGRES_ENABLED=true
 
+## 7a. Tenancy Variables
+
+| Env var | Default | Notes |
+|---|---|---|
+| TENANCY_ENABLED | false | enables multi-tenant policy, cache, and rate-limit behavior |
+| TENANCY_ENFORCE_ISOLATION | false | requests goAuth strict tenant isolation; only meaningful when TENANCY_ENABLED=true |
+
+Behavior:
+
+- With TENANCY_ENABLED=false (default), tenancy is inert. Preset policies do not
+  default to tenant scoping/keying (authenticated cache reads vary by user id
+  instead of tenant id), and a `{tenant_id}` path parameter is treated as an
+  ordinary parameter rather than forcing tenant policies onto the route.
+- With TENANCY_ENABLED=true, tenant scoping/keying defaults return and
+  `{tenant_id}` routes must carry `TenantRequired` + `TenantMatchFromPath`. The
+  flag is also propagated to goAuth via `MultiTenant.Enabled`.
+
+Lint dependency rules:
+
+- TENANCY_ENFORCE_ISOLATION=true requires TENANCY_ENABLED=true
+
+See docs/policies.md and docs/removing-tenancy.md.
+
 ## 8. Rate-Limit Variables
 
 | Env var | Default | Notes |

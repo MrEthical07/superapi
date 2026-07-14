@@ -39,7 +39,19 @@ import (
 	goauth "github.com/MrEthical07/goAuth"
 )
 
-func ProjectGoAuthConfig(mode Mode) (goauth.Config, error) {
+// TenancySettings controls goAuth multi-tenant behavior. It is populated from
+// application config (TENANCY_ENABLED / TENANCY_ENFORCE_ISOLATION) and passed
+// into ProjectGoAuthConfig so the goAuth engine matches the app-wide tenancy
+// decision. The zero value leaves multi-tenant behavior off.
+type TenancySettings struct {
+	// Enabled turns on goAuth multi-tenant handling.
+	Enabled bool
+	// EnforceIsolation requests strict tenant isolation checks (only meaningful
+	// when Enabled is true).
+	EnforceIsolation bool
+}
+
+func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, error) {
 	cfg := goauth.DefaultConfig()
 
 	// ------------------------------------------------------------
@@ -47,6 +59,17 @@ func ProjectGoAuthConfig(mode Mode) (goauth.Config, error) {
 	// ------------------------------------------------------------
 
 	cfg.ValidationMode = toGoAuthValidationMode(mode)
+
+	// ------------------------------------------------------------
+	// Multi-Tenant
+	// ------------------------------------------------------------
+	//
+	// Follows the application-wide tenancy decision (TENANCY_ENABLED). When
+	// tenancy is off this leaves goAuth's tenant handling inert; the default
+	// JWT carries no tenant, so enabling it only matters once principals carry
+	// a tenant id. See docs/policies.md and the "Removing tenancy" guide.
+	cfg.MultiTenant.Enabled = tenancy.Enabled
+	cfg.MultiTenant.EnforceIsolation = tenancy.Enabled && tenancy.EnforceIsolation
 
 	// ------------------------------------------------------------
 	// JWT Behavior

@@ -7,7 +7,34 @@ All notable changes to this template are documented in this file.
 This section accumulates the v0.8.0 sweep as it lands, one phase at a time. It is
 not yet released. See `docs/v0.8.0-design.md` for the full plan.
 
+### Added
+
+- Decoupled tenancy behind a single config flag with clean seams.
+  - New `TENANCY_ENABLED` (default `false`) and `TENANCY_ENFORCE_ISOLATION`
+    config, surfaced as `config.TenancyConfig` with a lint rule
+    (`TENANCY_ENFORCE_ISOLATION` requires `TENANCY_ENABLED`).
+  - The policy engine gained a tenancy toggle (`policy.SetTenancyEnabled` /
+    `policy.TenancyEnabled`), applied once at startup from config before any
+    route registers. Its package default is enabled, so tests and consumers that
+    never configure it keep strict tenant behavior.
+  - Tenant policies and presets (`TenantRequired`, `TenantMatchFromPath`,
+    `TenantRead`, `TenantWrite`) moved into `internal/core/policy/tenant.go`.
+  - goAuth `MultiTenant.Enabled` / `EnforceIsolation` now follow the flag,
+    wired via a new `auth.TenancySettings` argument threaded through
+    `ProjectGoAuthConfig` and `NewGoAuthEngine`.
+  - Added `docs/removing-tenancy.md`, a tenancy-optional note in
+    `docs/policies.md`, and a Tenancy section in `docs/environment-variables.md`.
+
 ### Changed
+
+- **Tenancy is now off by default.** When `TENANCY_ENABLED=false` (the new
+  default), preset policy chains no longer default to tenant scoping/keying:
+  authenticated cache reads vary by user id instead of tenant id, and the route
+  validator treats a `{tenant_id}` path parameter as an ordinary parameter
+  rather than forcing `TenantRequired` + `TenantMatchFromPath` onto the route.
+  Set `TENANCY_ENABLED=true` to restore the previous tenant-strict behavior.
+  The tenant policies remain available and enforce correctly when attached
+  explicitly.
 
 - Standardized the relational data layer on sqlc and collapsed the bespoke
   store/operations abstraction to a single thin transaction boundary.

@@ -13,6 +13,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/db"
 	"github.com/MrEthical07/superapi/internal/core/metrics"
+	"github.com/MrEthical07/superapi/internal/core/policy"
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 	"github.com/MrEthical07/superapi/internal/core/readiness"
 	"github.com/MrEthical07/superapi/internal/core/storage"
@@ -69,6 +70,11 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 		RateLimit: cfg.RateLimit,
 		Cache:     cfg.Cache,
 	}
+
+	// Apply the tenancy decision to the policy engine before any module
+	// registers routes or constructs presets, so preset defaults and route
+	// validation reflect TENANCY_ENABLED.
+	policy.SetTenancyEnabled(cfg.Tenancy.Enabled)
 
 	if cfg.Postgres.Enabled {
 		pool, err := db.NewPool(ctx, cfg.Postgres)
@@ -154,7 +160,10 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init auth provider: user repository unavailable")
 		}
 
-		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.NewStoreUserProvider(userRepo))
+		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{
+			Enabled:          cfg.Tenancy.Enabled,
+			EnforceIsolation: cfg.Tenancy.EnforceIsolation,
+		}, auth.NewStoreUserProvider(userRepo))
 		if err != nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()

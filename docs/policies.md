@@ -135,7 +135,18 @@ policy.RequireAnyPerm("project.write", "project.admin")
 
 ## 3. Tenant policies
 
-File: `internal/core/policy/auth.go`
+File: `internal/core/policy/tenant.go`
+
+> **Tenancy is optional (gated by `TENANCY_ENABLED`, default `false`).**
+> When tenancy is disabled, the preset chains do not default to tenant
+> scoping/keying (authenticated cache reads vary by user id instead), and the
+> route validator treats a `{tenant_id}` path segment as an ordinary parameter
+> rather than forcing `TenantRequired` + `TenantMatchFromPath` onto the route.
+> The tenant policies below are still available and enforce correctly whenever
+> you attach them explicitly; the dependency rule "`TenantMatchFromPath`
+> requires `TenantRequired`" holds regardless of the flag. When
+> `TENANCY_ENABLED=true`, `{tenant_id}` routes must carry the tenant policies.
+> To remove tenancy entirely, see docs/removing-tenancy.md.
 
 ### TenantRequired()
 
