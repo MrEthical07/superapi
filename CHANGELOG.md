@@ -2,6 +2,24 @@
 
 All notable changes to this template are documented in this file.
 
+## Unreleased — v0.8.0 sweep (in progress)
+
+This section accumulates the v0.8.0 sweep as it lands, one phase at a time. It is
+not yet released. See `docs/v0.8.0-design.md` for the full plan.
+
+### Changed
+
+- Upgraded the goAuth dependency from `v0.3.2` to the published `v0.4.0`.
+  - Requires `github.com/MrEthical07/goAuth v0.4.0` directly from the module
+    proxy; no `replace` directive is used.
+  - Pulls in goAuth's WebAuthn transitive dependencies unconditionally
+    (`go-webauthn/webauthn`, `go-webauthn/x`, `go-tpm`, `fxamacker/cbor`, and
+    supporting modules). These are compiled in but no WebAuthn behavior is
+    enabled at this phase; the API's usage of goAuth is unchanged and the
+    upgrade is behavior-inert.
+  - Verified with `go mod tidy`, `go build ./...`, and `go test ./...`: clean
+    build and green tests with no behavior change.
+
 ## v0.7.3 (2026-06-08)
 
 ### Added
