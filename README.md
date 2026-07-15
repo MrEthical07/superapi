@@ -22,7 +22,8 @@ It provides:
 - a module-oriented API architecture
 - policy-based middleware wiring
 - built-in auth, caching, rate limiting, and observability primitives
-- a store-first data layer with strict boundaries
+- an sqlc-based relational data layer with strict boundaries
+- an optional, deletable document (NoSQL) store for modules that need it
 
 Start here:
 - Overview: [docs/overview.md](docs/overview.md)
@@ -30,28 +31,32 @@ Start here:
 
 ## Data Layer Architecture
 
-Enforced flow:
+Enforced flow (relational):
 
-Service -> Repository -> Store -> Backend
+Service -> Repository -> sqlc queries -> pgx (pool or transaction)
 
 Hard rules:
 - services call repositories for all data operations
-- services may call store.WithTx(...) only to define transaction boundaries for write operations; they must not call store execution methods (Execute, Query, etc.)
-- repositories own all data access logic and call store execution methods (Execute, Query, etc.)
+- services may call storage.Postgres.WithTx(...) only to define transaction boundaries for write operations; they must not call sqlc/pgx directly
+- repositories obtain sqlc queries via storage.Postgres.Queries(ctx) and own all query + mapping logic
 - repositories must not control transaction boundaries
-- handlers never call DB/store directly
-- one storage type per module (relational or document)
-- transaction API exists at store layer and is used only for write paths; services define the boundary via store.WithTx and repositories perform all store execution calls inside that scope
+- handlers never call the DB directly
+- sqlc/pgx types are implementation details and must not appear on service/repository interfaces
+- document persistence, when needed, comes from the optional internal/storage/document package wired per module (no if-sql-else-mongo branching)
+
+See [docs/document-store.md](docs/document-store.md) for the optional document store and a drop-in MongoDB adapter.
 
 ## Features
 
 - Module system for explicit, composable API domains
 - Strict startup validation for runtime and policy configuration
-- goAuth integration for route-level authentication workflows
+- goAuth v0.4.0 integration for route-level auth: remember-me, graceful logout, MFA-aware login, sliding-window abuse limiting, Ed25519 key rotation, and WebAuthn (scaffolded, off by default)
+- Optional multi-tenancy behind a single `TENANCY_ENABLED` flag with clean seams (off by default; cleanly deletable)
+- sqlc-based relational data layer with a thin transaction boundary and strict repository/service boundaries
+- Optional, self-contained document (NoSQL) store — wire it per module or delete it; a MongoDB adapter is documented and it shares nothing with the response cache
 - Redis-backed response cache with dynamic TagSpecs invalidation and Redis-backed rate limiting
 - Browser/proxy cache directives with policy.CacheControl(...)
 - Observability stack: metrics, tracing, and structured logs
-- Store-first data layer contracts in internal/core/storage
 - Built-in scaffolder for generating production-oriented modules
 
 ## Acknowledgments
@@ -151,6 +156,7 @@ Guides:
 - Modules: [docs/modules.md](docs/modules.md)
 - Policies: [docs/policies.md](docs/policies.md)
 - Cache guide: [docs/cache-guide.md](docs/cache-guide.md)
+- Document store (optional NoSQL): [docs/document-store.md](docs/document-store.md)
 - Auth integration: [docs/auth-goauth.md](docs/auth-goauth.md)
 - Auth bootstrap: [docs/auth-bootstrap.md](docs/auth-bootstrap.md)
 - Performance runbook: [docs/performance-testing.md](docs/performance-testing.md)

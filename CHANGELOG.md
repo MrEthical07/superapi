@@ -7,6 +7,15 @@ All notable changes to this template are documented in this file.
 This section accumulates the v0.8.0 sweep as it lands, one phase at a time. It is
 not yet released. See `docs/v0.8.0-design.md` for the full plan.
 
+### Documentation
+
+- Updated `README.md` to reflect the swept surface: the optional document store
+  (with a link to docs/document-store.md), goAuth v0.4.0 auth features, the
+  optional tenancy flag, and the sqlc-based relational data-layer rules
+  (replacing the stale `Store -> Backend` / `store.Execute` description). The
+  full release-doc pass and a "why this template / highlights" positioning
+  section are planned for the final phases of the sweep.
+
 ### Added
 
 - Added an optional, self-contained document (NoSQL) store package,
