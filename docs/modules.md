@@ -60,16 +60,16 @@ What each file should do:
 
 Every module must follow:
 
-Service -> Repository -> Store -> Backend
+Service -> Repository -> sqlc queries -> pgx (pool or transaction)
 
 Do not bypass this flow.
 
 Forbidden patterns:
 
-- handler calling store directly
-- service calling store directly
-- service calling driver directly
-- repository calling pgx/redis/document driver directly
+- handler calling the DB directly
+- service running queries directly (`Queries(ctx)`)
+- service touching pgx directly
+- repository calling pgx/redis drivers directly (use `Queries(ctx)`)
 
 ## 4. Layer Responsibilities (Practical Version)
 
@@ -113,17 +113,15 @@ Repository should not:
 - include unrelated business workflow decisions
 - leak backend query objects into public contracts
 
-### 4.4 Store layer
+### 4.4 Data-access boundary (`storage.Postgres`)
 
-Store should:
+The boundary (`DB()`) should be used as:
 
-- execute repository-defined operations
-- provide transaction behavior via WithTx
+- `DB().Queries(ctx)` in repositories to run generated sqlc queries
+- `DB().WithTx(ctx, fn)` in services to define write transaction boundaries
 
-Store should not:
-
-- know module domain types
-- encode module-specific semantics
+It has no query surface of its own and never knows module domain types — sqlc
+row structs are mapped to domain models inside the repository.
 
 ## 5. Dependency Injection In Modules
 
@@ -197,7 +195,7 @@ Treat generated code as a baseline, not as final architecture-complete business 
 After generating a module, verify and refine:
 
 - update service/repository contracts to domain-focused shape
-- ensure service -> repository -> store flow is respected
+- ensure the service -> repository -> `Queries(ctx)` flow is respected
 - add route policies in correct order
 - add tests for use-cases and policy-protected routes
 
@@ -218,9 +216,9 @@ Common checks before merge:
 
 ## 11. Common Mistakes And Fixes
 
-Mistake: service imports driver packages
+Mistake: service imports pgx/driver packages
 
-- Fix: move backend logic into repository/store operation code
+- Fix: move query code into the repository (`Queries(ctx)`)
 
 Mistake: handler validates business rules deeply
 
@@ -251,5 +249,6 @@ Mistake: authenticated cache route has no user/tenant vary key
 
 - [docs/module_guide.md](module_guide.md)
 - [docs/crud-examples.md](crud-examples.md)
+- [docs/transactions.md](transactions.md)
 - [docs/policies.md](policies.md)
 - [docs/cache-guide.md](cache-guide.md)

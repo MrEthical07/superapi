@@ -14,7 +14,7 @@ Out of the box, SuperAPI provides:
 - Built-in goAuth integration for login, refresh, and protected routes.
 - Redis-backed response caching and rate limiting.
 - Observability primitives (metrics, tracing, structured logs).
-- A store-first data layer architecture with clear boundaries.
+- An sqlc-based relational data layer with clear, enforced boundaries.
 
 In short: it gives you a "production-ready skeleton" where architecture rules are enforced, not optional.
 
@@ -49,16 +49,16 @@ Client Request
 -> Handler
 -> Service
 -> Repository
--> Store
--> Backend (Postgres/Document backend)
+-> sqlc queries
+-> pgx (pool or transaction)
 -> Response envelope
 
 ### 2.2 Data flow
 
 Service
 -> Repository
--> Store
--> Backend
+-> sqlc queries
+-> pgx (pool or transaction)
 
 This second flow is the most important architecture rule in the repo.
 
@@ -66,7 +66,7 @@ This second flow is the most important architecture rule in the repo.
 
 The enforced architecture is:
 
-Service -> Repository -> Store -> Backend
+Service -> Repository -> sqlc queries -> pgx (pool or transaction)
 
 What each layer does:
 
@@ -75,31 +75,33 @@ What each layer does:
 	- No business logic, no DB access.
 - Service:
 	- Business workflow and validation logic.
-	- Calls repository only.
-	- Chooses transaction boundaries for write paths.
+	- Calls the repository only.
+	- Opens write transactions via `DB().WithTx(...)`, but runs no queries.
 - Repository:
-	- Data access logic and query composition.
-	- Maps storage rows/documents to domain models.
-	- Calls store only.
-- Store:
-	- Execution and transaction mechanism.
-	- Knows backend behavior, not domain behavior.
+	- Data-access logic and query composition.
+	- Obtains generated queries via `DB().Queries(ctx)`.
+	- Maps sqlc rows to domain models.
+- Data-access boundary (`storage.Postgres`):
+	- Hands out sqlc queries bound to the active transaction or the pool.
+	- Owns the transaction lifecycle; has no query surface of its own.
 
 Hard constraints:
 
-- Services must not call stores directly.
-- Repositories must not call drivers directly.
-- Handlers must not call DB/store.
-- One storage type per module (relational or document).
+- Services must not run queries directly.
+- Repositories must not manage transactions.
+- Handlers must not call the DB.
+- One storage type per module (relational, or the optional document store).
 
 ## 4. Current Backend Status
 
 As of now:
 
-- Relational store is fully wired through Postgres startup initialization.
-- Document store contracts exist and can be used by modules.
-- A document no-op store implementation exists as a contract-safe placeholder.
-- Auth persistence now goes through repository + store layers.
+- The relational data layer (sqlc over pgx) is fully wired through Postgres
+  startup initialization.
+- An optional, self-contained document (NoSQL) store is available for modules
+  that need it (`internal/storage/document`), excluded from the binary until
+  imported.
+- Auth persistence goes through the repository + sqlc data layer like any module.
 
 ## 5. Built-In Routes You Can Test Immediately
 
@@ -134,7 +136,7 @@ If this is your first day with the repo, follow this sequence:
 2. Hit health endpoints and one system endpoint.
 3. Read module author guide and inspect one existing module.
 4. Generate a new module with module scaffolder.
-5. Add one read route and one write route using service -> repository -> store flow.
+5. Add one read route and one write route using the service -> repository -> `Queries(ctx)` flow.
 6. Add policies in correct order and run verifier/build/tests.
 
 ## 8. Quick Start Modes
@@ -162,12 +164,12 @@ See environment docs for exact variables and defaults.
 
 Common confusion points:
 
-- "Can I call store from service?"
-	- No. Service should call repository only.
-- "Can repository return driver rows?"
-	- No. Repository should return domain models/errors.
+- "Can I run queries from the service?"
+	- No. The service calls the repository only; it may open a `WithTx` boundary.
+- "Can the repository return sqlc/pgx rows?"
+	- No. The repository returns domain models/errors.
 - "Should reads always use transactions?"
-	- No. Write paths use transactions; reads are direct unless there is a specific requirement.
+	- No. Write paths use `WithTx`; reads are direct unless there is a specific requirement.
 - "Can one module support SQL and document at once?"
 	- No. Pick one storage type per module.
 
@@ -179,9 +181,10 @@ Read these in order:
 2. [docs/modules.md](modules.md)
 3. [docs/module_guide.md](module_guide.md)
 4. [docs/crud-examples.md](crud-examples.md)
-5. [docs/auth-goauth.md](auth-goauth.md)
-6. [docs/workflows.md](workflows.md)
-7. [docs/environment-variables.md](environment-variables.md)
+5. [docs/transactions.md](transactions.md)
+6. [docs/auth-goauth.md](auth-goauth.md)
+7. [docs/workflows.md](workflows.md)
+8. [docs/environment-variables.md](environment-variables.md)
 
 ## 11. Final Takeaway
 

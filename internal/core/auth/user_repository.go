@@ -138,7 +138,7 @@ func (r *sqlcUserRepository) UpdateStatus(ctx context.Context, userID string, st
 // --- mapping helpers ---
 
 // mapUserRow projects a generated sqlc User row onto the storage-layer model,
-// mirroring the COALESCE(role,'') / id::text behavior of the prior raw SQL.
+// mirroring the COALESCE(role, empty) / id::text behavior of the prior raw SQL.
 func mapUserRow(row sqlcgen.User) StoredUser {
 	return StoredUser{
 		ID:           uuidToString(row.ID),
@@ -178,7 +178,7 @@ func uuidToString(id pgtype.UUID) string {
 }
 
 // roleToText maps an empty role to a NULL text column (matching the old
-// NULLIF($3,'') insert) and a non-empty role to a valid text value.
+// NULLIF on an empty string insert) and a non-empty role to a valid text value.
 func roleToText(role string) pgtype.Text {
 	trimmed := strings.TrimSpace(role)
 	if trimmed == "" {

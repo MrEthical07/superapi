@@ -1,13 +1,9 @@
 # Auth and goAuth Integration
 
-This document explains how authentication works in SuperAPI with goAuth, including runtime wiring, route behavior, and data flow through the sqlc data layer.
-
-> Migration note: SuperAPI is on goAuth **v0.4.0**. See §0 for the v0.4.0
-> features wired in (remember-me, MFA-aware login, graceful logout, session
-> ceiling, sliding-window limiter, Ed25519 key rotation, and WebAuthn scaffolded
-> off). Some sections below still describe the pre-v0.4.0 model and are being
-> migrated; the authoritative field/method names are in
-> `internal/core/auth/config.go` and the system module.
+This document explains how authentication works in SuperAPI with goAuth (v0.4.0),
+including runtime wiring, route behavior, and data flow through the sqlc data
+layer. The authoritative field/method names live in
+`internal/core/auth/config.go` and the system module.
 
 ## 0. goAuth v0.4.0 features
 
@@ -72,10 +68,11 @@ Auth wiring is performed during dependency initialization.
 Sequence when auth is enabled:
 
 1. Postgres pool is initialized.
-2. Relational store is created from pool.
-3. UserRepository is created from relational store.
-4. StoreUserProvider is created from repository.
-5. goAuth engine is built with redis + provider.
+2. The `storage.Postgres` boundary is created from the pool.
+3. UserRepository is created over that boundary (`NewRelationalUserRepository`).
+4. StoreUserProvider is created from the repository (optionally with the WebAuthn
+   credential repository).
+5. The goAuth engine is built with Redis + provider + tenancy settings.
 
 If required dependencies are missing, startup fails fast.
 
@@ -130,13 +127,13 @@ Routes are registered in internal/modules/system/routes.go.
 
 Flow:
 
-1. handler validates identifier/password
-2. handler calls goAuth engine Login
+1. handler validates identifier/password and calls the module's authService
+2. authService calls the goAuth engine (`LoginWithOptions`, honoring remember-me)
 3. goAuth uses StoreUserProvider for user lookup
 4. provider calls UserRepository
-5. repository executes relational operation via store
-6. store executes against pgx runner
-7. goAuth validates and issues tokens
+5. repository runs `pg.Queries(ctx).GetAuthUserByLogin(...)` on the pool
+6. the generated row maps to a goAuth user record
+7. goAuth issues tokens, or returns an MFA challenge when a second factor is required
 
 ### 7.2 POST /api/v1/system/auth/refresh
 
@@ -167,25 +164,29 @@ StoreUserProvider methods cover goAuth user-provider needs:
 - CreateUser
 - UpdateAccountStatus
 - TOTP/backup-code methods (currently stubs)
+- WebAuthn credential methods (delegated to the WebAuthn repository when wired;
+  see docs/enabling-webauthn.md)
 
 Mapping behavior:
 
-- repository not-found error is translated to goauth.ErrUserNotFound
-- storage projection is mapped to goauth.UserRecord
+- the repository's not-found error (`ErrAuthUserNotFound`) is translated to
+  goauth.ErrUserNotFound
+- the storage projection (`StoredUser`) is mapped to goauth.UserRecord
 
 Result:
 
 - goAuth contract remains compatible
-- persistence internals are architecture-compliant
+- persistence internals follow the enforced sqlc data layer
 
-## 9. Why The Store-Backed Provider Matters
+## 9. Why The sqlc-Backed Provider Matters
 
 Benefits:
 
-- auth persistence follows same architecture as modules
-- no direct query-object coupling in provider construction
-- easier future backend evolution behind store contracts
-- cleaner testability at repository and provider boundaries
+- auth persistence follows the same architecture as any module (repository over
+  `storage.Postgres`, mapping generated rows to domain projections)
+- no sqlc/pgx types leak into provider construction
+- transactional writes (e.g. password reset) can join a `WithTx` boundary
+- cleaner testability at the repository and provider boundaries
 
 ## 10. Common Integration Mistakes
 

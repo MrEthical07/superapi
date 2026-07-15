@@ -1,6 +1,6 @@
 [![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v0.7.0-brightgreen)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.8.0-brightgreen)](CHANGELOG.md)
 
 # SuperAPI
 
@@ -185,6 +185,7 @@ Guides:
 - Overview: [docs/overview.md](docs/overview.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
 - Modules: [docs/modules.md](docs/modules.md)
+- Transactions: [docs/transactions.md](docs/transactions.md)
 - Policies: [docs/policies.md](docs/policies.md)
 - Cache guide: [docs/cache-guide.md](docs/cache-guide.md)
 - Document store (optional NoSQL): [docs/document-store.md](docs/document-store.md)
@@ -222,7 +223,7 @@ per-feature "disable vs delete" checklist (exact files and wiring edits). Relate
 - This template is distributed as a snapshot.
 - Generated repositories do not receive automatic upstream updates.
 - Upgrades are manual: compare changes, port intentionally, and validate with tests/build.
-- Current public template baseline: v0.7.0 (pre-1.0 by intent).
+- Current public template baseline: v0.8.0 (pre-1.0 by intent).
 
 ## Release Hygiene
 

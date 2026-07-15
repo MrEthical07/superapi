@@ -103,10 +103,10 @@ type authTokenResponse struct {
 	// MFARequired is true when login returned an MFA challenge instead of
 	// tokens. The token fields are empty in that case and the caller must
 	// complete the challenge via the MFA confirm endpoint.
-	MFARequired bool     `json:"mfa_required,omitempty"`
-	MFAChallenge string  `json:"mfa_challenge,omitempty"`
-	MFAType     string   `json:"mfa_type,omitempty"`
-	MFATypes    []string `json:"mfa_types,omitempty"`
+	MFARequired  bool     `json:"mfa_required,omitempty"`
+	MFAChallenge string   `json:"mfa_challenge,omitempty"`
+	MFAType      string   `json:"mfa_type,omitempty"`
+	MFATypes     []string `json:"mfa_types,omitempty"`
 }
 
 // Register mounts system and auth demonstration routes.
