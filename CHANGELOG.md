@@ -47,8 +47,14 @@ not yet released. See `docs/v0.8.0-design.md` for the full plan.
   (with a link to docs/document-store.md), goAuth v0.4.0 auth features, the
   optional tenancy flag, and the sqlc-based relational data-layer rules
   (replacing the stale `Store -> Backend` / `store.Execute` description). The
-  full release-doc pass and a "why this template / highlights" positioning
-  section are planned for the final phases of the sweep.
+  full release-doc pass is planned for the final phase of the sweep.
+
+- Added positioning to `README.md`: a "Why SuperAPI / Problems It Solves"
+  problem→solution table (auth lifecycle, cache/rate-limit keying, tenant
+  isolation, data-layer discipline, startup misconfiguration, observability,
+  and lock-in) and a "Highlights" section stating the differentiators, both
+  after "What This Is". Mirrored a shortened "Why This Template" section into
+  `docs/overview.md`. Positioning only; no behavior or feature-list change.
 
 ### Added
 

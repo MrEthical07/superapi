@@ -18,6 +18,25 @@ Out of the box, SuperAPI provides:
 
 In short: it gives you a "production-ready skeleton" where architecture rules are enforced, not optional.
 
+## 1a. Why This Template (Problems It Solves)
+
+Standing up a production Go SaaS backend means solving the same easy-to-get-wrong
+problems every time. SuperAPI solves them and enforces the solution:
+
+- **Auth is a lifecycle, not a login handler.** goAuth v0.4.0 gives you refresh, graceful logout, remember-me, MFA-aware login, session ceilings, key rotation, and abuse limiting — not a JWT snippet you grow yourself.
+- **Cache/rate-limit keys are a footgun.** Keying is declared per route (explicit `VaryBy`/scope + tag invalidation), so you don't leak one user's cached response to another.
+- **Multi-tenancy is risky to retrofit.** It lives behind one `TENANCY_ENABLED` flag with clean seams: zero cost when off, first-class isolation when on, deletable if never needed.
+- **Data-access discipline erodes.** One enforced flow (Service → Repository → sqlc → pgx) is checked by a static verifier that fails the build on violations — there is no second pattern to drift toward.
+- **Misconfiguration ships silently.** Startup linting rejects unsafe/contradictory config before the server takes traffic.
+- **Observability is always "later".** Metrics, tracing, and structured logs are wired in from day one.
+- **Templates lock you in.** Every optional subsystem disables by config (zero code) or deletes cleanly — see [trim-to-what-you-need.md](trim-to-what-you-need.md).
+
+**What makes it good:** one enforced data-layer architecture (not two), policy-ordered
+middleware with fail-fast static verification, secure-by-default production paths, a
+real auth engine, and features that are genuinely optional in both directions. It is a
+*template* (a snapshot, no auto-updates) and pre-1.0 by intent — port upgrades manually
+and validate with tests and the verifier.
+
 ## 2. The Core Mental Model
 
 There are two core flows you should remember.

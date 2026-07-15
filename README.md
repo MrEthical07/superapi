@@ -29,6 +29,37 @@ Start here:
 - Overview: [docs/overview.md](docs/overview.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
 
+## Why SuperAPI / Problems It Solves
+
+Standing up a production Go SaaS backend from scratch means solving the same
+hard, easy-to-get-wrong problems every time. Most templates hand you folders and
+leave those problems to you. SuperAPI solves them, and enforces the solution so
+it does not rot as the codebase grows.
+
+| The problem you'd otherwise solve yourself | How SuperAPI solves it |
+|---|---|
+| **Auth lifecycle is more than login.** Refresh, graceful logout, remember-me, MFA, session ceilings, key rotation, abuse limiting — hand-rolling these is where security bugs live. | A real auth engine ([goAuth](https://github.com/MrEthical07/goAuth) v0.4.0) wired at the route level: remember-me, graceful logout, MFA-aware login, sliding-window abuse limiting, Ed25519 key rotation, and WebAuthn (scaffolded, off by default). Not a toy JWT snippet. |
+| **Cache and rate-limit keys are a footgun.** Cache a response under the wrong key and you leak one user's data to another; key a limiter wrong and you throttle everyone or no one. | Policy-driven caching and rate limiting with explicit `VaryBy`/scope keying and tag-based invalidation — the keying is declared per route, not improvised in handlers. |
+| **Multi-tenancy is hard to add later and risky to get wrong.** Isolation leaks are catastrophic and retrofitting tenant-awareness touches everything. | Tenancy lives behind one `TENANCY_ENABLED` flag with clean policy seams. Off by default with zero cost; when on, tenant isolation is a first-class policy — and it deletes cleanly if you never need it. |
+| **Data-access discipline erodes.** One "quick" raw query in a handler, one service reaching past its repository, and the architecture is gone. | One enforced flow — Service → Repository → sqlc → pgx — checked by a static verifier (`superapi-verify`) that fails the build on violations. There is no second pattern to drift toward. |
+| **Misconfiguration ships silently.** A bad env combo (enforce isolation without tenancy, auth without its backing store) becomes a 3 a.m. incident. | Fail-fast startup linting rejects unsafe/contradictory configuration before the server accepts traffic. |
+| **Observability is always "later".** Metrics, tracing, and structured logs get bolted on after the incident that needed them. | Metrics, tracing, and structured logging are wired into the middleware chain from day one — on by default, toggleable, not an afterthought. |
+| **Templates lock you in.** You inherit Mongo, or auth, or a cache you don't want, and ripping it out breaks everything. | Every optional subsystem is genuinely optional: disable by config (zero code) or delete cleanly (bounded, greppable). See [docs/trim-to-what-you-need.md](docs/trim-to-what-you-need.md). |
+
+## Highlights
+
+- **One enforced data-layer architecture, not two.** Service → Repository → sqlc → pgx, with a single thin transaction boundary. No if-sql-else-mongo branching, no parallel "raw query" escape hatch — the static verifier keeps it that way.
+- **Policy-ordered middleware with fail-fast verification.** Auth, tenant, RBAC, rate-limit, cache, and cache-control are declared as ordered route policies and checked statically, so unsafe wiring fails the build instead of production.
+- **Secure by default on production-sensitive paths.** Sensible defaults for auth, keying, and configuration; unsafe combinations are rejected at startup rather than tolerated.
+- **A real auth engine.** goAuth v0.4.0 covers the full identity lifecycle (remember-me, MFA, graceful logout, key rotation, WebAuthn) instead of a login handler you have to grow yourself.
+- **Genuinely optional features.** Tenancy, the document store, WebAuthn, caching, rate limiting, observability, and the DevX generators each cost nothing when off and delete cleanly when unwanted — plug-and-play works in both directions.
+- **A document (NoSQL) store that stays out of the way.** Optional, self-contained, excluded from the binary until a module imports it, backend-swappable (a MongoDB adapter is documented), and it shares nothing with the Redis response cache.
+- **Scaffolding that follows the rules.** `make module` and `make auth` generate code in the enforced architecture, so the fast path is also the correct path.
+
+**Kept honest:** SuperAPI is a *template*, distributed as a snapshot — generated
+projects are independent and do not auto-update. It is pre-1.0 by intent; expect
+to port upgrades manually and validate with tests and the verifier.
+
 ## Data Layer Architecture
 
 Enforced flow (relational):
