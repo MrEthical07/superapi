@@ -193,10 +193,10 @@ func RenderFiles(cfg TemplateConfig) map[string]string {
 		"routes.go":       renderRoutesFile(cfg),
 		"dto.go":          renderDTOFile(spec),
 		"handler.go":      renderHandlerFile(spec),
-		"service.go":      renderServiceFile(spec),
-		"repo.go":         renderRepoFile(spec.Package),
-		"handler_test.go": renderHandlerTestFile(spec),
-		"service_test.go": renderServiceTestFile(spec),
+		"service.go":      renderServiceFile(cfg),
+		"repo.go":         renderRepoFile(cfg),
+		"handler_test.go": renderHandlerTestFile(cfg),
+		"service_test.go": renderServiceTestFile(cfg),
 	}
 	if cfg.Options.UseDB {
 		files[filepath.Join("db", "schema.sql")] = renderModuleSchema(spec)
@@ -211,9 +211,6 @@ func renderModuleFile(cfg TemplateConfig) string {
 		`"github.com/MrEthical07/superapi/internal/core/app"`,
 		`"github.com/MrEthical07/superapi/internal/core/modulekit"`,
 	}
-	if cfg.Options.UseDB {
-		imports = append(imports, `"github.com/jackc/pgx/v5/pgxpool"`)
-	}
 
 	var b strings.Builder
 	b.WriteString("package " + spec.Package + "\n\n")
@@ -225,24 +222,30 @@ func renderModuleFile(cfg TemplateConfig) string {
 	b.WriteString("type Module struct {\n")
 	b.WriteString("\thandler *Handler\n")
 	b.WriteString("\truntime modulekit.Runtime\n")
+	b.WriteString("}\n\n")
 	if cfg.Options.UseDB {
-		b.WriteString("\tpool    *pgxpool.Pool\n")
+		// The repository is wired with the relational boundary in
+		// BindDependencies; New() starts with a nil boundary until deps arrive.
+		b.WriteString("func New() *Module {\n")
+		b.WriteString("\treturn &Module{handler: NewHandler(NewService(NewRepo(nil)))}\n")
+		b.WriteString("}\n\n")
+	} else {
+		b.WriteString("func New() *Module {\n")
+		b.WriteString("\treturn &Module{handler: NewHandler(NewService(NewRepo()))}\n")
+		b.WriteString("}\n\n")
 	}
-	b.WriteString("}\n\n")
-	b.WriteString("func New() *Module {\n")
-	b.WriteString("\treturn &Module{handler: NewHandler(NewService(NewRepo()))}\n")
-	b.WriteString("}\n\n")
 	b.WriteString("var _ app.Module = (*Module)(nil)\n")
 	b.WriteString("var _ app.DependencyBinder = (*Module)(nil)\n\n")
 	b.WriteString("func (m *Module) Name() string { return \"" + spec.Package + "\" }\n\n")
 	b.WriteString("func (m *Module) BindDependencies(deps *app.Dependencies) {\n")
 	b.WriteString("\tm.runtime = modulekit.New(deps)\n")
-	b.WriteString("\tif m.handler == nil {\n")
-	b.WriteString("\t\tm.handler = NewHandler(NewService(NewRepo()))\n")
-	b.WriteString("\t}\n")
 	if cfg.Options.UseDB {
-		b.WriteString("\tif deps != nil {\n")
-		b.WriteString("\t\tm.pool = deps.Postgres\n")
+		// Wire the relational boundary into the repository. runtime.DB() yields
+		// the sqlc query boundary (nil when Postgres is disabled).
+		b.WriteString("\tm.handler = NewHandler(NewService(NewRepo(m.runtime.DB())))\n")
+	} else {
+		b.WriteString("\tif m.handler == nil {\n")
+		b.WriteString("\t\tm.handler = NewHandler(NewService(NewRepo()))\n")
 		b.WriteString("\t}\n")
 	}
 	b.WriteString("}\n")
@@ -279,8 +282,14 @@ func renderRoutesFile(cfg TemplateConfig) string {
 	b.WriteString(")\n\n")
 	b.WriteString("func (m *Module) Register(r httpx.Router) error {\n")
 	b.WriteString("\tif m.handler == nil {\n")
-	b.WriteString("\t\tm.handler = NewHandler(NewService(NewRepo()))\n")
+	b.WriteString("\t\tm.handler = NewHandler(NewService(" + newRepoCall(cfg) + "))\n")
 	b.WriteString("\t}\n\n")
+	if cfg.Options.UseTenant {
+		// modulegen cannot know the runtime tenancy flag; remind the operator.
+		b.WriteString("\t// NOTE: TenantRequired() below needs TENANCY_ENABLED=true at runtime,\n")
+		b.WriteString("\t// otherwise every request to this route is rejected (no tenant in context).\n")
+		b.WriteString("\t// Remove the tenant policy (and --tenant) if this module is not tenant-scoped.\n")
+	}
 	if len(policies) == 0 {
 		b.WriteString("\tr.Handle(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", httpx.Adapter(m.handler.Ping))\n")
 	} else {
@@ -351,19 +360,40 @@ func renderHandlerFile(spec ModuleSpec) string {
 		"\treturn h.svc.Ping(), nil\n}\n"
 }
 
-func renderServiceFile(spec ModuleSpec) string {
+func renderServiceFile(cfg TemplateConfig) string {
+	spec := cfg.Spec
+	if !cfg.Options.UseDB {
+		return "package " + spec.Package + "\n\n" +
+			"type Service interface {\n\tPing() pingResponse\n}\n\n" +
+			"type service struct {\n\trepo *Repo\n}\n\n" +
+			"func NewService(repo *Repo) Service {\n\treturn &service{repo: repo}\n}\n\n" +
+			"func (s *service) Ping() pingResponse {\n\treturn pingResponse{Status: \"ok\", Module: \"" + spec.Package + "\"}\n}\n"
+	}
+
+	// DB-enabled service: owns the write transaction boundary via the repo's
+	// storage boundary. Reads call the repo directly; writes wrap repo calls in
+	// DB().WithTx(ctx, fn). This example keeps Ping and shows where a
+	// transactional write would go.
 	return "package " + spec.Package + "\n\n" +
 		"type Service interface {\n\tPing() pingResponse\n}\n\n" +
 		"type service struct {\n\trepo *Repo\n}\n\n" +
 		"func NewService(repo *Repo) Service {\n\treturn &service{repo: repo}\n}\n\n" +
-		"func (s *service) Ping() pingResponse {\n\treturn pingResponse{Status: \"ok\", Module: \"" + spec.Package + "\"}\n}\n"
+		"func (s *service) Ping() pingResponse {\n\treturn pingResponse{Status: \"ok\", Module: \"" + spec.Package + "\"}\n}\n\n" +
+		"// Example write path (uncomment and adapt once you add queries):\n" +
+		"//\n" +
+		"// func (s *service) Create(ctx context.Context, in CreateInput) error {\n" +
+		"// \treturn s.repo.pg.WithTx(ctx, func(txCtx context.Context) error {\n" +
+		"// \t\treturn s.repo.Insert(txCtx, in)\n" +
+		"// \t})\n" +
+		"// }\n"
 }
 
-func renderHandlerTestFile(spec ModuleSpec) string {
+func renderHandlerTestFile(cfg TemplateConfig) string {
+	spec := cfg.Spec
 	return "package " + spec.Package + "\n\n" +
 		"import (\n\t\"encoding/json\"\n\t\"net/http\"\n\t\"net/http/httptest\"\n\t\"testing\"\n\n\t\"github.com/MrEthical07/superapi/internal/core/httpx\"\n)\n\n" +
 		"func TestPingHandler(t *testing.T) {\n" +
-		"\th := NewHandler(NewService(NewRepo()))\n\trr := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", nil)\n\n" +
+		"\th := NewHandler(NewService(" + newRepoCall(cfg) + "))\n\trr := httptest.NewRecorder()\n\treq := httptest.NewRequest(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", nil)\n\n" +
 		"\thandler := httpx.Adapter(h.Ping)\n\thandler.ServeHTTP(rr, req)\n\n" +
 		"\tif rr.Code != http.StatusOK {\n\t\tt.Fatalf(\"status=%d want=%d\", rr.Code, http.StatusOK)\n\t}\n\n" +
 		"\tvar body struct {\n\t\tOK   bool `json:\"ok\"`\n\t\tData pingResponse `json:\"data\"`\n\t}\n" +
@@ -372,12 +402,23 @@ func renderHandlerTestFile(spec ModuleSpec) string {
 		"\t\tt.Fatalf(\"unexpected response: %+v\", body)\n\t}\n}\n"
 }
 
-func renderServiceTestFile(spec ModuleSpec) string {
+func renderServiceTestFile(cfg TemplateConfig) string {
+	spec := cfg.Spec
 	return "package " + spec.Package + "\n\n" +
 		"import \"testing\"\n\n" +
 		"func TestServicePing(t *testing.T) {\n" +
-		"\ts := NewService(NewRepo())\n\tres := s.Ping()\n\tif res.Status != \"ok\" {\n\t\tt.Fatalf(\"status=%q want=%q\", res.Status, \"ok\")\n\t}\n\n" +
+		"\ts := NewService(" + newRepoCall(cfg) + ")\n\tres := s.Ping()\n\tif res.Status != \"ok\" {\n\t\tt.Fatalf(\"status=%q want=%q\", res.Status, \"ok\")\n\t}\n\n" +
 		"\tif res.Module != \"" + spec.Package + "\" {\n\t\tt.Fatalf(\"module=%q want=%q\", res.Module, \"" + spec.Package + "\")\n\t}\n}\n"
+}
+
+// newRepoCall returns the NewRepo(...) constructor call for generated code:
+// DB-enabled modules pass a *storage.Postgres (nil in tests/bootstrap), others
+// take no argument.
+func newRepoCall(cfg TemplateConfig) string {
+	if cfg.Options.UseDB {
+		return "NewRepo(nil)"
+	}
+	return "NewRepo()"
 }
 
 func renderModuleSchema(spec ModuleSpec) string {
@@ -399,10 +440,36 @@ func renderModuleQueries(spec ModuleSpec) string {
 		"-- FROM " + spec.RoutePath + ";\n"
 }
 
-func renderRepoFile(pkg string) string {
+func renderRepoFile(cfg TemplateConfig) string {
+	pkg := cfg.Spec.Package
+	if !cfg.Options.UseDB {
+		// No DB: the repo takes no storage dependency.
+		return "package " + pkg + "\n\n" +
+			"type Repo struct{}\n\n" +
+			"func NewRepo() *Repo {\n\treturn &Repo{}\n}\n"
+	}
+
+	// DB-enabled repo over the sqlc boundary. It holds *storage.Postgres and
+	// obtains sqlc queries per call via pg.Queries(ctx), which binds to the
+	// service-owned transaction when inside DB().WithTx. Add module queries in
+	// db/queries.sql, run `make sqlc-generate`, then call
+	// r.pg.Queries(ctx).<GeneratedMethod>(...) here and map rows to domain types.
 	return "package " + pkg + "\n\n" +
-		"type Repo struct{}\n\n" +
-		"func NewRepo() *Repo {\n\treturn &Repo{}\n}\n"
+		"import (\n" +
+		"\t\"github.com/MrEthical07/superapi/internal/core/storage\"\n" +
+		")\n\n" +
+		"type Repo struct {\n\tpg *storage.Postgres\n}\n\n" +
+		"func NewRepo(pg *storage.Postgres) *Repo {\n\treturn &Repo{pg: pg}\n}\n\n" +
+		"// Example read (uncomment once you add queries and run make sqlc-generate):\n" +
+		"//\n" +
+		"// func (r *Repo) List(ctx context.Context) ([]Item, error) {\n" +
+		"// \trows, err := r.pg.Queries(ctx).List" + toPascalCase(pkg) + "(ctx)\n" +
+		"// \tif err != nil {\n" +
+		"// \t\treturn nil, err\n" +
+		"// \t}\n" +
+		"// \t// map rows -> domain\n" +
+		"// \treturn nil, nil\n" +
+		"// }\n"
 }
 
 // GenerateModule materializes a module scaffold and updates registry wiring.

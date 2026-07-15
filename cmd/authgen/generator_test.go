@@ -46,10 +46,12 @@ func TestGenerateAuth_Default(t *testing.T) {
 		t.Fatalf("query file not found: %v", err)
 	}
 
-	// Verify provider
+	// authgen scaffolds the data layer only. It must NOT generate a parallel
+	// provider or rewrite wiring files: the template already ships a working
+	// StoreUserProvider wired via AUTH_ENABLED.
 	providerPath := filepath.Join(root, "internal", "core", "auth", "provider_sqlc.go")
-	if _, err := os.Stat(providerPath); err != nil {
-		t.Fatalf("provider file not found: %v", err)
+	if _, err := os.Stat(providerPath); err == nil {
+		t.Error("authgen should NOT generate provider_sqlc.go (core ships StoreUserProvider)")
 	}
 
 	// Verify docs
@@ -62,24 +64,6 @@ func TestGenerateAuth_Default(t *testing.T) {
 	snapshotPath := filepath.Join(root, "authgen.yaml")
 	if _, err := os.Stat(snapshotPath); err != nil {
 		t.Fatalf("config snapshot not found: %v", err)
-	}
-
-	// Verify goauth_provider.go was updated
-	providerContent, err := os.ReadFile(filepath.Join(root, "internal", "core", "auth", "goauth_provider.go"))
-	if err != nil {
-		t.Fatalf("read goauth_provider: %v", err)
-	}
-	if !strings.Contains(string(providerContent), "userProvider goauth.UserProvider") {
-		t.Error("goauth_provider.go should have updated function signature")
-	}
-
-	// Verify deps.go was updated
-	depsContent, err := os.ReadFile(filepath.Join(root, "internal", "core", "app", "deps.go"))
-	if err != nil {
-		t.Fatalf("read deps.go: %v", err)
-	}
-	if !strings.Contains(string(depsContent), "NewSQLCUserProvider") {
-		t.Error("deps.go should wire SQLCUserProvider")
 	}
 }
 

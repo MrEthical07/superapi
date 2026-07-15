@@ -157,6 +157,7 @@ Guides:
 - Policies: [docs/policies.md](docs/policies.md)
 - Cache guide: [docs/cache-guide.md](docs/cache-guide.md)
 - Document store (optional NoSQL): [docs/document-store.md](docs/document-store.md)
+- Trim to what you need (disable/delete features): [docs/trim-to-what-you-need.md](docs/trim-to-what-you-need.md)
 - Auth integration: [docs/auth-goauth.md](docs/auth-goauth.md)
 - Auth bootstrap: [docs/auth-bootstrap.md](docs/auth-bootstrap.md)
 - Performance runbook: [docs/performance-testing.md](docs/performance-testing.md)
@@ -164,12 +165,26 @@ Guides:
 - Workflows: [docs/workflows.md](docs/workflows.md)
 - Contributor playbook: [AGENTS.md](AGENTS.md)
 
+## Trim To What You Need
+
+Plug-and-play works in both directions: every optional subsystem can be turned
+off with a config flag (zero code) and most can be deleted cleanly. Auth,
+tenancy, WebAuthn, the document store, caching, rate limiting, observability, and
+the DevX generators are all optional — use only what you need and delete the
+rest.
+
+See **[docs/trim-to-what-you-need.md](docs/trim-to-what-you-need.md)** for the
+per-feature "disable vs delete" checklist (exact files and wiring edits). Related:
+[docs/removing-tenancy.md](docs/removing-tenancy.md),
+[docs/enabling-webauthn.md](docs/enabling-webauthn.md).
+
 ## Philosophy
 
 - Secure by default in production-sensitive paths
 - Explicit policies over implicit behavior
 - Fail-fast validation at startup for unsafe configurations
 - One enforced data-layer architecture over compatibility layers
+- Optional features are genuinely optional — disable by config, delete cleanly
 
 ## Versioning And Updates
 
