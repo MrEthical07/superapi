@@ -6,66 +6,66 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/MrEthical07/superapi/internal/core/db/sqlcgen"
 )
 
-type postgresRunner interface {
-	Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, query string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, query string, args ...any) pgx.Row
-}
+// txKey is the context key under which an in-flight pgx transaction is stashed
+// by WithTx so that Queries can bind subsequent repository calls to that tx.
+type txKey struct{}
 
-// txBeginner is an internal interface for beginning transactions, enabling testing.
+// txBeginner begins transactions. The concrete pool satisfies it; tests supply
+// a fake so transaction orchestration can be exercised without a live database.
 type txBeginner interface {
 	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
 }
 
-type txRunnerKey struct{}
-
-// PostgresRelationalStore executes relational repository operations over pgx.
-type PostgresRelationalStore struct {
+// Postgres is the relational data-access boundary. It hands repositories sqlc
+// queries bound to either the request transaction (when one is active) or the
+// pool, and owns the transaction lifecycle via WithTx. It deliberately exposes
+// no query surface of its own: repositories obtain *sqlcgen.Queries and call
+// generated methods, keeping sqlc/pgx types out of service and module APIs.
+type Postgres struct {
 	pool  *pgxpool.Pool
 	begin txBeginner
 }
 
-// NewPostgresRelationalStore creates a relational store backed by a pgx pool.
-func NewPostgresRelationalStore(pool *pgxpool.Pool) (*PostgresRelationalStore, error) {
+// NewPostgres creates a relational boundary backed by a pgx pool.
+func NewPostgres(pool *pgxpool.Pool) (*Postgres, error) {
 	if pool == nil {
 		return nil, errors.New("nil postgres pool")
 	}
-	return &PostgresRelationalStore{pool: pool, begin: pool}, nil
+	return &Postgres{pool: pool, begin: pool}, nil
 }
 
-// Kind identifies this store as relational.
-func (s *PostgresRelationalStore) Kind() Kind {
-	return KindRelational
-}
-
-// Execute runs one repository-defined relational operation.
-func (s *PostgresRelationalStore) Execute(ctx context.Context, op RelationalOperation) error {
-	if s == nil || s.pool == nil {
-		return errors.New("relational store is not configured")
+// Queries returns sqlc queries bound to the transaction carried in ctx, or to
+// the pool when no transaction is active. Repositories call this per operation
+// so reads run on the pool and writes inside WithTx run on the same tx.
+func (p *Postgres) Queries(ctx context.Context) *sqlcgen.Queries {
+	if ctx != nil {
+		if tx, ok := ctx.Value(txKey{}).(pgx.Tx); ok {
+			return sqlcgen.New(tx)
+		}
 	}
-	if op == nil {
-		return errors.New("nil relational operation")
-	}
-
-	runner := s.runnerFromContext(ctx)
-	exec := &postgresRelationalExecutor{runner: runner}
-	return op.ExecuteRelational(ctx, exec)
+	return sqlcgen.New(p.pool)
 }
 
-// WithTx enforces a transaction scope for write-path orchestration.
-func (s *PostgresRelationalStore) WithTx(ctx context.Context, fn func(ctx context.Context) error) (err error) {
-	if s == nil || s.pool == nil {
-		return errors.New("relational store is not configured")
+// WithTx runs fn inside a pgx transaction. The transaction is stashed in the
+// context passed to fn, so any repository call using Queries(ctx) within fn
+// participates in the same transaction. Services own this write boundary.
+//
+// On a returned error the transaction is rolled back; on a panic it is rolled
+// back and the panic is re-propagated; otherwise it is committed.
+func (p *Postgres) WithTx(ctx context.Context, fn func(ctx context.Context) error) (err error) {
+	if p == nil || p.pool == nil {
+		return errors.New("postgres boundary is not configured")
 	}
 	if fn == nil {
 		return errors.New("nil transaction callback")
 	}
 
-	tx, err := s.begin.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := p.begin.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -83,7 +83,7 @@ func (s *PostgresRelationalStore) WithTx(ctx context.Context, fn func(ctx contex
 		}
 	}()
 
-	txCtx := context.WithValue(ctx, txRunnerKey{}, tx)
+	txCtx := context.WithValue(ctx, txKey{}, tx)
 	if err := fn(txCtx); err != nil {
 		return err
 	}
@@ -93,49 +93,4 @@ func (s *PostgresRelationalStore) WithTx(ctx context.Context, fn func(ctx contex
 		return fmt.Errorf("commit tx: %w", err)
 	}
 	return nil
-}
-
-func (s *PostgresRelationalStore) runnerFromContext(ctx context.Context) postgresRunner {
-	if ctx != nil {
-		if tx, ok := ctx.Value(txRunnerKey{}).(pgx.Tx); ok {
-			return tx
-		}
-	}
-	return s.pool
-}
-
-type postgresRelationalExecutor struct {
-	runner postgresRunner
-}
-
-func (e *postgresRelationalExecutor) Exec(ctx context.Context, query string, args ...any) error {
-	_, err := e.runner.Exec(ctx, query, args...)
-	return err
-}
-
-func (e *postgresRelationalExecutor) QueryRow(ctx context.Context, query string, scan func(RowScanner) error, args ...any) error {
-	if scan == nil {
-		return errors.New("nil scan callback")
-	}
-	row := e.runner.QueryRow(ctx, query, args...)
-	return scan(row)
-}
-
-func (e *postgresRelationalExecutor) Query(ctx context.Context, query string, scan func(RowScanner) error, args ...any) error {
-	if scan == nil {
-		return errors.New("nil scan callback")
-	}
-
-	rows, err := e.runner.Query(ctx, query, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		if err := scan(rows); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
 }

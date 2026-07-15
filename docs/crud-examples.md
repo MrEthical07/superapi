@@ -1,8 +1,8 @@
-# CRUD Examples (Store-First)
+# CRUD Examples
 
 This guide walks through a realistic CRUD module using the enforced architecture:
 
-Service -> Repository -> Store -> Backend
+Service -> Repository -> sqlc queries -> pgx (pool or transaction)
 
 The example module name is projects.
 
@@ -18,7 +18,7 @@ Routes:
 
 Each route follows:
 
-handler -> service -> repository -> store
+handler -> service -> repository -> `DB().Queries(ctx)` / `DB().WithTx(ctx, fn)`
 
 ## 2. Data Model
 
@@ -35,14 +35,30 @@ type Project struct {
 
 Keep this model independent from database row structs and driver types.
 
-## 3. Relational Setup (If Using Postgres)
+## 3. Relational Setup (Postgres + sqlc)
 
-If your module uses relational backend:
+The relational data layer is sqlc over pgx. To add tables and queries:
 
-1. Add migration files under db/migrations.
-2. Mirror schema shape under db/schema.
-3. Add query definitions under db/queries.
-4. Regenerate sqlc output if you use sqlc-based internals.
+1. Add migration files under db/migrations (or keep module-local SQL under
+   `internal/modules/projects/db/` and let modulesync copy it).
+2. Mirror the schema shape under db/schema so sqlc can type-check.
+3. Add query definitions under db/queries with sqlc annotations.
+4. Run `make sqlc-generate` to regenerate typed Go into
+   `internal/core/db/sqlcgen` (never edit that output by hand).
+
+Example query source (`db/queries/projects.sql`):
+
+```sql
+-- name: CreateProject :one
+INSERT INTO projects (id, tenant_id, name, status)
+VALUES ($1, $2, $3, $4)
+RETURNING id, tenant_id, name, status;
+
+-- name: GetProjectByID :one
+SELECT id, tenant_id, name, status
+FROM projects
+WHERE tenant_id = $1 AND id = $2;
+```
 
 Example migration (up):
 
@@ -61,8 +77,8 @@ CREATE INDEX IF NOT EXISTS projects_tenant_id_idx ON projects (tenant_id);
 
 Note:
 
-- this SQL exists in storage layer internals
-- do not leak sqlc query objects into service/repository public contracts
+- generated sqlc types stay inside the repository
+- do not leak sqlc/pgx types into service/repository public contracts
 
 ## 4. Repository Interface (Domain Contract)
 
@@ -89,12 +105,13 @@ Do not expose backend-specific types in this contract.
 
 ## 5. Service Layer (Workflow + Transactions)
 
-Service calls repository methods and chooses transaction boundary for writes.
+The service calls repository methods and owns the transaction boundary for
+writes via `DB().WithTx`. It holds the repository (which in turn holds the
+`*storage.Postgres` boundary).
 
 ```go
 type service struct {
-    repo  ProjectRepository
-    store storage.RelationalStore
+    repo *Repo
 }
 
 func (s *service) Create(ctx context.Context, tenantID string, req createProjectRequest) (Project, error) {
@@ -106,8 +123,8 @@ func (s *service) Create(ctx context.Context, tenantID string, req createProject
     }
 
     var out Project
-    err := s.store.WithTx(ctx, func(txCtx context.Context) error {
-        created, err := s.repo.Create(txCtx, input)
+    err := s.repo.pg.WithTx(ctx, func(txCtx context.Context) error {
+        created, err := s.repo.Create(txCtx, input) // runs inside the tx
         if err != nil {
             return err
         }
@@ -118,85 +135,75 @@ func (s *service) Create(ctx context.Context, tenantID string, req createProject
 }
 
 func (s *service) GetByID(ctx context.Context, tenantID, id string) (Project, error) {
-    return s.repo.GetByID(ctx, tenantID, id)
+    return s.repo.GetByID(ctx, tenantID, id) // direct read, no tx
 }
 ```
 
 Rules shown above:
 
-- write path uses store.WithTx
-- read path is direct repository call
-- service does not construct SQL
+- write path uses `WithTx`; the repo call inside receives `txCtx`
+- read path is a direct repository call
+- the service constructs no SQL and runs no queries itself
 
-## 6. Relational Repository Implementation
+## 6. Repository Implementation (sqlc)
 
-Repository owns query and mapping logic.
+The repository holds `*storage.Postgres` and, per method, obtains generated
+queries via `Queries(ctx)` — which binds to the service's transaction when one
+is active, or the pool otherwise. It maps generated rows to domain models.
 
 ```go
-type relationalRepository struct {
-    store storage.RelationalStore
+type Repo struct {
+    pg *storage.Postgres
 }
 
-func (r *relationalRepository) Create(ctx context.Context, input CreateProjectInput) (Project, error) {
-    var out Project
-    err := r.store.Execute(ctx, storage.RelationalQueryOne(`
-INSERT INTO projects (id, tenant_id, name, status)
-VALUES ($1, $2, $3, $4)
-RETURNING id, tenant_id, name, status
-`, func(row storage.RowScanner) error {
-        return row.Scan(&out.ID, &out.TenantID, &out.Name, &out.Status)
-    }, input.ID, input.TenantID, input.Name, input.Status))
+func NewRepo(pg *storage.Postgres) *Repo { return &Repo{pg: pg} }
+
+func (r *Repo) Create(ctx context.Context, in CreateProjectInput) (Project, error) {
+    row, err := r.pg.Queries(ctx).CreateProject(ctx, sqlcgen.CreateProjectParams{
+        ID:       in.ID,
+        TenantID: in.TenantID,
+        Name:     in.Name,
+        Status:   in.Status,
+    })
     if err != nil {
         return Project{}, err
     }
-    return out, nil
+    return mapProjectRow(row), nil
 }
 
-func (r *relationalRepository) GetByID(ctx context.Context, tenantID, id string) (Project, error) {
-    var out Project
-    err := r.store.Execute(ctx, storage.RelationalQueryOne(`
-SELECT id, tenant_id, name, status
-FROM projects
-WHERE tenant_id = $1 AND id = $2
-`, func(row storage.RowScanner) error {
-        return row.Scan(&out.ID, &out.TenantID, &out.Name, &out.Status)
-    }, tenantID, id))
+func (r *Repo) GetByID(ctx context.Context, tenantID, id string) (Project, error) {
+    row, err := r.pg.Queries(ctx).GetProjectByID(ctx, sqlcgen.GetProjectByIDParams{
+        TenantID: tenantID,
+        ID:       id,
+    })
     if err != nil {
+        if errors.Is(err, pgx.ErrNoRows) {
+            return Project{}, ErrProjectNotFound
+        }
         return Project{}, err
     }
-    return out, nil
+    return mapProjectRow(row), nil
+}
+
+// mapProjectRow converts a generated row into the domain model, keeping
+// sqlc/pgx types out of the service and public repository API.
+func mapProjectRow(row sqlcgen.Project) Project {
+    return Project{ID: row.ID, TenantID: row.TenantID, Name: row.Name, Status: row.Status}
 }
 ```
 
-This keeps store execution-only while repository remains domain-aware.
+The same pattern used for a real feature is in
+`internal/core/auth/user_repository.go`.
 
 ## 7. Document Repository Variant
 
-For document-backed modules, keep same repository contract and change implementation only.
+If the module is document-backed instead, it holds a `document.Store` and calls
+the collection API rather than `Queries(ctx)`. The repository contract stays the
+same; only the implementation differs. See the worked example in
+[docs/document-store.md](document-store.md).
 
-```go
-type documentRepository struct {
-    store storage.DocumentStore
-}
-
-func (r *documentRepository) Create(ctx context.Context, input CreateProjectInput) (Project, error) {
-    payload := map[string]any{
-        "id":        input.ID,
-        "tenant_id": input.TenantID,
-        "name":      input.Name,
-        "status":    input.Status,
-    }
-
-    var out Project
-    err := r.store.Execute(ctx, storage.DocumentRun("projects.insert", payload, &out))
-    if err != nil {
-        return Project{}, err
-    }
-    return out, nil
-}
-```
-
-Do not branch SQL/document behavior in one module implementation.
+Do not branch SQL/document behavior in one module implementation — pick one
+backend per module.
 
 ## 8. Handler Layer Example
 
@@ -282,11 +289,11 @@ Recommended tests:
 ## 13. Final CRUD Checklist
 
 1. Domain model is backend-agnostic.
-2. Repository interface is domain-focused.
-3. Service write methods use transaction flow.
+2. Repository interface is domain-focused (no sqlc/pgx types).
+3. Service write methods use `WithTx`.
 4. Service read methods avoid forced transaction wrappers.
-5. Repository owns query/filter and mapping logic.
-6. Store layer remains execution-only.
+5. Repository owns query/mapping logic via `Queries(ctx)`.
+6. Repository threads `ctx` and never opens transactions.
 7. Route policy order is valid.
 8. Tests/build/verify commands pass.
 
@@ -294,5 +301,6 @@ Recommended tests:
 
 - [docs/modules.md](modules.md)
 - [docs/module_guide.md](module_guide.md)
+- [docs/transactions.md](transactions.md)
 - [docs/policies.md](policies.md)
 - [docs/cache-guide.md](cache-guide.md)

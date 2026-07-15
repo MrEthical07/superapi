@@ -29,15 +29,15 @@ Auth Bootstrap Configuration:
 | `db/migrations/NNNNNN_auth_users.down.sql` | Users table migration (down) |
 | `db/schema/auth_users.sql` | Schema mirror for sqlc |
 | `db/queries/auth_users.sql` | sqlc query definitions |
-| `internal/core/auth/provider_sqlc.go` | Store-backed UserProvider for goAuth |
-| `internal/core/auth/user_repository.go` | Auth UserRepository implementation over RelationalStore |
 
-## Modified Files
+## Provider Wiring (no generation needed)
 
-| File | Change |
-|---|---|
-| `internal/core/auth/goauth_provider.go` | Updated to accept UserProvider parameter |
-| `internal/core/app/deps.go` | Wires StoreUserProvider + RelationalUserRepository when auth is enabled |
+This template already ships a working, sqlc-backed goAuth user provider
+(`StoreUserProvider` in `internal/core/auth`), wired automatically in
+`internal/core/app/deps.go` when `AUTH_ENABLED=true`. authgen does **not**
+generate a second provider or edit wiring files — it only scaffolds the auth
+data layer above. Customize auth behavior in `internal/core/auth/config.go` and
+roles in `internal/core/auth/roles.go`.
 
 ## Schema
 

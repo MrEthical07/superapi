@@ -40,27 +40,20 @@ func GenerateAuth(workspaceRoot string, cfg AuthGenConfig, force bool) error {
 		fmt.Println("  Please run 'sqlc generate' manually before building.")
 	}
 
-	// --- Step 4: Generate provider implementation ---
-	if err := generateProvider(workspaceRoot, cfg); err != nil {
-		return fmt.Errorf("generate provider: %w", err)
-	}
+	// NOTE: authgen scaffolds the auth data layer (migration, schema, queries)
+	// only. It intentionally does NOT generate a UserProvider or rewrite
+	// deps.go / goauth_provider.go: the template already ships a working,
+	// sqlc-backed StoreUserProvider (internal/core/auth) that is wired
+	// automatically when AUTH_ENABLED=true. Generating a second, parallel
+	// provider was the old data-layer duality and has been removed. Customize
+	// auth behavior in internal/core/auth/config.go and roles.go.
 
-	// --- Step 5: Update goauth_provider.go wiring ---
-	if err := updateGoAuthProvider(workspaceRoot); err != nil {
-		return fmt.Errorf("update goauth provider wiring: %w", err)
-	}
-
-	// --- Step 6: Update deps.go wiring ---
-	if err := updateDeps(workspaceRoot); err != nil {
-		return fmt.Errorf("update deps wiring: %w", err)
-	}
-
-	// --- Step 7: Generate documentation ---
+	// --- Step 4: Generate documentation ---
 	if err := generateDocs(workspaceRoot, cfg); err != nil {
 		return fmt.Errorf("generate docs: %w", err)
 	}
 
-	// --- Step 8: Save config snapshot ---
+	// --- Step 5: Save config snapshot ---
 	if err := saveConfigSnapshot(workspaceRoot, cfg); err != nil {
 		return fmt.Errorf("save config snapshot: %w", err)
 	}
@@ -69,12 +62,11 @@ func GenerateAuth(workspaceRoot string, cfg AuthGenConfig, force bool) error {
 }
 
 func checkExistingBootstrap(workspaceRoot string, force bool) error {
-	providerPath := filepath.Join(workspaceRoot, "internal", "core", "auth", "provider_sqlc.go")
 	queryPath := filepath.Join(workspaceRoot, "db", "queries", "auth_users.sql")
 	schemaPath := filepath.Join(workspaceRoot, "db", "schema", "auth_users.sql")
 
 	existing := []string{}
-	for _, p := range []string{providerPath, queryPath, schemaPath} {
+	for _, p := range []string{queryPath, schemaPath} {
 		if _, err := os.Stat(p); err == nil {
 			existing = append(existing, p)
 		}
@@ -209,126 +201,6 @@ func runSQLCGenerate(workspaceRoot string) error {
 	return nil
 }
 
-func generateProvider(workspaceRoot string, cfg AuthGenConfig) error {
-	providerDir := filepath.Join(workspaceRoot, "internal", "core", "auth")
-	providerPath := filepath.Join(providerDir, "provider_sqlc.go")
-
-	content, err := renderProvider(cfg)
-	if err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(providerPath, []byte(content), 0o644); err != nil {
-		return err
-	}
-
-	fmt.Printf("  created: %s\n", providerPath)
-	return nil
-}
-
-func updateGoAuthProvider(workspaceRoot string) error {
-	providerPath := filepath.Join(workspaceRoot, "internal", "core", "auth", "goauth_provider.go")
-	content, err := os.ReadFile(providerPath)
-	if err != nil {
-		return fmt.Errorf("read goauth_provider.go: %w", err)
-	}
-
-	original := string(content)
-
-	// Replace the noopUserProvider usage in NewGoAuthEngineProvider with a
-	// function that accepts an optional UserProvider parameter.
-	// We update the function signature to accept an optional UserProvider.
-
-	// Strategy: Replace `WithUserProvider(noopUserProvider{}).` with
-	// `WithUserProvider(userProvider).` and update the function signature
-	// to accept a goauth.UserProvider parameter.
-
-	updated := original
-
-	// Update function signature
-	oldSig := "func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode) (Provider, func(), error) {"
-	newSig := "func NewGoAuthEngineProvider(redisClient redis.UniversalClient, mode Mode, userProvider goauth.UserProvider) (Provider, func(), error) {"
-	updated = strings.Replace(updated, oldSig, newSig, 1)
-
-	// Replace noopUserProvider{} with the parameter
-	oldProvider := "WithUserProvider(noopUserProvider{})."
-	newProvider := "WithUserProvider(userProvider)."
-	updated = strings.Replace(updated, oldProvider, newProvider, 1)
-
-	if updated != original {
-		if err := os.WriteFile(providerPath, []byte(updated), 0o644); err != nil {
-			return fmt.Errorf("write goauth_provider.go: %w", err)
-		}
-		fmt.Printf("  updated: %s\n", providerPath)
-	}
-
-	return nil
-}
-
-func updateDeps(workspaceRoot string) error {
-	depsPath := filepath.Join(workspaceRoot, "internal", "core", "app", "deps.go")
-	content, err := os.ReadFile(depsPath)
-	if err != nil {
-		return fmt.Errorf("read deps.go: %w", err)
-	}
-
-	original := string(content)
-	updated := original
-
-	// Add db import if not present
-	if !strings.Contains(updated, `"github.com/MrEthical07/superapi/internal/core/db"`) {
-		// Find the import block and add our import
-		updated = addImport(updated, `"github.com/MrEthical07/superapi/internal/core/db"`)
-	}
-
-	// Update the NewGoAuthEngineProvider call to pass the SQLCUserProvider.
-	// Old: provider, closeFn, err := auth.NewGoAuthEngineProvider(deps.Redis, authMode)
-	// New: provider, closeFn, err := auth.NewGoAuthEngineProvider(deps.Redis, authMode, auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres)))
-
-	oldCall := "auth.NewGoAuthEngineProvider(deps.Redis, authMode)"
-	newCall := "auth.NewSQLCUserProvider(db.NewQueries(deps.Postgres))"
-
-	updated = strings.Replace(updated,
-		oldCall,
-		"auth.NewGoAuthEngineProvider(deps.Redis, authMode, "+newCall+")",
-		1)
-
-	if updated != original {
-		if err := os.WriteFile(depsPath, []byte(updated), 0o644); err != nil {
-			return fmt.Errorf("write deps.go: %w", err)
-		}
-		fmt.Printf("  updated: %s\n", depsPath)
-	}
-
-	return nil
-}
-
-func addImport(content, importLine string) string {
-	// Find the import block and add the import.
-	lines := strings.Split(content, "\n")
-	var result []string
-	inImport := false
-	added := false
-
-	for _, line := range lines {
-		if strings.Contains(line, "import (") {
-			inImport = true
-			result = append(result, line)
-			continue
-		}
-		if inImport && strings.TrimSpace(line) == ")" {
-			if !added {
-				result = append(result, "\t"+importLine)
-				added = true
-			}
-			inImport = false
-		}
-		result = append(result, line)
-	}
-
-	return strings.Join(result, "\n")
-}
-
 func generateDocs(workspaceRoot string, cfg AuthGenConfig) error {
 	docsDir := filepath.Join(workspaceRoot, "docs")
 	if err := os.MkdirAll(docsDir, 0o755); err != nil {
@@ -352,14 +224,15 @@ func generateDocs(workspaceRoot string, cfg AuthGenConfig) error {
 	b.WriteString("| `db/migrations/NNNNNN_auth_" + cfg.TableName + ".down.sql` | Users table migration (down) |\n")
 	b.WriteString("| `db/schema/auth_users.sql` | Schema mirror for sqlc |\n")
 	b.WriteString("| `db/queries/auth_users.sql` | sqlc query definitions |\n")
-	b.WriteString("| `internal/core/auth/provider_sqlc.go` | DB-backed UserProvider for goAuth |\n")
 	b.WriteString("\n")
 
-	b.WriteString("## Modified Files\n\n")
-	b.WriteString("| File | Change |\n")
-	b.WriteString("|---|---|\n")
-	b.WriteString("| `internal/core/auth/goauth_provider.go` | Updated to accept UserProvider parameter |\n")
-	b.WriteString("| `internal/core/app/deps.go` | Wires SQLCUserProvider when auth is enabled |\n")
+	b.WriteString("## Provider Wiring (no generation needed)\n\n")
+	b.WriteString("This template already ships a working, sqlc-backed goAuth user provider\n")
+	b.WriteString("(`StoreUserProvider` in `internal/core/auth`), wired automatically in\n")
+	b.WriteString("`internal/core/app/deps.go` when `AUTH_ENABLED=true`. authgen does not\n")
+	b.WriteString("generate a second provider or edit wiring files — it only scaffolds the\n")
+	b.WriteString("auth data layer above. Customize auth behavior in\n")
+	b.WriteString("`internal/core/auth/config.go` and roles in `internal/core/auth/roles.go`.\n")
 	b.WriteString("\n")
 
 	b.WriteString("## Schema\n\n")

@@ -34,6 +34,19 @@ type presetConfig struct {
 }
 
 func defaultPresetConfig() presetConfig {
+	// Tenant-aware defaults only apply when tenancy is enabled. With tenancy off,
+	// authenticated cache reads vary by user id instead of tenant id (which
+	// satisfies the "authenticated cache routes vary by user or tenant" rule),
+	// and the tenant path param default is empty.
+	varyBy := cache.CacheVaryBy{}
+	tenantMatchParam := ""
+	if TenancyEnabled() {
+		varyBy.TenantID = true
+		tenantMatchParam = "tenant_id"
+	} else {
+		varyBy.UserID = true
+	}
+
 	return presetConfig{
 		authMode: auth.ModeHybrid,
 		rateLimitRule: ratelimit.Rule{
@@ -43,9 +56,9 @@ func defaultPresetConfig() presetConfig {
 		cacheTTL:         30 * time.Second,
 		cacheTagSpecs:    []cache.CacheTagSpec{{Name: "resource"}},
 		cacheAllowAuth:   true,
-		cacheVaryBy:      cache.CacheVaryBy{TenantID: true},
+		cacheVaryBy:      varyBy,
 		invalidateTagCfg: []cache.CacheTagSpec{{Name: "resource"}},
-		tenantMatchParam: "tenant_id",
+		tenantMatchParam: tenantMatchParam,
 	}
 }
 

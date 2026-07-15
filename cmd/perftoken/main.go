@@ -74,12 +74,12 @@ func main() {
 		log.Fatalf("invalid auth mode: %v", err)
 	}
 
-	relStore, err := storage.NewPostgresRelationalStore(pgPool)
+	pg, err := storage.NewPostgres(pgPool)
 	if err != nil {
-		log.Fatalf("relational store init failed: %v", err)
+		log.Fatalf("postgres boundary init failed: %v", err)
 	}
 
-	userRepo := coreauth.NewRelationalUserRepository(relStore)
+	userRepo := coreauth.NewRelationalUserRepository(pg)
 	if userRepo == nil {
 		log.Fatal("user repository init failed")
 	}

@@ -10,9 +10,15 @@ import (
 )
 
 // StoreUserProvider is the DB-backed UserProvider for goAuth.
-// It depends on a domain repository, not backend query objects.
+// It depends on domain repositories, not backend query objects.
+//
+// It also implements goauth.WebAuthnCredentialProvider. When no WebAuthn
+// repository is wired the credential methods behave as an empty store; goAuth
+// only requires the capability when WebAuthn is enabled (WEBAUTHN_ENABLED), so
+// providing these methods unconditionally is safe.
 type StoreUserProvider struct {
-	repo UserRepository
+	repo         UserRepository
+	webauthnRepo WebAuthnCredentialRepository
 }
 
 const defaultLookupTimeout = 3 * time.Second
@@ -20,6 +26,16 @@ const defaultLookupTimeout = 3 * time.Second
 // NewStoreUserProvider creates a store-backed user provider.
 func NewStoreUserProvider(repo UserRepository) *StoreUserProvider {
 	return &StoreUserProvider{repo: repo}
+}
+
+// WithWebAuthnRepository attaches a WebAuthn credential repository so the
+// provider can satisfy goAuth's WebAuthn ceremonies. Optional; only needed when
+// WebAuthn is enabled.
+func (p *StoreUserProvider) WithWebAuthnRepository(repo WebAuthnCredentialRepository) *StoreUserProvider {
+	if p != nil {
+		p.webauthnRepo = repo
+	}
+	return p
 }
 
 // GetUserByIdentifier looks up a user by login identifier.
@@ -154,6 +170,47 @@ func (p *StoreUserProvider) ReplaceBackupCodes(_ context.Context, _ string, _ []
 // ConsumeBackupCode is a stub until backup-code persistence is implemented.
 func (p *StoreUserProvider) ConsumeBackupCode(_ context.Context, _ string, _ [32]byte) (bool, error) {
 	return false, goauth.ErrUnauthorized
+}
+
+// --- WebAuthn credential capability (goauth.WebAuthnCredentialProvider) ---
+//
+// These delegate to the WebAuthn repository when one is wired. With no repository
+// (the default, WebAuthn disabled) the store behaves as empty: listing returns
+// no credentials, and mutations that require an existing credential report
+// not-found. goAuth only invokes these while WebAuthn is enabled.
+
+// GetWebAuthnCredentials returns every credential registered for the user.
+func (p *StoreUserProvider) GetWebAuthnCredentials(ctx context.Context, userID string) ([]goauth.WebAuthnCredential, error) {
+	if p == nil || p.webauthnRepo == nil {
+		return nil, nil
+	}
+	return p.webauthnRepo.ListByUser(ctx, userID)
+}
+
+// AddWebAuthnCredential persists a newly registered credential.
+func (p *StoreUserProvider) AddWebAuthnCredential(ctx context.Context, userID string, credential goauth.WebAuthnCredential) error {
+	if p == nil || p.webauthnRepo == nil {
+		return goauth.ErrUnauthorized
+	}
+	return p.webauthnRepo.Add(ctx, userID, credential)
+}
+
+// UpdateWebAuthnCredentialSignCount stores the authenticator's new signature
+// counter after a successful assertion.
+func (p *StoreUserProvider) UpdateWebAuthnCredentialSignCount(ctx context.Context, userID string, credentialID []byte, signCount uint32) error {
+	if p == nil || p.webauthnRepo == nil {
+		return goauth.ErrUnauthorized
+	}
+	return p.webauthnRepo.UpdateSignCount(ctx, credentialID, signCount)
+}
+
+// RemoveWebAuthnCredential deletes the credential with the given ID. Removing an
+// unknown credential returns an error, per the provider contract.
+func (p *StoreUserProvider) RemoveWebAuthnCredential(ctx context.Context, userID string, credentialID []byte) error {
+	if p == nil || p.webauthnRepo == nil {
+		return ErrWebAuthnCredentialNotFound
+	}
+	return p.webauthnRepo.Delete(ctx, userID, credentialID)
 }
 
 // --- Mapping helpers ---

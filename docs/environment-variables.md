@@ -110,11 +110,62 @@ Explicit env vars override profile values.
 |---|---|---|
 | AUTH_ENABLED | false | enables goAuth integration |
 | AUTH_MODE | hybrid | jwt_only, hybrid, strict |
+| AUTH_MAX_SESSION_DURATION | unset | absolute session ceiling (also caps remember-me). Must be >= 1m when set; unset = goAuth per-mode default |
+| AUTH_LIMITER_WINDOW_MODE | fixed | goAuth's internal auth-abuse limiter algorithm: `fixed` or `sliding` |
+| AUTH_KEY_ID | unset | active JWT signing key id (kid). Required when AUTH_VERIFY_KEYS is set |
+| AUTH_VERIFY_KEYS | unset | comma-separated `kid=<ed25519-pem>` entries for zero-downtime key rotation. PEM may use literal newlines or `\n` |
 
 Lint dependency rules:
 
 - AUTH_ENABLED=true requires REDIS_ENABLED=true
 - AUTH_ENABLED=true requires POSTGRES_ENABLED=true
+
+Key rotation invariant (enforced by goAuth at Build and by SuperAPI at startup):
+
+- When AUTH_VERIFY_KEYS is set, AUTH_KEY_ID must be set and must name one of the
+  entries in the map. Set both or neither.
+
+## 7b. WebAuthn Variables
+
+WebAuthn is scaffolded but disabled by default. When `WEBAUTHN_ENABLED=false`
+the ceremony endpoints return a "webauthn disabled" error, goAuth does not
+require the WebAuthn capability at Build, and no schema is needed. Enabling is a
+config + optional-migration step — see docs/enabling-webauthn.md.
+
+| Env var | Default | Notes |
+|---|---|---|
+| WEBAUTHN_ENABLED | false | turns the WebAuthn surface on |
+| WEBAUTHN_RP_ID | unset | Relying Party ID (effective domain, no scheme/port). Required when enabled |
+| WEBAUTHN_RP_DISPLAY_NAME | unset | human-readable Relying Party name. Required when enabled |
+| WEBAUTHN_RP_ORIGINS | unset | comma-separated exact origins permitted to complete ceremonies. Required when enabled |
+| WEBAUTHN_ATTESTATION_PREFERENCE | none | none, indirect, direct, or enterprise |
+| WEBAUTHN_USER_VERIFICATION | preferred | preferred, required, or discouraged |
+| WEBAUTHN_CEREMONY_TTL | 2m | how long a begun ceremony stays completable |
+| WEBAUTHN_REQUIRE_FOR_LOGIN | false | gate login behind an assertion for users with a credential |
+| WEBAUTHN_REJECT_CLONED_AUTHENTICATORS | true | fail assertions whose signature counter regressed |
+
+## 7a. Tenancy Variables
+
+| Env var | Default | Notes |
+|---|---|---|
+| TENANCY_ENABLED | false | enables multi-tenant policy, cache, and rate-limit behavior |
+| TENANCY_ENFORCE_ISOLATION | false | requests goAuth strict tenant isolation; only meaningful when TENANCY_ENABLED=true |
+
+Behavior:
+
+- With TENANCY_ENABLED=false (default), tenancy is inert. Preset policies do not
+  default to tenant scoping/keying (authenticated cache reads vary by user id
+  instead of tenant id), and a `{tenant_id}` path parameter is treated as an
+  ordinary parameter rather than forcing tenant policies onto the route.
+- With TENANCY_ENABLED=true, tenant scoping/keying defaults return and
+  `{tenant_id}` routes must carry `TenantRequired` + `TenantMatchFromPath`. The
+  flag is also propagated to goAuth via `MultiTenant.Enabled`.
+
+Lint dependency rules:
+
+- TENANCY_ENFORCE_ISOLATION=true requires TENANCY_ENABLED=true
+
+See docs/policies.md and docs/removing-tenancy.md.
 
 ## 8. Rate-Limit Variables
 

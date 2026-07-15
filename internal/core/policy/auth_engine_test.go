@@ -61,7 +61,7 @@ func newPolicyTestAuthEngine(t testing.TB) (*goauth.Engine, string) {
 		mr.Close()
 	})
 
-	engine, closeFn, err := auth.NewGoAuthEngine(redisClient, auth.ModeHybrid, provider)
+	engine, closeFn, err := auth.NewGoAuthEngine(redisClient, auth.ModeHybrid, auth.TenancySettings{}, provider)
 	if err != nil {
 		t.Fatalf("new auth engine: %v", err)
 	}

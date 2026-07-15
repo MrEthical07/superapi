@@ -11,7 +11,7 @@ It is written for both:
 
 The enforced data flow is:
 
-Service -> Repository -> Store -> Backend
+Service -> Repository -> sqlc queries -> pgx (pool or transaction)
 
 Layer boundaries are strict:
 
@@ -21,14 +21,22 @@ Layer boundaries are strict:
 - Service layer:
 	- business workflows and orchestration
 	- calls repositories only
+	- may call `storage.Postgres.WithTx(...)` to define a write transaction
+	  boundary, but never runs queries itself
 - Repository layer:
-	- query logic and storage mapping
-	- calls store interfaces only
-- Store layer:
-	- execution and transaction semantics
-	- no domain-level behavior
+	- query logic and row/domain mapping
+	- obtains generated sqlc queries via `storage.Postgres.Queries(ctx)`
+	- does not control transaction boundaries
+- Data-access boundary (`storage.Postgres`):
+	- hands repositories sqlc queries bound to the request transaction (when one
+	  is active) or the pool
+	- owns the transaction lifecycle via `WithTx`
+	- exposes no query surface of its own; sqlc/pgx types never appear on
+	  service or repository interfaces
 
-These boundaries are not style suggestions. They are the architecture contract for this repository.
+These boundaries are not style suggestions. They are the architecture contract
+for this repository, and the `superapi-verify` static checker fails the build on
+violations.
 
 ## 2. Repository Layout
 
@@ -43,9 +51,14 @@ High-impact paths:
 - internal/core/policy
 	- route policy chain, metadata, and route validation
 - internal/core/storage
-	- store contracts and store implementations
+	- the `storage.Postgres` data-access boundary (sqlc queries + `WithTx`)
+- internal/core/db/sqlcgen
+	- sqlc-generated query code (do not edit by hand)
+- internal/storage/document
+	- optional, self-contained document (NoSQL) store (not in the binary until a
+	  module imports it)
 - internal/core/auth
-	- goAuth integration, store-backed user provider, auth repository
+	- goAuth integration, sqlc-backed user provider, auth repository
 - internal/modules
 	- feature modules and route registration
 
@@ -84,18 +97,19 @@ Order:
 1. Create readiness service.
 2. If Postgres enabled:
 	 - create pgx pool
-	 - create PostgresRelationalStore
-	 - set Dependencies.Postgres, Dependencies.RelationalStore, Dependencies.Store
+	 - create the `storage.Postgres` boundary from the pool
+	 - set Dependencies.DB
 	 - register readiness probe
 3. If Redis enabled:
 	 - create redis client
 	 - register readiness probe
 4. Create metrics service.
-5. Parse auth mode.
+5. Parse auth mode; apply the tenancy flag (`TENANCY_ENABLED`).
 6. If auth enabled:
-	 - create auth user repository over relational store
-	 - create store-backed user provider
-	 - create goAuth engine
+	 - create the auth user repository over the `storage.Postgres` boundary
+	 - create the sqlc-backed `StoreUserProvider` (optionally with the WebAuthn
+	   credential repository)
+	 - create the goAuth engine (v0.4.0) with Redis + provider + tenancy settings
 7. If rate-limit enabled:
 	 - create redis limiter
 8. If cache enabled:
@@ -193,93 +207,95 @@ response.Error maps:
 - typed AppError -> explicit status/code/message
 - unknown errors -> internal_error (sanitized)
 
-## 6. Store Contracts And Data Layer
+## 6. The Data-Access Boundary
 
-Store contracts are in internal/core/storage/contracts.go.
+The relational data layer is a single thin type, `storage.Postgres`, defined in
+internal/core/storage/postgres_store.go. It deliberately exposes no query surface
+of its own — just two methods:
 
-Core contracts:
+- `Queries(ctx) *sqlcgen.Queries`
+	- returns generated sqlc queries bound to the transaction carried in `ctx`
+	  (when one is active) or to the pool otherwise
+	- repositories call this per operation; the same code runs on the pool for
+	  reads and inside a transaction for writes, transparently
+- `WithTx(ctx, fn) error`
+	- begins a pgx transaction, stashes it in the context passed to `fn`, and
+	  commits on success or rolls back on error/panic
+	- services call this to define write boundaries; repositories never do
 
-- Store
-	- Kind() for backend family identity
-- TransactionalStore
-	- WithTx(ctx, fn)
-- RelationalStore
-	- Execute(ctx, RelationalOperation)
-- DocumentStore
-	- Execute(ctx, DocumentOperation)
+Design goal: sqlc/pgx types are implementation details. They live inside
+repositories and never appear on service or repository public interfaces.
 
-Important design goal:
+### 6.1 How binding works
 
-- stores are execution-only contracts
-- repository owns query meaning and mapping semantics
+`WithTx` stores the `pgx.Tx` in the context under a private key. `Queries(ctx)`
+checks for it: if present it binds the generated queries to the transaction,
+otherwise to the pool. This is why a repository method written once works both
+standalone and inside a service-owned transaction — it simply threads `ctx`
+through and calls `r.pg.Queries(ctx).SomeGeneratedMethod(ctx, ...)`.
 
-### 6.1 Relational store implementation
+### 6.2 Generated code
 
-Current relational implementation is in internal/core/storage/postgres_store.go.
+sqlc output lives in internal/core/db/sqlcgen and is regenerated by
+`make sqlc-generate`. It must not be edited by hand. SQL sources are under
+`db/schema` and `db/queries`; module-local SQL is synced into that tree by
+modulesync before generation.
 
-Key behavior:
+### 6.3 Optional document (NoSQL) store
 
-- Execute chooses transaction runner from context when present
-- otherwise uses pool runner
-- WithTx starts pgx transaction, injects tx runner in context, commits or rolls back
-
-### 6.2 Document store status
-
-internal/core/storage/document_noop.go provides NoopDocumentStore.
-
-Purpose:
-
-- preserve the architecture contract for document modules now
-- allow compilation and interface wiring before concrete document backend arrives
-
-### 6.3 Repository-owned operations
-
-Operation helpers in internal/core/storage/operations.go provide wrappers like:
-
-- RelationalExec
-- RelationalQueryOne
-- RelationalQueryMany
-- DocumentRun
-
-Repositories use these helpers to describe operations while keeping domain logic in repository methods.
+A separate, self-contained package, internal/storage/document, provides an
+optional document store for modules that need one. It is outside `internal/core`
+and is excluded from the `cmd/api` binary until a module imports it. It shares
+nothing with the relational boundary or the Redis response cache. See
+[docs/document-store.md](document-store.md).
 
 ## 7. Transaction Model
 
 Transaction rule set:
 
-- transaction API is mandatory at store layer
-- write paths should run inside store.WithTx
-- read paths are direct by default
-- services select transaction boundary; repositories execute operations
+- the transaction boundary lives on `storage.Postgres.WithTx`
+- write paths run inside `DB().WithTx(ctx, fn)`
+- read paths are direct by default (no transaction)
+- services select the transaction boundary; repositories only run queries via
+  `Queries(ctx)` and never begin/commit/rollback
 
 Write path example:
 
 1. handler calls service.Create
-2. service starts store.WithTx
-3. repository executes write operations via store.Execute
-4. store commits or rolls back
+2. service calls `DB().WithTx(ctx, func(txCtx) error { ... })`
+3. inside the callback, service calls repository write methods with `txCtx`
+4. repository runs `pg.Queries(txCtx).<GeneratedWrite>(...)`, which joins the tx
+5. `WithTx` commits on nil error, rolls back on error or panic
 
 Read path example:
 
 1. handler calls service.Get/List
-2. service calls repository directly
-3. repository executes read operation via store.Execute
+2. service calls the repository directly (no `WithTx`)
+3. repository runs `pg.Queries(ctx).<GeneratedRead>(...)` on the pool
+
+The one sharp edge: the transaction lives entirely in the context. If a
+repository method drops `txCtx` and uses a fresh context, its query silently
+runs on the pool outside the transaction — no error, just a correctness bug.
+Always thread the context through. See [docs/transactions.md](transactions.md).
 
 ## 8. Auth Architecture With goAuth
 
-Auth integration entrypoint: internal/core/auth/goauth_provider.go.
+SuperAPI is on goAuth **v0.4.0**. The engine is built in
+internal/core/auth/goauth_provider.go and receives a `goauth.UserProvider`.
 
-goAuth boundary remains stable: it still receives a goauth.UserProvider.
+Current provider implementation: internal/core/auth/provider_store.go
+(`StoreUserProvider`), which also implements goAuth's
+`WebAuthnCredentialProvider` when WebAuthn is enabled.
 
-Current provider implementation: internal/core/auth/provider_sqlc.go.
+Provider path (sqlc data layer):
 
-Provider path:
+StoreUserProvider -> UserRepository -> storage.Postgres (sqlc queries) -> pgx
 
-StoreUserProvider -> UserRepository -> RelationalStore -> Postgres
-
-Auth repository implementation: internal/core/auth/user_repository.go.
-
-This preserves goAuth compatibility while removing direct query-object coupling from auth wiring.
+Auth repository implementation: internal/core/auth/user_repository.go — it uses
+`pg.Queries(ctx)` like any other repository and maps generated rows to a
+storage-layer `StoredUser` projection. v0.4.0 configuration (remember-me,
+session ceiling, MFA, sliding-window limiter, key rotation, WebAuthn) is set in
+internal/core/auth/config.go. See [docs/auth-goauth.md](auth-goauth.md).
 
 ## 9. Route-Level Flow Examples
 
@@ -288,20 +304,20 @@ This preserves goAuth compatibility while removing direct query-object coupling 
 Files involved:
 
 - internal/modules/system/routes.go
-- internal/core/auth/provider_sqlc.go
+- internal/modules/system/service.go (thin authService)
+- internal/core/auth/provider_store.go
 - internal/core/auth/user_repository.go
 - internal/core/storage/postgres_store.go
 
 Runtime path:
 
-1. route handler receives login payload
-2. handler calls goAuth engine Login
-3. goAuth asks StoreUserProvider for user by identifier
-4. provider calls auth repository
-5. repository executes relational query operation via store
-6. store executes against pgx runner
-7. result maps back to goAuth user record
-8. goAuth issues tokens
+1. route handler receives login payload and calls the module's authService
+2. authService calls the goAuth engine (`LoginWithOptions`, honoring remember-me)
+3. goAuth asks StoreUserProvider for the user by identifier
+4. provider calls the auth repository
+5. repository runs `pg.Queries(ctx).GetAuthUserByLogin(...)` on the pool
+6. the generated row maps back to a goAuth user record
+7. goAuth issues tokens, or returns an MFA challenge if a second factor is required
 
 ### 9.2 POST /api/v1/system/auth/refresh
 
@@ -338,20 +354,23 @@ During app shutdown:
 4. shutdown tracing
 5. close auth engine resources
 
-## 11. Behavioral Changes After Store-First Redesign
+## 11. Data Layer At A Glance
 
-What changed:
+What the data layer guarantees:
 
-- no service-level dependency on query helper wrappers
-- auth persistence now follows repository + store architecture
-- transaction orchestration unified at store layer
-- runtime exposes generic store surfaces to modules
+- one enforced path — Service -> Repository -> sqlc -> pgx — with no second
+  pattern to drift toward
+- a single thin transaction boundary (`storage.Postgres.WithTx`) owned by
+  services; repositories never manage transactions
+- sqlc/pgx types stay inside repositories and never leak onto public interfaces
+- auth persistence follows the same repository pattern as any module
+- the optional document store is separate and out of the binary until used
 
-What did not change:
+What stays stable across changes:
 
 - module registration model
 - route policy system
-- goAuth integration boundary
+- goAuth integration boundary (a `goauth.UserProvider`)
 - response envelope semantics
 
 ## 12. Contributor Guardrails
@@ -370,6 +389,8 @@ When changing architecture-sensitive code, keep these guardrails:
 - [docs/modules.md](modules.md)
 - [docs/module_guide.md](module_guide.md)
 - [docs/crud-examples.md](crud-examples.md)
+- [docs/transactions.md](transactions.md)
 - [docs/auth-goauth.md](auth-goauth.md)
+- [docs/document-store.md](document-store.md)
 - [docs/workflows.md](workflows.md)
 - [docs/environment-variables.md](environment-variables.md)

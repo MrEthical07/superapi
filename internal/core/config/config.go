@@ -28,6 +28,8 @@ type Config struct {
 	Log LogConfig
 	// Auth toggles authentication integration and route auth mode.
 	Auth AuthConfig
+	// Tenancy toggles multi-tenant behavior across policy, cache, and rate-limit seams.
+	Tenancy TenancyConfig
 	// RateLimit configures default route-level throttling behavior.
 	RateLimit RateLimitConfig
 	// Cache configures default route-level response caching behavior.
@@ -48,6 +50,21 @@ type AuthConfig struct {
 	Enabled bool
 	// Mode selects validation strategy: jwt_only, hybrid, or strict.
 	Mode string
+}
+
+// TenancyConfig configures multi-tenant behavior.
+//
+// When Enabled is false (the default), tenancy is inert: preset policies do not
+// default to tenant scoping/keying, and the route validator treats a
+// {tenant_id} path parameter as an ordinary parameter rather than forcing
+// tenant policies. When Enabled is true, tenant scoping/keying defaults return
+// and {tenant_id} routes must carry tenant policies.
+type TenancyConfig struct {
+	// Enabled turns on multi-tenant policy, cache, and rate-limit behavior.
+	Enabled bool
+	// EnforceIsolation requests goAuth's strict tenant isolation checks. It has
+	// no effect unless Enabled is true.
+	EnforceIsolation bool
 }
 
 // RateLimitConfig defines default policy values for route rate limiting.
@@ -322,6 +339,10 @@ func Load() (*Config, error) {
 			Enabled: getBool("AUTH_ENABLED", false),
 			Mode:    getenv("AUTH_MODE", "hybrid"),
 		},
+		Tenancy: TenancyConfig{
+			Enabled:          getBool("TENANCY_ENABLED", false),
+			EnforceIsolation: getBool("TENANCY_ENFORCE_ISOLATION", false),
+		},
 		RateLimit: RateLimitConfig{
 			Enabled:       getBool("RATELIMIT_ENABLED", false),
 			FailOpen:      getBool("RATELIMIT_FAIL_OPEN", rateLimitFailOpenDefault),
@@ -477,6 +498,9 @@ func (c *Config) Lint() error {
 	}
 	if c.Auth.Enabled && !c.Postgres.Enabled {
 		return fmt.Errorf("auth enabled requires postgres enabled")
+	}
+	if c.Tenancy.EnforceIsolation && !c.Tenancy.Enabled {
+		return fmt.Errorf("tenancy enforce-isolation requires tenancy enabled")
 	}
 	if c.RateLimit.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("ratelimit enabled requires redis enabled")

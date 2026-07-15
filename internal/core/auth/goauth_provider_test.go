@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewGoAuthEngineRequiresRedis(t *testing.T) {
-	engine, shutdown, err := NewGoAuthEngine(nil, ModeHybrid, nil)
+	engine, shutdown, err := NewGoAuthEngine(nil, ModeHybrid, TenancySettings{}, nil)
 	if err == nil {
 		t.Fatalf("expected error when redis client is nil")
 	}

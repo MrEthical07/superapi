@@ -166,45 +166,6 @@ func TestRenderQueries_WithLastLogin(t *testing.T) {
 	}
 }
 
-func TestRenderProvider_Default(t *testing.T) {
-	cfg := DefaultConfig()
-	provider, err := renderProvider(cfg)
-	if err != nil {
-		t.Fatalf("render provider: %v", err)
-	}
-
-	mustContain := []string{
-		"SQLCUserProvider",
-		"NewSQLCUserProvider",
-		"GetUserByIdentifier",
-		"GetUserByID",
-		"UpdatePasswordHash",
-		"CreateUser",
-		"UpdateAccountStatus",
-		"mapAccountStatusToString",
-		"parseAccountStatus",
-	}
-
-	for _, s := range mustContain {
-		if !strings.Contains(provider, s) {
-			t.Errorf("provider should contain %q", s)
-		}
-	}
-}
-
-func TestRenderProvider_WithTenant(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.TenantEnabled = true
-	provider, err := renderProvider(cfg)
-	if err != nil {
-		t.Fatalf("render provider: %v", err)
-	}
-
-	if !strings.Contains(provider, "parseTenantUUID") {
-		t.Error("provider with tenant should contain parseTenantUUID")
-	}
-}
-
 func TestBuildSelectColumns_Default(t *testing.T) {
 	cfg := DefaultConfig()
 	cols := buildSelectColumns(cfg)
@@ -255,24 +216,6 @@ func TestBuildInsertColumns_EmailPK(t *testing.T) {
 
 	if cols[0] != "email" {
 		t.Errorf("email PK first insert col should be email, got %q", cols[0])
-	}
-}
-
-func TestToPascal(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"email", "Email"},
-		{"password_hash", "PasswordHash"},
-		{"created_at", "CreatedAt"},
-		{"identifier", "Identifier"},
-	}
-	for _, tc := range cases {
-		got := toPascal(tc.in)
-		if got != tc.want {
-			t.Errorf("toPascal(%q) = %q, want %q", tc.in, got, tc.want)
-		}
 	}
 }
 

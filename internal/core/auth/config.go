@@ -39,7 +39,19 @@ import (
 	goauth "github.com/MrEthical07/goAuth"
 )
 
-func ProjectGoAuthConfig(mode Mode) (goauth.Config, error) {
+// TenancySettings controls goAuth multi-tenant behavior. It is populated from
+// application config (TENANCY_ENABLED / TENANCY_ENFORCE_ISOLATION) and passed
+// into ProjectGoAuthConfig so the goAuth engine matches the app-wide tenancy
+// decision. The zero value leaves multi-tenant behavior off.
+type TenancySettings struct {
+	// Enabled turns on goAuth multi-tenant handling.
+	Enabled bool
+	// EnforceIsolation requests strict tenant isolation checks (only meaningful
+	// when Enabled is true).
+	EnforceIsolation bool
+}
+
+func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, error) {
 	cfg := goauth.DefaultConfig()
 
 	// ------------------------------------------------------------
@@ -47,6 +59,17 @@ func ProjectGoAuthConfig(mode Mode) (goauth.Config, error) {
 	// ------------------------------------------------------------
 
 	cfg.ValidationMode = toGoAuthValidationMode(mode)
+
+	// ------------------------------------------------------------
+	// Multi-Tenant
+	// ------------------------------------------------------------
+	//
+	// Follows the application-wide tenancy decision (TENANCY_ENABLED). When
+	// tenancy is off this leaves goAuth's tenant handling inert; the default
+	// JWT carries no tenant, so enabling it only matters once principals carry
+	// a tenant id. See docs/policies.md and the "Removing tenancy" guide.
+	cfg.MultiTenant.Enabled = tenancy.Enabled
+	cfg.MultiTenant.EnforceIsolation = tenancy.Enabled && tenancy.EnforceIsolation
 
 	// ------------------------------------------------------------
 	// JWT Behavior
@@ -70,6 +93,55 @@ func ProjectGoAuthConfig(mode Mode) (goauth.Config, error) {
 
 	cfg.Account.Enabled = true
 	cfg.Account.DefaultRole = "user"
+
+	// ------------------------------------------------------------
+	// Session Ceiling / Remember-Me (goAuth v0.4.0)
+	// ------------------------------------------------------------
+	//
+	// MaxSessionDuration is the absolute lifetime ceiling for any session,
+	// including remember-me sessions. Unset (0) lets goAuth apply its per-mode
+	// default. When set it must be >= 1m (goAuth validates this at Build).
+	if d, ok, err := envDuration("AUTH_MAX_SESSION_DURATION"); err != nil {
+		return goauth.Config{}, err
+	} else if ok {
+		cfg.Session.MaxSessionDuration = d
+	}
+
+	// ------------------------------------------------------------
+	// Sliding-Window Auth Limiter (goAuth v0.4.0)
+	// ------------------------------------------------------------
+	//
+	// Selects goAuth's internal auth-abuse limiter counting algorithm.
+	// Accepts "fixed" (default) or "sliding"; goAuth validates the value at
+	// Build. This governs goAuth's own login/refresh abuse limiter and is
+	// independent of SuperAPI's route rate limiter in internal/core/ratelimit.
+	if mode := strings.TrimSpace(os.Getenv("AUTH_LIMITER_WINDOW_MODE")); mode != "" {
+		cfg.Security.LimiterWindowMode = strings.ToLower(mode)
+	}
+
+	// ------------------------------------------------------------
+	// Ed25519 Key Rotation (goAuth v0.4.0)
+	// ------------------------------------------------------------
+	//
+	// VerifyKeys maps key IDs (kid) to Ed25519 public-key material so tokens
+	// signed under a retired kid still verify during an overlap window. goAuth
+	// couples this: when VerifyKeys is non-empty, KeyID must be set AND present
+	// in the map (else Build fails). We therefore require AUTH_KEY_ID and at
+	// least the active key whenever any verify key is supplied — set both or
+	// neither. Keys are PEM- or raw-encoded per AUTH_VERIFY_KEYS below.
+	if err := applyKeyRotation(&cfg); err != nil {
+		return goauth.Config{}, err
+	}
+
+	// ------------------------------------------------------------
+	// WebAuthn (goAuth v0.4.0) — scaffolded, disabled by default
+	// ------------------------------------------------------------
+	//
+	// Enabled defaults to false. When left off, goAuth does not require the
+	// WebAuthn capability at Build even though StoreUserProvider implements it,
+	// and the ceremony endpoints are inert. Enabling is a config + optional
+	// migration step (see docs/enabling-webauthn.md).
+	applyWebAuthnConfig(&cfg)
 
 	// ------------------------------------------------------------
 	// Example: JWT Identity Overrides

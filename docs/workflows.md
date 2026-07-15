@@ -58,20 +58,21 @@ Before writing business logic, do these checks:
 
 Scaffold output is a starting point. Update it to follow enforced flow:
 
-- handler -> service -> repository -> store
-- service does not call store execution methods (Execute, Query, etc.) directly; it may only call store.WithTx to define write transaction boundaries
+- handler -> service -> repository -> `DB().Queries(ctx)`
+- service runs no queries itself; it may only call `DB().WithTx(ctx, fn)` to
+  define write transaction boundaries
 - repositories must not control transaction boundaries
-- repository public interface is domain-focused
+- repository public interface is domain-focused (no sqlc/pgx types)
 
 ## 3. Implementing Data Access
 
 For each module:
 
-1. Choose storage type (relational or document).
-2. Define repository contract in domain language.
-3. Implement repository using store operations.
-4. Wire repository/service in module dependency binding.
-5. Keep write paths transactional and read paths direct.
+1. Choose storage type (relational via `DB()`, or the optional document store).
+2. Define the repository contract in domain language.
+3. Implement the repository using `DB().Queries(ctx)` and row->domain mapping.
+4. Wire the repository/service in the module's dependency binding (`runtime.DB()`).
+5. Keep write paths transactional (`WithTx`) and read paths direct.
 
 ## 4. Transaction Workflow
 
@@ -79,19 +80,22 @@ For each module:
 
 Pattern:
 
-- service calls store.WithTx to define the transaction boundary
-- service invokes repository write method(s) inside the transaction callback context
-- repository performs all store.Execute calls within that context
-- store handles commit/rollback
-- service must not call store execution methods (Execute, Query, etc.) directly
+- service calls `DB().WithTx(ctx, fn)` to define the transaction boundary
+- service invokes repository write method(s) with the callback's `txCtx`
+- repository runs `Queries(txCtx).<GeneratedWrite>(...)`, joining the tx
+- `WithTx` commits on nil error and rolls back on error/panic
+- the service runs no queries itself
 
 ### 4.2 Read paths
 
 Pattern:
 
-- service calls repository read method
-- repository executes read operation through store
+- service calls the repository read method with `ctx`
+- repository runs `Queries(ctx).<GeneratedRead>(...)` on the pool
 - no forced tx wrapper by default
+
+See [docs/transactions.md](transactions.md) for the full guide and the
+context-threading gotcha.
 
 ## 5. Relational Backend Workflow
 
@@ -134,18 +138,20 @@ Important:
 
 ## 6. Auth Workflow
 
-Auth integration is store-backed but goAuth boundary is unchanged.
+Auth persistence uses the sqlc data layer; the goAuth boundary is unchanged.
 
 Runtime sequence:
 
-- app wiring creates auth repository over relational store
-- app wiring creates StoreUserProvider from repository
-- goAuth engine is built with redis + provider
+- app wiring creates the auth repository over the `storage.Postgres` boundary
+- app wiring creates the sqlc-backed `StoreUserProvider` from the repository
+- the goAuth engine (v0.4.0) is built with Redis + provider + tenancy settings
 
 When testing auth routes:
 
 - POST /api/v1/system/auth/login
+- POST /api/v1/system/auth/mfa/confirm
 - POST /api/v1/system/auth/refresh
+- POST /api/v1/system/auth/logout
 - GET /api/v1/system/whoami (requires auth)
 
 See [docs/auth-goauth.md](auth-goauth.md) for details.
@@ -162,10 +168,10 @@ make verify
 
 Architecture review checks:
 
-- no handler bypass to data layer
-- no service direct call to store execution methods (Execute, Query, etc.) or driver
-- no repository direct driver usage
-- no repository controlling transaction boundaries (WithTx)
+- no handler bypass to the data layer
+- no service running queries directly (`Queries(ctx)`) or touching pgx
+- repositories obtain queries only via `Queries(ctx)`
+- no repository controlling transaction boundaries (`WithTx`)
 - one storage type per module
 - policy order is valid
 

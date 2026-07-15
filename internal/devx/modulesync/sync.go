@@ -135,7 +135,11 @@ func cleanupManaged(dir string, managed map[string]struct{}) error {
 		if err != nil {
 			return fmt.Errorf("read managed target %s: %w", target, err)
 		}
-		if strings.HasPrefix(string(content), generatedHeaderPrefix) {
+		// Normalize CRLF so the managed-header detection is line-ending agnostic;
+		// on a CRLF checkout a raw HasPrefix against the LF header would miss and
+		// leave stale managed files behind (or, worse, mismanage them).
+		normalized := strings.ReplaceAll(string(content), "\r\n", "\n")
+		if strings.HasPrefix(normalized, generatedHeaderPrefix) {
 			if err := os.Remove(target); err != nil {
 				return fmt.Errorf("remove stale managed target %s: %w", target, err)
 			}

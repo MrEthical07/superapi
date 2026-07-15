@@ -80,7 +80,11 @@ func validateTenantRules(pattern string, metas []Metadata) error {
 		return fmt.Errorf("%s requires %s", PolicyTypeTenantMatchFromPath, PolicyTypeTenantRequired)
 	}
 
-	if patternContainsTenantID(pattern) {
+	// When tenancy is disabled a {tenant_id} path segment is an ordinary
+	// parameter and does not force tenant policies onto the route. The
+	// dependency rule above (TenantMatchFromPath requires TenantRequired) still
+	// applies whenever those policies are explicitly used.
+	if patternContainsTenantID(pattern) && TenancyEnabled() {
 		if !hasTenantRequired {
 			return fmt.Errorf("route %s requires %s", pattern, PolicyTypeTenantRequired)
 		}

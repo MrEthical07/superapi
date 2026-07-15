@@ -12,6 +12,7 @@ import (
 type Module struct {
 	runtime  modulekit.Runtime
 	rateRule ratelimit.Rule
+	auth     *authService
 }
 
 // New constructs the system module.
@@ -26,6 +27,7 @@ func (m *Module) Name() string { return "system" }
 // BindDependencies captures runtime dependencies and derives default rate-limit rule.
 func (m *Module) BindDependencies(deps *app.Dependencies) {
 	m.runtime = modulekit.New(deps)
+	m.auth = newAuthService(m.runtime.AuthEngine())
 	if deps == nil {
 		m.rateRule = ratelimit.Rule{Limit: 10, Window: time.Minute, Scope: ratelimit.ScopeUser}
 		return

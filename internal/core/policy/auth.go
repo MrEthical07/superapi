@@ -12,10 +12,8 @@ import (
 
 	"github.com/MrEthical07/superapi/internal/core/auth"
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
-	"github.com/MrEthical07/superapi/internal/core/params"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
-	"github.com/MrEthical07/superapi/internal/core/tenant"
 )
 
 // AuthRequired enforces authentication on a route.
@@ -243,86 +241,4 @@ func goAuthEngineFromContext(ctx context.Context) (*goauth.Engine, bool) {
 		return nil, false
 	}
 	return engine, true
-}
-
-// TenantRequired ensures authenticated requests carry tenant scope.
-//
-// Behavior:
-// - Returns 401 when authentication context is absent
-// - Returns 403 when tenant scope is missing
-//
-// Notes:
-// - Required for tenant-isolated routes
-// - Place after AuthRequired
-func TenantRequired() Policy {
-	p := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rid := requestid.FromContext(r.Context())
-			if _, ok := auth.FromContext(r.Context()); !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
-				return
-			}
-			if err := tenant.RequireTenant(r.Context()); err != nil {
-				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), rid)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-
-	return annotatePolicy(p, Metadata{Type: PolicyTypeTenantRequired, Name: "TenantRequired"})
-}
-
-// TenantMatchFromPath enforces tenant isolation using a route path parameter.
-//
-// Behavior:
-// - Returns 400 when route tenant parameter is missing
-// - Returns 401 when auth context is missing
-// - Returns 404 when principal tenant and route tenant mismatch
-//
-// Usage:
-//
-//	r.Handle(http.MethodGet, "/api/v1/tenants/{tenant_id}/projects", handler,
-//	    policy.AuthRequired(engine, mode),
-//	    policy.TenantRequired(),
-//	    policy.TenantMatchFromPath("tenant_id"),
-//	)
-func TenantMatchFromPath(paramName string) Policy {
-	paramName = strings.TrimSpace(paramName)
-	if paramName == "" {
-		panicInvalidRouteConfigf("%s requires a non-empty path parameter name", PolicyTypeTenantMatchFromPath)
-	}
-
-	p := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rid := requestid.FromContext(r.Context())
-			principal, ok := auth.FromContext(r.Context())
-			if !ok {
-				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
-				return
-			}
-
-			resourceTenant := strings.TrimSpace(params.URLParam(r, paramName))
-			if resourceTenant == "" {
-				response.Error(w, apperr.New(apperr.CodeBadRequest, http.StatusBadRequest, paramName+" is required"), rid)
-				return
-			}
-			if strings.TrimSpace(principal.TenantID) == "" {
-				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), rid)
-				return
-			}
-			if !tenant.IsSameTenant(principal.TenantID, resourceTenant) {
-				response.Error(w, apperr.New(apperr.CodeNotFound, http.StatusNotFound, "not found"), rid)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-
-	return annotatePolicy(p, Metadata{
-		Type:            PolicyTypeTenantMatchFromPath,
-		Name:            "TenantMatchFromPath",
-		TenantPathParam: paramName,
-	})
 }
