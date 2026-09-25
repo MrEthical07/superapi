@@ -144,7 +144,7 @@ bench-hotpath:
 
 # template:begin perf
 # ---------------------------------------------------------------------------
-# Load testing (performance/; scripts are Windows/PowerShell-first)
+# Load testing (performance/; PowerShell scripts with POSIX ports for vegeta and seeding)
 # ---------------------------------------------------------------------------
 
 perf-token:
@@ -157,5 +157,9 @@ load-k6-10k:
 
 load-vegeta-10k:
 	@if [ -z "$(PERF_AUTH_TOKEN)" ]; then echo "PERF_AUTH_TOKEN is required"; exit 1; fi
-	powershell -ExecutionPolicy Bypass -File performance/vegeta/run.ps1 -BaseUrl "$(PERF_BASE_URL)" -AuthToken "$(PERF_AUTH_TOKEN)" -Rate "$(PERF_RATE)" -RampDuration "$(PERF_RAMP)" -SustainDuration "$(PERF_SUSTAIN)" -OutputDir "$(PERF_OUTPUT_DIR)/vegeta"
+	@if command -v powershell >/dev/null 2>&1; then \
+		powershell -ExecutionPolicy Bypass -File performance/vegeta/run.ps1 -BaseUrl "$(PERF_BASE_URL)" -AuthToken "$(PERF_AUTH_TOKEN)" -Rate "$(PERF_RATE)" -RampDuration "$(PERF_RAMP)" -SustainDuration "$(PERF_SUSTAIN)" -OutputDir "$(PERF_OUTPUT_DIR)/vegeta"; \
+	else \
+		performance/vegeta/run.sh -b "$(PERF_BASE_URL)" -t "$(PERF_AUTH_TOKEN)" -r "$(PERF_RATE)" -u "$(PERF_RAMP)" -s "$(PERF_SUSTAIN)" -o "$(PERF_OUTPUT_DIR)/vegeta"; \
+	fi
 # template:end perf
