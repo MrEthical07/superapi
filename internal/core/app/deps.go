@@ -211,12 +211,14 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init auth provider: user repository unavailable")
 		}
 
+		userProvider := auth.NewStoreUserProvider(userRepo).WithTenancy(cfg.Tenancy.Enabled)
+
+		// template:begin webauthn
 		// The provider always carries the WebAuthn credential capability so
-		// enabling WebAuthn is a config + optional migration step. goAuth only
-		// exercises it when WEBAUTHN_ENABLED is set.
-		userProvider := auth.NewStoreUserProvider(userRepo).
-			WithTenancy(cfg.Tenancy.Enabled).
-			WithWebAuthnRepository(auth.NewWebAuthnCredentialRepository(deps.DB))
+		// enabling WebAuthn is a config step. goAuth only exercises it when
+		// WEBAUTHN_ENABLED is set.
+		userProvider = userProvider.WithWebAuthnRepository(auth.NewWebAuthnCredentialRepository(deps.DB))
+		// template:end webauthn
 
 		// TOTP persistence (and the at-rest cipher) is only wired when TOTP
 		// is enabled; config lint guarantees the key is present and valid.

@@ -17,16 +17,20 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/app"
 	coreauth "github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/config"
+	// template:begin tenancy
 	"github.com/MrEthical07/superapi/internal/core/tenant"
+	// template:end tenancy
 )
 
 type options struct {
 	email               string
 	role                string
-	tenantID            string
-	createTenant        bool
 	passwordStdin       bool
 	requireVerification bool
+	// template:begin tenancy
+	tenantID     string
+	createTenant bool
+	// template:end tenancy
 }
 
 func main() {
@@ -56,6 +60,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error: AUTH_ENABLED=true is required (with POSTGRES_ENABLED and REDIS_ENABLED); see .env.example")
 		return 1
 	}
+	// template:begin tenancy
 	if cfg.Tenancy.Enabled && opts.tenantID == "" {
 		fmt.Fprintln(stderr, "error: TENANCY_ENABLED=true requires --tenant")
 		return 2
@@ -64,6 +69,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error: --tenant requires TENANCY_ENABLED=true")
 		return 2
 	}
+	// template:end tenancy
 
 	password, err := readPassword(opts.passwordStdin, stdin, stderr)
 	if err != nil {
@@ -81,6 +87,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer deps.Close()
 
+	// template:begin tenancy
 	if opts.tenantID != "" {
 		if err := ensureTenant(ctx, deps, cfg, opts); err != nil {
 			fmt.Fprintln(stderr, "error:", err)
@@ -88,6 +95,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		ctx = coreauth.WithRequestTenant(ctx, opts.tenantID)
 	}
+	// template:end tenancy
 
 	result, err := deps.AuthEngine.CreateAccount(ctx, goauth.CreateAccountRequest{
 		Identifier: opts.email,
@@ -120,9 +128,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "created user\n  id:     %s\n  email:  %s\n  role:   %s\n  status: %s\n", result.UserID, opts.email, result.Role, status)
+	// template:begin tenancy
 	if opts.tenantID != "" {
 		fmt.Fprintf(stdout, "  tenant: %s\n", opts.tenantID)
 	}
+	// template:end tenancy
 	return 0
 }
 
@@ -132,8 +142,10 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	var opts options
 	fs.StringVar(&opts.email, "email", "", "login identifier (email) for the new account (required)")
 	fs.StringVar(&opts.role, "role", coreauth.RoleUser, "role to assign (must exist in internal/core/auth/roles.go)")
+	// template:begin tenancy
 	fs.StringVar(&opts.tenantID, "tenant", "", "tenant id (required when TENANCY_ENABLED=true)")
 	fs.BoolVar(&opts.createTenant, "create-tenant", false, "create the tenant (active) if it does not exist")
+	// template:end tenancy
 	fs.BoolVar(&opts.passwordStdin, "password-stdin", false, "read the password from stdin instead of prompting")
 	fs.BoolVar(&opts.requireVerification, "require-verification", false, "leave the account pending email verification (only with AUTH_EMAIL_VERIFICATION_ENABLED)")
 	if err := fs.Parse(args); err != nil {
@@ -144,13 +156,15 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	}
 	opts.email = strings.TrimSpace(opts.email)
 	opts.role = strings.TrimSpace(opts.role)
-	opts.tenantID = strings.TrimSpace(opts.tenantID)
 	if opts.email == "" {
 		return options{}, errors.New("--email is required")
 	}
+	// template:begin tenancy
+	opts.tenantID = strings.TrimSpace(opts.tenantID)
 	if opts.tenantID != "" && !tenant.ValidTenantID(opts.tenantID) {
 		return options{}, fmt.Errorf("invalid --tenant %q", opts.tenantID)
 	}
+	// template:end tenancy
 	return opts, nil
 }
 
@@ -192,32 +206,4 @@ func readPassword(fromStdin bool, stdin io.Reader, stderr io.Writer) (string, er
 		return "", errors.New("empty password")
 	}
 	return string(first), nil
-}
-
-// ensureTenant makes sure the tenant exists (creating it with --create-tenant)
-// so the new user can actually pass tenant validation at the HTTP edge.
-func ensureTenant(ctx context.Context, deps *app.Dependencies, cfg *config.Config, opts options) error {
-	repo := tenant.NewRepository(deps.DB)
-	if repo == nil {
-		return errors.New("tenant repository unavailable (POSTGRES_ENABLED=false?)")
-	}
-	record, err := repo.Get(ctx, opts.tenantID)
-	switch {
-	case errors.Is(err, tenant.ErrTenantNotFound):
-		if !opts.createTenant {
-			if cfg.Tenancy.Validate {
-				return fmt.Errorf("tenant %q does not exist; pass --create-tenant to create it", opts.tenantID)
-			}
-			return nil
-		}
-		if _, err := repo.Create(ctx, tenant.Record{ID: opts.tenantID, Slug: opts.tenantID, Name: opts.tenantID, Status: tenant.StatusActive}); err != nil {
-			return err
-		}
-		return nil
-	case err != nil:
-		return err
-	case !record.Active():
-		return fmt.Errorf("tenant %q is not active", opts.tenantID)
-	}
-	return nil
 }

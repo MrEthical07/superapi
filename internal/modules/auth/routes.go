@@ -90,6 +90,7 @@ func (m *Module) Register(r httpx.Router) error {
 		)
 	}
 
+	// template:begin webauthn
 	// --- WebAuthn (WEBAUTHN_ENABLED) ---
 	//
 	// Registered whenever auth is on, as in v0.8.0: while WebAuthn is disabled
@@ -106,6 +107,7 @@ func (m *Module) Register(r httpx.Router) error {
 	r.Handle(http.MethodPost, "/api/v1/auth/webauthn/credentials/remove", httpx.Adapter(m.webAuthnRemoveCredential),
 		policy.AuthRequired(engine, mode),
 	)
+	// template:end webauthn
 
 	return nil
 }

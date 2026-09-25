@@ -9,6 +9,47 @@ permissions:
   contents: read
 
 jobs:
+  # template:begin init
+  # Runs `make init` against a copy of the template for the default and the
+  # everything-pruned combinations, then that project's own gate.
+  templateinit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flags: ["", "--no-all"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+
+      - name: Dry run
+        run: go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }} --dry-run
+
+      - name: Initialize a copy and run its gate
+        run: |
+          dst="$RUNNER_TEMP/project"
+          mkdir -p "$dst"
+          git ls-files -z | xargs -0 cp --parents -t "$dst"
+          cd "$dst"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }}
+          if grep -rl "MrEthical07/superapi" .; then echo "old module path still referenced"; exit 1; fi
+          if grep -rlE "template:(begin|end) " .; then echo "template markers left behind"; exit 1; fi
+          git init -q && git add -A && git -c user.email=ci@example.com -c user.name=ci commit -qm init
+          make sqlc-generate && git diff --exit-code
+          go build ./...
+          go vet ./...
+          go run ./cmd/superapi-verify ./...
+          go test ./... -race
+  # template:end init
+
   test:
     runs-on: ubuntu-latest
 

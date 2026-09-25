@@ -211,6 +211,7 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features) 
 		return goauth.Config{}, err
 	}
 
+	// template:begin webauthn
 	// ------------------------------------------------------------
 	// WebAuthn (goAuth v0.4.0) — scaffolded, disabled by default
 	// ------------------------------------------------------------
@@ -220,6 +221,7 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features) 
 	// and the ceremony endpoints are inert. Enabling is a config + optional
 	// migration step (see docs/enabling-webauthn.md).
 	applyWebAuthnConfig(&cfg)
+	// template:end webauthn
 
 	// ------------------------------------------------------------
 	// Example: JWT Identity Overrides

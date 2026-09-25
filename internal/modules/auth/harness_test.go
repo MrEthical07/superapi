@@ -25,7 +25,9 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/notify"
 	"github.com/MrEthical07/superapi/internal/core/policy"
+	// template:begin tenancy
 	"github.com/MrEthical07/superapi/internal/core/tenant"
+	// template:end tenancy
 )
 
 const testPassword = "correct-horse-battery-staple"
@@ -120,9 +122,11 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		t.Fatalf("register: %v", err)
 	}
 	var handler http.Handler = mux
+	// template:begin tenancy
 	if opts.tenancy {
 		handler = tenant.Middleware(tenant.ResolverConfig{Header: "X-Tenant-ID"})(mux)
 	}
+	// template:end tenancy
 	return &harness{t: t, engine: engine, handler: handler, notifier: capture, dispatcher: dispatcher, users: users}
 }
 

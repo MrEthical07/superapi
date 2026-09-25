@@ -115,6 +115,7 @@ type TenancyConfig struct {
 	// Enabled turns on multi-tenant policy, cache, and rate-limit behavior, the
 	// tenant resolution middleware, and goAuth's tenant-scoped user lookup.
 	Enabled bool
+	// template:begin tenancy
 	// Resolver selects how the request tenant is resolved: "header" (default)
 	// or "subdomain". Only used when Enabled is true.
 	Resolver string
@@ -140,13 +141,17 @@ type TenancyConfig struct {
 	//
 	// Deprecated: remove TENANCY_ENFORCE_ISOLATION from your environment.
 	EnforceIsolation bool
+	// template:end tenancy
 }
 
+// template:begin tenancy
 // Tenancy resolver names accepted by TENANCY_RESOLVER.
 const (
 	TenancyResolverHeader    = "header"
 	TenancyResolverSubdomain = "subdomain"
 )
+
+// template:end tenancy
 
 // RateLimitConfig defines default policy values for route rate limiting.
 type RateLimitConfig struct {
@@ -429,6 +434,7 @@ func Load() (*Config, error) {
 			TOTPEncryptionKey:         strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_KEY", "")),
 			TestOverridesAllowed:      isDevOrTestEnv(env),
 		},
+		// template:begin tenancy
 		Tenancy: TenancyConfig{
 			Enabled:          getBool("TENANCY_ENABLED", false),
 			Resolver:         strings.ToLower(strings.TrimSpace(getenv("TENANCY_RESOLVER", TenancyResolverHeader))),
@@ -439,6 +445,7 @@ func Load() (*Config, error) {
 			ExemptPaths:      getCSV("TENANCY_EXEMPT_PATHS", []string{"/healthz", "/readyz", "/metrics"}),
 			EnforceIsolation: getBool("TENANCY_ENFORCE_ISOLATION", false),
 		},
+		// template:end tenancy
 		RateLimit: RateLimitConfig{
 			Enabled:       getBool("RATELIMIT_ENABLED", false),
 			FailOpen:      getBool("RATELIMIT_FAIL_OPEN", rateLimitFailOpenDefault),
@@ -617,6 +624,7 @@ func (c *Config) Lint() error {
 	if c.Notify.Timeout <= 0 {
 		return fmt.Errorf("notify timeout must be > 0")
 	}
+	// template:begin tenancy
 	if c.Tenancy.Enabled {
 		switch c.Tenancy.Resolver {
 		case TenancyResolverHeader:
@@ -642,6 +650,7 @@ func (c *Config) Lint() error {
 			}
 		}
 	}
+	// template:end tenancy
 	if c.RateLimit.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("ratelimit enabled requires redis enabled")
 	}
@@ -1011,9 +1020,11 @@ func isDevOrTestEnv(env string) bool {
 // startup on their own.
 func (c *Config) Deprecations() []string {
 	var out []string
+	// template:begin tenancy
 	if _, ok := os.LookupEnv("TENANCY_ENFORCE_ISOLATION"); ok {
 		out = append(out, "TENANCY_ENFORCE_ISOLATION is deprecated and ignored: goAuth v0.5.0 made MultiTenant.EnforceIsolation a no-op; tenant enforcement is governed by TENANCY_ENABLED alone. Remove it from your environment; it will be rejected in a future release.")
 	}
+	// template:end tenancy
 	return out
 }
 

@@ -15,7 +15,9 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/notify"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
+	// template:begin tenancy
 	"github.com/MrEthical07/superapi/internal/core/tenant"
+	// template:end tenancy
 )
 
 // START HERE:
@@ -79,7 +81,9 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	}
 
 	var handler http.Handler = httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing,
+		// template:begin tenancy
 		httpx.WithTenantResolver(tenantResolver(cfg, deps)),
+		// template:end tenancy
 	)
 	if deps.Metrics != nil {
 		handler = deps.Metrics.InstrumentHTTP(handler)
@@ -120,6 +124,7 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	return a, nil
 }
 
+// template:begin tenancy
 // tenantResolver builds the tenant resolution middleware when tenancy is
 // enabled, or returns nil (no middleware) when it is off.
 func tenantResolver(cfg *config.Config, deps *Dependencies) func(http.Handler) http.Handler {
@@ -144,6 +149,8 @@ func tenantResolver(cfg *config.Config, deps *Dependencies) func(http.Handler) h
 	}
 	return tenant.Middleware(resolverCfg)
 }
+
+// template:end tenancy
 
 func requireBearerToken(next http.Handler, token string) http.Handler {
 	token = strings.TrimSpace(token)

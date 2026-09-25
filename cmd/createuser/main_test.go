@@ -16,7 +16,9 @@ func TestParseFlags(t *testing.T) {
 		{name: "ok", args: []string{"--email", " a@example.com ", "--role", "admin"}},
 		{name: "missing email", args: []string{}, wantErr: "--email is required"},
 		{name: "positional password rejected", args: []string{"--email", "a@example.com", "hunter2"}, wantErr: "never passed as an argument"},
+		// template:begin tenancy
 		{name: "bad tenant", args: []string{"--email", "a@example.com", "--tenant", "../x"}, wantErr: "invalid --tenant"},
+		// template:end tenancy
 		{name: "no password flag exists", args: []string{"--email", "a@example.com", "--password", "x"}, wantErr: "flag provided but not defined"},
 	}
 	for _, tc := range cases {
