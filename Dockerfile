@@ -8,7 +8,7 @@
 #
 # The runtime config is read from the environment only (no .env inside).
 
-FROM golang:1.26.5-bookworm AS build
+FROM golang:1.26.8-bookworm AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOFLAGS=-trimpath
 

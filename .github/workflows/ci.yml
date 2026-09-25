@@ -19,15 +19,15 @@ jobs:
       matrix:
         flags: ["", "--no-all"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
 
       - name: Install sqlc
-        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 
       - name: Dry run
         run: go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }} --dry-run
@@ -55,7 +55,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: superapi
           POSTGRES_PASSWORD: superapi
@@ -68,7 +68,7 @@ jobs:
           --health-timeout 3s
           --health-retries 30
       redis:
-        image: redis:7-alpine
+        image: redis:8-alpine
         ports:
           - 6379:6379
         options: >-
@@ -83,12 +83,12 @@ jobs:
       SUPERAPI_TEST_DATABASE_URL: postgres://superapi:superapi@127.0.0.1:5432/superapi?sslmode=disable
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
 
       - name: Go env
         run: go env
@@ -105,7 +105,7 @@ jobs:
 
       # Version pinned to the one recorded in internal/core/db/sqlcgen headers.
       - name: Install sqlc
-        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 
       - name: sqlc drift check
         run: |
@@ -133,7 +133,7 @@ jobs:
 
       - name: Install golangci-lint
         run: |
-          GOBIN=$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.6
+          GOBIN=$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
       - name: Lint
         run: $(go env GOPATH)/bin/golangci-lint run
@@ -151,7 +151,7 @@ jobs:
         run: cyclonedx-gomod mod -licenses -json -output sbom.cdx.json
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-cyclonedx
           path: sbom.cdx.json

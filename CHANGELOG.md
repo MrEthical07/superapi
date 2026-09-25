@@ -76,7 +76,7 @@ changes listed first.
 
 ### Added
 
-- **goAuth v0.5.0** (from v0.4.0), including OpenTelemetry v1.44.0 via goAuth.
+- **goAuth v0.5.0** (from v0.4.0).
 - **`internal/modules/auth`**: login, MFA confirm, refresh, logout, logout-all,
   sessions, password change, whoami, WebAuthn ceremonies, plus flag-gated
   groups: registration (`AUTH_REGISTRATION_ENABLED`, optional
@@ -108,7 +108,7 @@ changes listed first.
   `--no-tenancy`, `--no-webauthn`, `--no-document-store`, `--no-devx`,
   `--no-perf`, `--no-demo` (or `--no-all`), then deletes itself. Idempotent,
   with `--dry-run` and `--keep-init`.
-- **Local dev stack**: `docker-compose.yml` (Postgres 17 + Redis 7),
+- **Local dev stack**: `docker-compose.yml` (Postgres 18 + Redis 8),
   `make dev-up`/`dev-down`/`dev-reset`, `make doctor`,
   `make test-integration`, and a multi-stage distroless `Dockerfile` (api,
   migrate, createuser).
@@ -117,7 +117,7 @@ changes listed first.
 - **Env documentation guard**: `internal/tools/envcheck`, run by
   `superapi-verify` and a test, fails when code reads an env var missing from
   `.env.example` or `docs/environment-variables.md`.
-- **CI**: Postgres/Redis service containers, sqlc v1.30.0 drift check,
+- **CI**: Postgres/Redis service containers, sqlc v1.31.1 drift check,
   `superapi-verify`, migrations up/down/up, gofmt, a `TENANCY_ENABLED=true` test
   pass, and a matrix job that runs `make init` (default and `--no-all`) on a
   copy and then that project's gate.
@@ -138,6 +138,25 @@ changes listed first.
   unchanged.
 - Perf scenarios target `/api/v1/auth/*`; the former parse-duration share
   moved to whoami.
+
+### Dependencies
+
+- Go toolchain 1.26.5 -> 1.26.8 (`go.mod`, CI, Dockerfile).
+- goAuth v0.4.0 -> v0.5.0; go-webauthn v0.17.4 -> v0.18.2 (indirect, via goAuth).
+- pgx v5.9.2 -> v5.11.0, go-redis v9.18.0 -> v9.22.0, chi v5.2.5 -> v5.3.2,
+  golang-migrate v4.19.1 -> v4.20.1, zerolog v1.34.0 -> v1.35.1,
+  prometheus client_golang v1.23.2 -> v1.24.1 (client_model v0.6.3),
+  miniredis v2.37.0 -> v2.39.0.
+- OpenTelemetry (otel, sdk, trace, metric, otlptrace/otlptracegrpc)
+  v1.43.0/v1.42.0 -> v1.46.0; grpc v1.79.3 -> v1.84.0; protobuf v1.36.12.
+- golang.org/x: crypto v0.57.0, net v0.59.0, sys v0.48.0, text v0.42.0,
+  sync v0.23.0; new golang.org/x/term v0.46.0 (password prompt).
+- Tooling: sqlc v1.30.0 -> v1.31.1 (generated headers only), golangci-lint
+  v1.64.6 -> v2.14.0 (`.golangci.yml` migrated to the v2 format; same linters),
+  GitHub Actions checkout/setup-go/upload-artifact -> v7, compose and CI
+  images Postgres 18 / Redis 8. Postgres 18 images store data under
+  `/var/lib/postgresql`, so the compose volume mount moved; recreate an old
+  local volume with `make dev-reset`.
 
 ### Deprecated
 
@@ -190,7 +209,7 @@ changes listed first.
 ### Verification
 
 - `make sqlc-generate` is idempotent (no diff on a second run).
-- `go build ./...`, `go vet ./...`, `golangci-lint run` (v1.64.6),
+- `go build ./...`, `go vet ./...`, `golangci-lint run` (v2.14.0),
   `go run ./cmd/superapi-verify ./...` pass.
 - `go test ./... -race` passes with and without `TENANCY_ENABLED=true`, and with
   `SUPERAPI_TEST_DATABASE_URL` against Postgres 16.

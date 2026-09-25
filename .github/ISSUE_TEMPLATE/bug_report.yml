@@ -39,8 +39,8 @@ body:
       label: Environment
       description: Go version, OS, profile/mode, and dependency versions.
       placeholder: |
-        Go 1.26
+        Go 1.26.8
         OS: linux/amd64
         APP_PROFILE=dev
-        Redis 7.x
-        Postgres 15.x
+        Redis 8.x
+        Postgres 18.x

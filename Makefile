@@ -75,14 +75,14 @@ doctor:
 	@ok=1; \
 	printf '%-10s' "go:";      if command -v $(GO) >/dev/null 2>&1; then $(GO) version; else echo "MISSING (https://go.dev/dl/)"; ok=0; fi; \
 	want=$$(sed -n 's/^go //p' go.mod); printf '%-10s%s\n' "go.mod:" "requires go $$want"; \
-	printf '%-10s' "sqlc:";    if command -v $(SQLC) >/dev/null 2>&1; then $(SQLC) version; else echo "missing (needed for make sqlc-generate: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0)"; fi; \
+	printf '%-10s' "sqlc:";    if command -v $(SQLC) >/dev/null 2>&1; then $(SQLC) version; else echo "missing (needed for make sqlc-generate: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1)"; fi; \
 	printf '%-10s' "docker:";  if $(DOCKER_COMPOSE) version >/dev/null 2>&1; then $(DOCKER_COMPOSE) version --short; else echo "missing (needed for make dev-up)"; fi; \
 	printf '%-10s' "migrate:"; echo "built in (go run ./cmd/migrate)"; \
 	printf '%-10s' ".env:";    if [ -f .env ]; then echo "present"; else echo "missing (cp .env.example .env)"; fi; \
 	[ $$ok = 1 ]
 
 # ---------------------------------------------------------------------------
-# Local dependencies (docker-compose.yml: Postgres 17 + Redis 7)
+# Local dependencies (docker-compose.yml: Postgres 18 + Redis 8)
 # ---------------------------------------------------------------------------
 
 dev-up:

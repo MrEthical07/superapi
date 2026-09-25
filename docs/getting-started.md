@@ -6,8 +6,8 @@ From "Use this template" to a running, authenticated API.
 
 - Go (the version in `go.mod`)
 - Docker with Compose v2 (for the local Postgres + Redis)
-- Optional: `sqlc` v1.30.0 if you will change SQL
-  (`go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0`)
+- Optional: `sqlc` v1.31.1 if you will change SQL
+  (`go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`)
 
 `make doctor` checks all of these.
 
@@ -47,7 +47,7 @@ default and `--no-all`).
 ## Start dependencies and configure
 
 ```bash
-make dev-up                 # Postgres 17 + Redis 7 (docker-compose.yml)
+make dev-up                 # Postgres 18 + Redis 8 (docker-compose.yml)
 cp .env.example .env        # credentials already match docker-compose.yml
 make migrate-up             # uses POSTGRES_URL from .env
 ```
