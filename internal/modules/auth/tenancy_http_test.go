@@ -1,4 +1,4 @@
-package system
+package auth
 
 import (
 	"bytes"
@@ -58,7 +58,7 @@ func TestTenancyEndToEnd(t *testing.T) {
 		return rr
 	}
 	login := func(tenantID, pw string) *httptest.ResponseRecorder {
-		return do(http.MethodPost, "/api/v1/system/auth/login", tenantID, "", map[string]string{"identifier": "erin@example.com", "password": pw})
+		return do(http.MethodPost, "/api/v1/auth/login", tenantID, "", map[string]string{"identifier": "erin@example.com", "password": pw})
 	}
 	errBody := func(rr *httptest.ResponseRecorder) string {
 		var env struct {
@@ -94,10 +94,10 @@ func TestTenancyEndToEnd(t *testing.T) {
 		t.Fatalf("missing tenant status=%d want 400", missing.Code)
 	}
 
-	if rr := do(http.MethodGet, "/api/v1/system/whoami", "tenant-a", tokens.Data.AccessToken, nil); rr.Code != http.StatusOK || !bytes.Contains(rr.Body.Bytes(), []byte(`"tenant_id":"tenant-a"`)) {
+	if rr := do(http.MethodGet, "/api/v1/auth/whoami", "tenant-a", tokens.Data.AccessToken, nil); rr.Code != http.StatusOK || !bytes.Contains(rr.Body.Bytes(), []byte(`"tenant_id":"tenant-a"`)) {
 		t.Fatalf("whoami same tenant status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	if rr := do(http.MethodGet, "/api/v1/system/whoami", "tenant-b", tokens.Data.AccessToken, nil); rr.Code != http.StatusUnauthorized {
+	if rr := do(http.MethodGet, "/api/v1/auth/whoami", "tenant-b", tokens.Data.AccessToken, nil); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("whoami with tenant-a token under tenant-b status=%d want 401", rr.Code)
 	}
 }

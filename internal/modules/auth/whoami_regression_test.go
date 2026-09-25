@@ -1,4 +1,4 @@
-package system
+package auth
 
 import (
 	"context"
@@ -36,7 +36,7 @@ func TestWhoamiSingleTenantOutputUnchanged(t *testing.T) {
 		t.Fatalf("register: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/whoami", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil)
 	req.Header.Set("Authorization", "Bearer "+access)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
