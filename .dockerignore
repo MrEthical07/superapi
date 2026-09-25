@@ -1,0 +1,12 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+bin/
+dist/
+build/
+coverage/
+performance/results/
+*.test
+*.out

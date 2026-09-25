@@ -125,12 +125,54 @@ Key rotation invariant (enforced by goAuth at Build and by SuperAPI at startup):
 - When AUTH_VERIFY_KEYS is set, AUTH_KEY_ID must be set and must name one of the
   entries in the map. Set both or neither.
 
+### 7.1 Auth feature flags
+
+Each flag enables one endpoint group in `internal/modules/auth` and the matching
+goAuth config section (`internal/core/auth/config.go`). All are off by default;
+a disabled group's routes are not registered (404). Every flag requires
+`AUTH_ENABLED=true`. See docs/auth-flows.md.
+
+| Env var | Default | Notes |
+|---|---|---|
+| AUTH_REGISTRATION_ENABLED | false | `POST /api/v1/auth/register` (enumeration-safe 202) |
+| AUTH_REGISTRATION_AUTO_LOGIN | false | return tokens (201) for newly created accounts. Trades away registration enumeration resistance. Requires AUTH_REGISTRATION_ENABLED |
+| AUTH_PASSWORD_RESET_ENABLED | false | `POST /api/v1/auth/password/reset/{request,confirm}` |
+| AUTH_EMAIL_VERIFICATION_ENABLED | false | `POST /api/v1/auth/email/verify/{request,confirm}`; new accounts start `pending_verification` |
+| AUTH_EMAIL_VERIFICATION_REQUIRED | true | block login until verified (only with AUTH_EMAIL_VERIFICATION_ENABLED) |
+| AUTH_TOTP_ENABLED | false | TOTP setup/confirm/disable and backup codes; users who enrolled are challenged at login |
+| AUTH_TOTP_ISSUER | APP_SERVICE_NAME | issuer label shown in authenticator apps |
+| AUTH_TOTP_ENCRYPTION_KEY | unset | base64-encoded 32-byte key encrypting TOTP secrets at rest (AES-256-GCM). Required when AUTH_TOTP_ENABLED=true. Generate with `openssl rand -base64 32`. Changing it makes stored TOTP secrets undecryptable |
+
+### 7.2 Notification delivery
+
+Password-reset and email-verification secrets are delivered out-of-band by
+`internal/core/notify` and never appear in HTTP responses.
+
+| Env var | Default | Notes |
+|---|---|---|
+| NOTIFY_DRIVER | noop | `noop` (discard) or `log` (development logger). Implement `notify.Notifier` for real email/SMS |
+| NOTIFY_LOG_SECRETS | false | log driver prints full secrets. Only allowed with APP_ENV=dev (lint) |
+| NOTIFY_TIMEOUT | 10s | per-delivery timeout (delivery is asynchronous) |
+
+### 7.3 Performance-testing overrides (dev/test only)
+
+`AUTH_TEST_*` switch JWT signing to a shared HS256 secret so several load
+generators can share tokens. They are **refused at startup unless APP_ENV is
+`dev` or `test`**. Never set them anywhere else. See docs/performance-testing.md.
+
+| Env var | Default | Notes |
+|---|---|---|
+| AUTH_TEST_SHARED_SECRET | unset | HS256 shared signing secret for perf runs |
+| AUTH_TEST_ACCESS_TTL | unset | access-token TTL override for perf runs |
+| AUTH_TEST_REFRESH_TTL | unset | refresh-token TTL override for perf runs |
+
 ## 7b. WebAuthn Variables
 
 WebAuthn is scaffolded but disabled by default. When `WEBAUTHN_ENABLED=false`
-the ceremony endpoints return a "webauthn disabled" error, goAuth does not
-require the WebAuthn capability at Build, and no schema is needed. Enabling is a
-config + optional-migration step — see docs/enabling-webauthn.md.
+the ceremony endpoints return a "webauthn disabled" error and goAuth does not
+require the WebAuthn capability at Build. The `webauthn_credentials` table
+(migration 000004) is always applied by `make migrate-up` and stays inert until
+enabled — see docs/enabling-webauthn.md.
 
 | Env var | Default | Notes |
 |---|---|---|
@@ -271,6 +313,12 @@ When APP_ENV is prod or production:
 - cache fail-open is rejected when cache enabled
 - metrics auth token is required when metrics enabled
 - tracing insecure default changes to false
+
+## 14a. Test-only Variables
+
+| Env var | Default | Notes |
+|---|---|---|
+| SUPERAPI_TEST_DATABASE_URL | unset | Postgres URL whose role may CREATE DATABASE. When set, integration tests (`internal/core/db/dbtest`) create, migrate and drop a throwaway database; otherwise they are skipped. `make test-integration` sets it from `.env` |
 
 ## 15. Practical Validation Tips
 

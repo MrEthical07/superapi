@@ -43,8 +43,10 @@ coverage/
 *.prof
 *.pprof
 
+# template:begin perf
 # Performance test artifacts
 performance/results/
+# template:end perf
 
 # Editor/IDE
 # .idea/
