@@ -4,8 +4,7 @@ This runner mirrors the k6 representative traffic profile:
 
 - `GET /healthz` (35%)
 - `GET /readyz` (25%)
-- `POST /system/parse-duration` (20%)
-- `GET /api/v1/system/whoami` with bearer token (20%)
+- `GET /api/v1/auth/whoami` with bearer token (40%)
 
 The script performs:
 

@@ -33,7 +33,7 @@ tidy:
 	$(GO) mod tidy
 
 run:
-	$(GO) run .
+	$(GO) run ./cmd/api
 
 db-sync:
 	$(GO) run ./cmd/modulesync

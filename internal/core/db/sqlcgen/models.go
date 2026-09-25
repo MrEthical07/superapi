@@ -8,12 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type SystemSetting struct {
-	Key       string             `json:"key"`
-	Value     []byte             `json:"value"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-}
-
 type Tenant struct {
 	ID        string             `json:"id"`
 	Slug      string             `json:"slug"`

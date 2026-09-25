@@ -28,7 +28,7 @@ import (
 //
 // Usage:
 //
-//	r.Handle(http.MethodGet, "/api/v1/system/whoami", httpx.Adapter(handler),
+//	r.Handle(http.MethodGet, "/api/v1/auth/whoami", httpx.Adapter(handler),
 //	    policy.AuthRequired(engine, mode),
 //	)
 //

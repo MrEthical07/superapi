@@ -6,8 +6,7 @@ This scenario enforces strict auth-correct behavior under open-model load.
 
 - GET /healthz (35%)
 - GET /readyz (25%)
-- POST /system/parse-duration (20%)
-- GET /api/v1/system/whoami (20%)
+- GET /api/v1/auth/whoami (40%)
 
 All workload requests carry a bearer token obtained by each VU from login and refreshed before expiry.
 
@@ -22,9 +21,9 @@ powershell -ExecutionPolicy Bypass -File performance/k6/seed-users.ps1 -Count 50
 
 ## Auth lifecycle
 
-1. Each VU logs in through POST /api/v1/system/auth/login.
+1. Each VU logs in through POST /api/v1/auth/login.
 2. Each VU stores access token, refresh token, and access expiry.
-3. Each VU refreshes with POST /api/v1/system/auth/refresh before expiry buffer.
+3. Each VU refreshes with POST /api/v1/auth/refresh before expiry buffer.
 4. On any 401, the script refreshes once and retries once.
 5. 401 responses are still counted as failures.
 
@@ -64,8 +63,8 @@ k6 run --summary-export performance/results/k6-summary.json performance/k6/scena
 
 ## Useful environment variables
 
-- AUTH_LOGIN_PATH (default /api/v1/system/auth/login)
-- AUTH_REFRESH_PATH (default /api/v1/system/auth/refresh)
+- AUTH_LOGIN_PATH (default /api/v1/auth/login)
+- AUTH_REFRESH_PATH (default /api/v1/auth/refresh)
 - REQUEST_TIMEOUT (default 5s)
 - AUTH_401_RATE_THRESHOLD (default 0.01)
 - AUTH_IDENTIFIER_PREFIX and AUTH_USER_POOL_SIZE for per-VU identity assignment
