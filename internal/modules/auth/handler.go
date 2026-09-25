@@ -200,7 +200,7 @@ func (m *Module) totpSetup(ctx *httpx.Context, _ httpx.NoBody) (totpSetupRespons
 	if err != nil {
 		return totpSetupResponse{}, err
 	}
-	return totpSetupResponse{SecretBase32: setup.SecretBase32, OTPAuthURI: setup.OTPAuthURI}, nil
+	return totpSetupResponse(setup), nil
 }
 
 func (m *Module) totpConfirm(ctx *httpx.Context, req totpCodeRequest) (totpConfirmResponse, error) {

@@ -80,7 +80,7 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 		router.Handle(http.MethodGet, deps.Metrics.Path(), metricsHandler)
 	}
 
-	var handler http.Handler = httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing,
+	handler := httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing,
 		// template:begin tenancy
 		httpx.WithTenantResolver(tenantResolver(cfg, deps)),
 		// template:end tenancy
