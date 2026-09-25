@@ -158,7 +158,10 @@ Password-reset and email-verification secrets are delivered out-of-band by
 
 `AUTH_TEST_*` switch JWT signing to a shared HS256 secret so several load
 generators can share tokens. They are **refused at startup unless APP_ENV is
-`dev` or `test`**. Never set them anywhere else. See docs/performance-testing.md.
+`dev` or `test`**. Never set them anywhere else.
+<!-- template:begin perf -->
+See docs/performance-testing.md.
+<!-- template:end perf -->
 
 | Env var | Default | Notes |
 |---|---|---|

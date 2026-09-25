@@ -1,7 +1,5 @@
--- OPTIONAL — schema mirror for the WebAuthn credential store. Present so sqlc can
--- generate typed queries; the table only exists once the optional migration
--- 000004_webauthn_credentials is applied (WEBAUTHN_ENABLED=true). See
--- docs/enabling-webauthn.md.
+-- Hand-authored mirror of migration 000004_webauthn_credentials (always
+-- applied; inert until WEBAUTHN_ENABLED=true). See docs/enabling-webauthn.md.
 
 CREATE TABLE IF NOT EXISTS webauthn_credentials (
     credential_id    BYTEA PRIMARY KEY,

@@ -107,9 +107,11 @@ Order:
 5. Parse auth mode; apply the tenancy flag (`TENANCY_ENABLED`).
 6. If auth enabled:
 	 - create the auth user repository over the `storage.Postgres` boundary
-	 - create the sqlc-backed `StoreUserProvider` (optionally with the WebAuthn
-	   credential repository)
-	 - create the goAuth engine (v0.4.0) with Redis + provider + tenancy settings
+	 - create the sqlc-backed `StoreUserProvider` (tenancy flag, WebAuthn
+	   credential repository, and — with AUTH_TOTP_ENABLED — the MFA repository
+	   and TOTP secret cipher)
+	 - create the goAuth engine (v0.5.0) with Redis + provider + tenancy
+	   settings + auth feature flags
 7. If rate-limit enabled:
 	 - create redis limiter
 8. If cache enabled:
@@ -280,46 +282,52 @@ Always thread the context through. See [docs/transactions.md](transactions.md).
 
 ## 8. Auth Architecture With goAuth
 
-SuperAPI is on goAuth **v0.4.0**. The engine is built in
+SuperAPI is on goAuth **v0.5.0**. The engine is built in
 internal/core/auth/goauth_provider.go and receives a `goauth.UserProvider`.
 
 Current provider implementation: internal/core/auth/provider_store.go
-(`StoreUserProvider`), which also implements goAuth's
-`WebAuthnCredentialProvider` when WebAuthn is enabled.
+(`StoreUserProvider`). It also implements goAuth's `TenantAwareUserProvider`
+(tenant-scoped lookups, required when `TENANCY_ENABLED=true`), the TOTP and
+backup-code methods, and `WebAuthnCredentialProvider`.
 
 Provider path (sqlc data layer):
 
-StoreUserProvider -> UserRepository -> storage.Postgres (sqlc queries) -> pgx
+StoreUserProvider -> UserRepository / MFARepository -> storage.Postgres (sqlc queries) -> pgx
 
-Auth repository implementation: internal/core/auth/user_repository.go — it uses
-`pg.Queries(ctx)` like any other repository and maps generated rows to a
-storage-layer `StoredUser` projection. v0.4.0 configuration (remember-me,
-session ceiling, MFA, sliding-window limiter, key rotation, WebAuthn) is set in
-internal/core/auth/config.go. See [docs/auth-goauth.md](auth-goauth.md).
+The repositories use `pg.Queries(ctx)` like any other repository and map
+generated rows to storage-layer projections. goAuth configuration is set in
+internal/core/auth/config.go. HTTP endpoints live in `internal/modules/auth`
+(handler -> service -> engine). See [docs/auth-goauth.md](auth-goauth.md) and
+[docs/auth-flows.md](auth-flows.md).
+
+With tenancy on, `internal/core/tenant.Middleware` (installed innermost in the
+global middleware chain) resolves and validates the tenant and attaches it
+with `goauth.WithTenantID`; see [docs/multi-tenancy.md](multi-tenancy.md).
 
 ## 9. Route-Level Flow Examples
 
-### 9.1 POST /api/v1/system/auth/login
+### 9.1 POST /api/v1/auth/login
 
 Files involved:
 
-- internal/modules/system/routes.go
-- internal/modules/system/service.go (thin authService)
+- internal/modules/auth/routes.go, handler.go
+- internal/modules/auth/service.go
 - internal/core/auth/provider_store.go
 - internal/core/auth/user_repository.go
 - internal/core/storage/postgres_store.go
 
 Runtime path:
 
-1. route handler receives login payload and calls the module's authService
-2. authService calls the goAuth engine (`LoginWithOptions`, honoring remember-me)
+1. route handler receives login payload and calls the module's service
+2. the service calls the goAuth engine (`LoginWithOptions`, honoring remember-me)
 3. goAuth asks StoreUserProvider for the user by identifier
 4. provider calls the auth repository
 5. repository runs `pg.Queries(ctx).GetAuthUserByLogin(...)` on the pool
+   (`GetAuthUserByLoginInTenant` when tenancy is on)
 6. the generated row maps back to a goAuth user record
 7. goAuth issues tokens, or returns an MFA challenge if a second factor is required
 
-### 9.2 POST /api/v1/system/auth/refresh
+### 9.2 POST /api/v1/auth/refresh
 
 High-level path:
 
@@ -327,7 +335,7 @@ High-level path:
 - goAuth performs token/session validation
 - provider/repository/store path is used when user persistence reads are required
 
-### 9.3 GET /api/v1/system/whoami
+### 9.3 GET /api/v1/auth/whoami
 
 Path:
 

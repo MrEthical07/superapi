@@ -1,8 +1,8 @@
--- OPTIONAL MIGRATION — apply only when enabling WebAuthn (WEBAUTHN_ENABLED=true).
+-- Always applied by `make migrate-up`; inert until WEBAUTHN_ENABLED=true.
 --
--- WebAuthn is scaffolded but disabled by default. goAuth does not require the
--- WebAuthn credential capability unless WebAuthn is enabled, so operators who
--- never enable it can skip this migration entirely. See docs/enabling-webauthn.md.
+-- Stores WebAuthn credentials for goAuth's WebAuthnCredentialProvider. Nothing
+-- reads or writes this table while WebAuthn is disabled. See
+-- docs/enabling-webauthn.md.
 
 CREATE TABLE IF NOT EXISTS webauthn_credentials (
     credential_id    BYTEA PRIMARY KEY,

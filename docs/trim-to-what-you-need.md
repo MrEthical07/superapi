@@ -22,6 +22,30 @@ go run ./cmd/superapi-verify ./...
 
 If it builds, tests pass, and verify is green, the removal is complete.
 
+<!-- template:begin init -->
+## Prune at init (fresh clones)
+
+On a fresh clone, `make init` can delete whole features for you and leaves a
+project that passes the gate (CI checks the default and `--no-all`):
+
+```bash
+make init module=github.com/acme/foo name="Foo API" flags="--no-tenancy --no-webauthn --no-perf"
+```
+
+| Flag | What it removes |
+|---|---|
+| `--no-tenancy` | tenant resolver/directory, `tenants` table (migration 000002), `TENANCY_*` config, tenancy docs, `make user tenant=`. Keeps the generic tenant policy primitives and `users.tenant_id` (always `'0'`); remove those manually with [removing-tenancy.md](removing-tenancy.md) |
+| `--no-webauthn` | migration 000004, schema/queries/sqlc output, the credential repository and provider methods, ceremony routes, `WEBAUTHN_*` config |
+| `--no-document-store` | `internal/storage/document/` and its doc |
+| `--no-devx` | `cmd/modulegen`, `cmd/modulesync`, `internal/devx/`, `make module`/`db-sync` (`make sqlc-generate` then runs sqlc directly) |
+| `--no-perf` | `performance/`, `cmd/perftoken`, `make perf-token`/`load-*`, the perf runbook |
+| `--no-demo` | bundled example code (`internal/storage/document/example/`) |
+| `--no-all` | everything above |
+
+`--dry-run` previews; `--keep-init` keeps the tool and its markers so you can
+prune more later. The sections below are the manual equivalents.
+
+<!-- template:end init -->
 > Tip: `APP_PROFILE=minimal` disables Postgres, Redis, auth, cache, and rate
 > limiting in one shot — the fastest way to see how little the template needs to
 > run. See docs/environment-variables.md.
@@ -32,8 +56,9 @@ If it builds, tests pass, and verify is green, the removal is complete.
 
 | Feature | Disable (config) | Delete (code) | Notes |
 |---|---|---|---|
-| Auth (goAuth) | `AUTH_ENABLED=false` | see [Auth](#auth-goauth) | engine is nil when off; auth routes return 503 |
-| WebAuthn | `WEBAUTHN_ENABLED=false` (default) | see [WebAuthn](#webauthn) | off by default; no schema needed until enabled |
+| Auth (goAuth) | `AUTH_ENABLED=false` | see [Auth](#auth-goauth) | engine is nil when off; no auth routes are registered |
+| Auth features (register, reset, verification, TOTP) | `AUTH_*_ENABLED=false` (default) | see [Auth features](#individual-auth-features) | routes not registered when off |
+| WebAuthn | `WEBAUTHN_ENABLED=false` (default) | see [WebAuthn](#webauthn) | table always migrated, inert until enabled |
 | Tenancy | `TENANCY_ENABLED=false` (default) | see [docs/removing-tenancy.md](removing-tenancy.md) | off by default |
 | Document store | not wired by default | delete the folder | see [Document store](#optional-document-store) |
 | Response cache | `CACHE_ENABLED=false` | see [Cache](#response-cache) | policies degrade to pass-through |
@@ -41,12 +66,13 @@ If it builds, tests pass, and verify is green, the removal is complete.
 | Postgres | `POSTGRES_ENABLED=false` | keep unless auth/DB modules removed | auth needs it |
 | Redis | `REDIS_ENABLED=false` | keep unless auth/cache/ratelimit removed | those need it |
 | Metrics/Tracing | `METRICS_ENABLED=false` / `TRACING_ENABLED=false` | see [Observability](#observability) | woven into middleware |
-| DevX generators | n/a (dev-only) | delete `cmd/*gen`, `internal/devx/*` | never in the app binary |
+| DevX generators | n/a (dev-only) | delete `cmd/modulegen`, `cmd/modulesync`, `internal/devx/*` | never in the app binary |
+| Perf tooling | n/a (dev-only) | delete `performance/`, `cmd/perftoken` | never in the app binary |
 | Example modules | n/a | delete the module folder + registry line | |
 
 ---
 
-## DevX generators (authgen, modulegen, modulesync)
+## DevX generators (modulegen, modulesync)
 
 These are **developer tools**, not part of the running API — they never appear
 in the `cmd/api` binary. Once your project structure is stable you can delete
@@ -59,10 +85,8 @@ any you will not use.
   folders. If you author SQL directly under `db/queries` and `db/schema`, delete
   `cmd/modulesync/` and `internal/devx/modulesync/`, and change the `Makefile`
   `sqlc-generate` target to just `$(SQLC) generate`.
-- **authgen** (`make auth`): scaffolds the auth data layer (migration, schema,
-  queries). It no longer generates a provider or edits wiring — the template
-  already ships a working `StoreUserProvider`. Delete `cmd/authgen/` once your
-  auth schema is set.
+- **createuser** (`make user`): creates accounts through the configured
+  goAuth engine. Keep it; it is how you bootstrap the first admin.
 - **superapi-verify** (`make verify`): the architecture/policy static checker.
   Keep it — it is cheap insurance — but it is dev-only and deletable
   (`cmd/superapi-verify/`) with no runtime impact.
@@ -74,9 +98,8 @@ Deleting a generator has no effect on the app binary; just drop the matching
 
 ## Auth (goAuth)
 
-**Disable:** `AUTH_ENABLED=false`. The goAuth engine is not built; the system
-module's auth routes return 503 (`auth engine unavailable`). Everything else
-runs.
+**Disable:** `AUTH_ENABLED=false`. The goAuth engine is not built and the auth
+module registers no routes. Everything else runs.
 
 **Delete entirely** (if your API is fully public):
 
@@ -86,11 +109,13 @@ runs.
 2. Remove `AuthEngine` / `AuthMode` from `Dependencies` and the corresponding
    `modulekit.Runtime` accessors.
 3. Delete `internal/core/auth/` (provider, config, roles, repositories).
-4. Delete the auth routes/handlers/service in `internal/modules/system/`
-   (`service.go`, the login/refresh/logout/MFA/WebAuthn handlers in `routes.go`
-   and `webauthn_routes.go`), leaving the non-auth system utilities.
-5. Delete `db/migrations/*auth_users*`, `db/schema/auth_users.sql`,
-   `db/queries/auth_users.sql`, and re-run `make sqlc-generate`.
+4. Delete `internal/modules/auth/` and its line in `internal/modules/modules.go`,
+   `internal/core/notify/`, `cmd/createuser/`, and the `AuthUsers`/`Notifier`
+   dependency fields.
+5. Delete the auth migrations (`000003`, `000004`, `000005`, `000006`),
+   `db/schema/auth_*.sql`, `db/schema/webauthn_credentials.sql`,
+   `db/queries/auth_*.sql`, `db/queries/webauthn_credentials.sql`, and re-run
+   `make sqlc-generate`.
 6. Remove the `policy.AuthRequired` / RBAC usage from any route, and drop the
    `AUTH_*` env from config `Load`/`Lint`.
 
@@ -98,6 +123,27 @@ Auth pulls in Postgres and Redis; if nothing else uses them you can disable
 those too.
 
 ---
+
+## Individual auth features
+
+Each optional group is off by default and its routes are not registered while
+off. To delete one:
+
+- **Registration:** the `register` route and handler in `internal/modules/auth`
+  (`routes.go`, `handler.go`, `service.go`), `AUTH_REGISTRATION_*` config.
+- **Password reset:** the two `password/reset/*` routes, handlers and service
+  methods, `AUTH_PASSWORD_RESET_ENABLED`. If email verification is gone too,
+  delete `internal/core/notify/` and the account repository lookup in
+  `internal/modules/auth/repo.go`.
+- **Email verification:** the `email/verify/*` routes, handlers, service
+  methods and the verification call in `register`, the
+  `AUTH_EMAIL_VERIFICATION_*` config.
+- **TOTP + backup codes:** the `mfa/totp/*` and `mfa/backup-codes/*` routes,
+  handlers and service methods; `mfa_repository.go`, `secret_cipher.go` and the
+  TOTP provider methods (return the old stubs); migration 000006's
+  `user_totp`/`user_backup_codes` tables and `db/*/auth_mfa.sql`; the
+  `AUTH_TOTP_*` config. Keep `users.account_version`: goAuth needs it for
+  status transitions.
 
 ## WebAuthn
 
@@ -107,11 +153,12 @@ If you will never use it, delete it cleanly (see docs/enabling-webauthn.md,
 
 - `db/migrations/000004_webauthn_credentials.*`, `db/schema/webauthn_credentials.sql`,
   `db/queries/webauthn_credentials.sql` (then `make sqlc-generate`).
-- `internal/core/auth/webauthn_repository.go` and the four
-  `WebAuthnCredentialProvider` methods on `StoreUserProvider`.
-- The `WithWebAuthnRepository(...)` call in `deps.go`.
-- The WebAuthn ceremony endpoints (`internal/modules/system/webauthn_routes.go`)
-  and the `WEBAUTHN_*` config.
+- `internal/core/auth/webauthn_repository.go`, `provider_webauthn.go` and
+  `config_webauthn.go`, plus the `webauthnRepo` field on `StoreUserProvider`.
+- The `WithWebAuthnRepository(...)` call in `deps.go` and the
+  `applyWebAuthnConfig` call in `internal/core/auth/config.go`.
+- The WebAuthn ceremony endpoints (`internal/modules/auth/webauthn.go` and the
+  WebAuthn block in `routes.go`) and the `WEBAUTHN_*` config.
 
 Leaving it disabled costs nothing at runtime.
 
@@ -206,8 +253,8 @@ Modules are registered in `internal/modules/modules.go`. To remove one:
 3. If it had DB SQL, remove the synced `db/schema/<name>.sql` and
    `db/queries/<name>.sql`, then `make sqlc-generate`.
 
-The `health` module is a good keep (liveness/readiness); the `system` module is
-a demo — trim its routes to what you actually expose.
+The `health` module is a good keep (liveness/readiness); the `auth` module
+exposes only the endpoint groups you enable.
 
 ---
 

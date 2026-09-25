@@ -48,6 +48,13 @@ METRICS_AUTH_TOKEN=perf-metrics-token
 HTTP_MIDDLEWARE_ACCESS_LOG_SAMPLE_RATE=0
 ```
 
+`AUTH_TEST_SHARED_SECRET` / `AUTH_TEST_ACCESS_TTL` / `AUTH_TEST_REFRESH_TTL`
+(a shared HS256 signer so several API processes accept each other's tokens)
+are **refused at startup unless `APP_ENV` is `dev` or `test`**. If a run needs
+them, use `APP_ENV=test` for the whole perf stack (production-mode defaults
+such as fail-closed cache/rate limiting then have to be set explicitly, as
+above). Never set them outside perf environments.
+
 Validate readiness before load:
 
 ```bash
@@ -57,9 +64,9 @@ curl http://127.0.0.1:8080/readyz
 
 ## 2) Auth endpoints used by k6
 
-- POST /api/v1/system/auth/login
-- POST /api/v1/system/auth/refresh
-- GET /api/v1/system/whoami
+- POST /api/v1/auth/login
+- POST /api/v1/auth/refresh
+- GET /api/v1/auth/whoami
 
 Login/refresh responses return:
 
@@ -75,15 +82,21 @@ Seed enough users for the expected VU range before load. This avoids login conte
 powershell -ExecutionPolicy Bypass -File performance/k6/seed-users.ps1 -Count 500 -Prefix loadtest -Domain example.com -Password LoadTest123! -AuthMode strict
 ```
 
+Linux/macOS:
+
+```bash
+COUNT=500 PREFIX=loadtest DOMAIN=example.com PASSWORD='LoadTest123!' AUTH_MODE=strict performance/k6/seed-users.sh
+```
+
 ## 4) Staged validation before full run
 
 ### Step 1: single request check
 
 ```powershell
 $loginBody = @{ identifier = "loadtest+vu1@example.com"; password = "LoadTest123!" } | ConvertTo-Json
-$login = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v1/system/auth/login" -Body $loginBody -ContentType "application/json"
+$login = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v1/auth/login" -Body $loginBody -ContentType "application/json"
 $token = $login.data.access_token
-Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/api/v1/system/whoami" -Headers @{ Authorization = "Bearer $token" }
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:8080/api/v1/auth/whoami" -Headers @{ Authorization = "Bearer $token" }
 ```
 
 Expected: 200 for both calls.

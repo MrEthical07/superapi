@@ -84,7 +84,7 @@ policy.AuthRequired(m.authEngine, m.authMode)
 | Hybrid | `auth.ModeHybrid` | Validates JWT first; if Redis is available, also checks session. Falls back to JWT-only if Redis is down. |
 | Strict | `auth.ModeStrict` | Requires both valid JWT and active Redis session. Fails closed if Redis is unavailable. Most secure. |
 
-**Hybrid guarantee (goAuth v0.4.0).** A per-route mode wins over the engine's
+**Hybrid guarantee (goAuth v0.4.0+).** A per-route mode wins over the engine's
 default. `AuthRequired(engine, ModeHybrid)` passes `ModeInherit` to the guard, so
 the route validates per the engine's configured `ValidationMode`; an explicit
 `ModeJWTOnly` or `ModeStrict` on the route overrides it for that route only.
@@ -162,6 +162,16 @@ File: `internal/core/policy/tenant.go`
 > requires `TenantRequired`" holds regardless of the flag. When
 > `TENANCY_ENABLED=true`, `{tenant_id}` routes must carry the tenant policies.
 > To remove tenancy entirely, see docs/removing-tenancy.md.
+
+### Tenant binding (TENANCY_ENABLED=true)
+
+With tenancy on, the tenant middleware resolves and validates the request
+tenant before routing (docs/multi-tenancy.md). `AuthRequired` then rejects any
+token whose tenant differs from the request tenant (401), in every validation
+mode, and `TenantRequired` returns 404 on the same mismatch. Routes do not need
+extra policies for this; they still need `TenantRequired` (and
+`TenantMatchFromPath` for `{tenant_id}` paths) to require a tenant-scoped
+principal.
 
 ### TenantRequired()
 
@@ -555,10 +565,10 @@ Policies:
 
 ### Authenticated route (no tenant)
 
-Example: `GET /api/v1/system/whoami`
+Example: `GET /api/v1/auth/whoami`
 
 ```go
-r.Handle(http.MethodGet, "/api/v1/system/whoami", handler,
+r.Handle(http.MethodGet, "/api/v1/auth/whoami", handler,
     policy.AuthRequired(authEngine, mode),
     policy.RateLimitWithKeyer(limiter, "whoami", ratelimit.Rule{
         Limit: 30, Window: time.Minute, Scope: ratelimit.ScopeUser,

@@ -144,17 +144,21 @@ Runtime sequence:
 
 - app wiring creates the auth repository over the `storage.Postgres` boundary
 - app wiring creates the sqlc-backed `StoreUserProvider` from the repository
-- the goAuth engine (v0.4.0) is built with Redis + provider + tenancy settings
+- the goAuth engine (v0.5.0) is built with Redis + provider + tenancy settings
+  + auth feature flags
+
+Create a user first: `make user email=you@example.com`.
 
 When testing auth routes:
 
-- POST /api/v1/system/auth/login
-- POST /api/v1/system/auth/mfa/confirm
-- POST /api/v1/system/auth/refresh
-- POST /api/v1/system/auth/logout
-- GET /api/v1/system/whoami (requires auth)
+- POST /api/v1/auth/login
+- POST /api/v1/auth/mfa/confirm
+- POST /api/v1/auth/refresh
+- POST /api/v1/auth/logout
+- GET /api/v1/auth/whoami (requires auth)
 
-See [docs/auth-goauth.md](auth-goauth.md) for details.
+See [docs/auth-flows.md](auth-flows.md) for every endpoint and
+[docs/auth-goauth.md](auth-goauth.md) for the wiring.
 
 ## 7. Verification Workflow Before PR
 
