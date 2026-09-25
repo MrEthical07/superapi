@@ -18,7 +18,7 @@ PERF_REFRESH_BUFFER_SECONDS ?= 30
 PERF_SUSTAIN_RPS_RATIO ?= 0.95
 PERF_OUTPUT_DIR ?= performance/results
 
-.PHONY: fmt vet test tidy run db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module auth auth-config perf-token load-k6-10k load-vegeta-10k bench-hotpath verify
+.PHONY: fmt vet test tidy run db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module auth auth-config user perf-token load-k6-10k load-vegeta-10k bench-hotpath verify
 
 fmt:
 	$(GO) fmt ./...
@@ -69,7 +69,14 @@ auth-config:
 	$(GO) run ./cmd/authgen --config "$(file)"
 
 perf-token:
-	$(GO) run ./cmd/perftoken --output json
+	$(GO) run ./cmd/perftoken --create-if-missing --output json
+
+# Create an account through the configured goAuth engine. The password is
+# prompted for without echo (or piped with password_stdin=1); never pass it as
+# a variable. Example: make user email=admin@example.com role=admin
+user:
+	@if [ -z "$(email)" ]; then echo "email is required: make user email=you@example.com [role=admin] [tenant=acme] [create_tenant=1]"; exit 1; fi
+	$(GO) run ./cmd/createuser --email "$(email)" $(if $(role),--role "$(role)",) $(if $(tenant),--tenant "$(tenant)",) $(if $(create_tenant),--create-tenant,) $(if $(password_stdin),--password-stdin,)
 
 load-k6-10k:
 	@if [ -z "$(PERF_AUTH_IDENTIFIER)" ]; then echo "PERF_AUTH_IDENTIFIER is required"; exit 1; fi
