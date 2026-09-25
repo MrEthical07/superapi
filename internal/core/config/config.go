@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -42,6 +43,9 @@ type Config struct {
 	Metrics MetricsConfig
 	// Tracing controls OpenTelemetry exporter setup.
 	Tracing TracingConfig
+	// Notify controls out-of-band delivery of password-reset and
+	// email-verification secrets.
+	Notify NotifyConfig
 }
 
 // AuthConfig configures route authentication behavior.
@@ -50,7 +54,55 @@ type AuthConfig struct {
 	Enabled bool
 	// Mode selects validation strategy: jwt_only, hybrid, or strict.
 	Mode string
+
+	// The flags below each enable one group of auth endpoints in
+	// internal/modules/auth and the matching goAuth config section
+	// (internal/core/auth/config.go). All default to false; with them off the
+	// template behaves exactly as before. They require Enabled.
+
+	// RegistrationEnabled exposes POST /api/v1/auth/register.
+	RegistrationEnabled bool
+	// RegistrationAutoLogin returns tokens from registration. This trades
+	// away registration enumeration resistance (see docs/auth-flows.md).
+	RegistrationAutoLogin bool
+	// PasswordResetEnabled exposes the password reset request/confirm routes.
+	PasswordResetEnabled bool
+	// EmailVerificationEnabled exposes the email verification routes. New
+	// accounts start in pending_verification.
+	EmailVerificationEnabled bool
+	// EmailVerificationRequired blocks login until the account is verified
+	// (default true; only meaningful with EmailVerificationEnabled).
+	EmailVerificationRequired bool
+	// TOTPEnabled exposes TOTP setup/confirm/disable and backup-code routes.
+	TOTPEnabled bool
+	// TOTPIssuer is the issuer label shown in authenticator apps (defaults to
+	// APP_SERVICE_NAME).
+	TOTPIssuer string
+	// TOTPEncryptionKey encrypts TOTP secrets at rest (AES-256-GCM). It is a
+	// base64-encoded 32-byte key and is required when TOTPEnabled.
+	TOTPEncryptionKey string
+	// TestOverridesAllowed reports whether AUTH_TEST_* perf overrides may be
+	// used; derived from APP_ENV (dev/test only). Not an env var.
+	TestOverridesAllowed bool
 }
+
+// NotifyConfig selects how password-reset and email-verification secrets are
+// delivered.
+type NotifyConfig struct {
+	// Driver is "noop" (default: discard) or "log" (development logger).
+	Driver string
+	// LogSecrets makes the log driver print the full secret. Only allowed
+	// with APP_ENV=dev; otherwise secrets are always redacted.
+	LogSecrets bool
+	// Timeout bounds each asynchronous delivery attempt.
+	Timeout time.Duration
+}
+
+// Notify driver names accepted by NOTIFY_DRIVER.
+const (
+	NotifyDriverNoop = "noop"
+	NotifyDriverLog  = "log"
+)
 
 // TenancyConfig configures multi-tenant behavior.
 //
@@ -365,8 +417,17 @@ func Load() (*Config, error) {
 			Format: getenv("LOG_FORMAT", "json"),
 		},
 		Auth: AuthConfig{
-			Enabled: getBool("AUTH_ENABLED", false),
-			Mode:    getenv("AUTH_MODE", "hybrid"),
+			Enabled:                   getBool("AUTH_ENABLED", false),
+			Mode:                      getenv("AUTH_MODE", "hybrid"),
+			RegistrationEnabled:       getBool("AUTH_REGISTRATION_ENABLED", false),
+			RegistrationAutoLogin:     getBool("AUTH_REGISTRATION_AUTO_LOGIN", false),
+			PasswordResetEnabled:      getBool("AUTH_PASSWORD_RESET_ENABLED", false),
+			EmailVerificationEnabled:  getBool("AUTH_EMAIL_VERIFICATION_ENABLED", false),
+			EmailVerificationRequired: getBool("AUTH_EMAIL_VERIFICATION_REQUIRED", true),
+			TOTPEnabled:               getBool("AUTH_TOTP_ENABLED", false),
+			TOTPIssuer:                strings.TrimSpace(getenv("AUTH_TOTP_ISSUER", "")),
+			TOTPEncryptionKey:         strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_KEY", "")),
+			TestOverridesAllowed:      isDevOrTestEnv(env),
 		},
 		Tenancy: TenancyConfig{
 			Enabled:          getBool("TENANCY_ENABLED", false),
@@ -432,6 +493,14 @@ func Load() (*Config, error) {
 
 	if cfg.Tracing.ServiceName == "" {
 		cfg.Tracing.ServiceName = cfg.ServiceName
+	}
+	if cfg.Auth.TOTPIssuer == "" {
+		cfg.Auth.TOTPIssuer = cfg.ServiceName
+	}
+	cfg.Notify = NotifyConfig{
+		Driver:     strings.ToLower(strings.TrimSpace(getenv("NOTIFY_DRIVER", NotifyDriverNoop))),
+		LogSecrets: getBool("NOTIFY_LOG_SECRETS", false),
+		Timeout:    getDuration("NOTIFY_TIMEOUT", 10*time.Second),
 	}
 
 	return cfg, nil
@@ -533,6 +602,20 @@ func (c *Config) Lint() error {
 	}
 	if c.Auth.Enabled && !c.Postgres.Enabled {
 		return fmt.Errorf("auth enabled requires postgres enabled")
+	}
+	if err := c.lintAuthFeatures(); err != nil {
+		return err
+	}
+	switch c.Notify.Driver {
+	case NotifyDriverNoop, NotifyDriverLog:
+	default:
+		return fmt.Errorf("invalid notify driver: %q (valid: noop, log)", c.Notify.Driver)
+	}
+	if c.Notify.LogSecrets && !strings.EqualFold(strings.TrimSpace(c.Env), "dev") {
+		return fmt.Errorf("NOTIFY_LOG_SECRETS=true is only allowed with APP_ENV=dev")
+	}
+	if c.Notify.Timeout <= 0 {
+		return fmt.Errorf("notify timeout must be > 0")
 	}
 	if c.Tenancy.Enabled {
 		switch c.Tenancy.Resolver {
@@ -861,6 +944,66 @@ func (c *Config) Lint() error {
 	}
 
 	return nil
+}
+
+// lintAuthFeatures validates the auth feature flags and the AUTH_TEST_* guard.
+func (c *Config) lintAuthFeatures() error {
+	features := map[string]bool{
+		"AUTH_REGISTRATION_ENABLED":       c.Auth.RegistrationEnabled,
+		"AUTH_PASSWORD_RESET_ENABLED":     c.Auth.PasswordResetEnabled,
+		"AUTH_EMAIL_VERIFICATION_ENABLED": c.Auth.EmailVerificationEnabled,
+		"AUTH_TOTP_ENABLED":               c.Auth.TOTPEnabled,
+	}
+	for name, on := range features {
+		if on && !c.Auth.Enabled {
+			return fmt.Errorf("%s requires AUTH_ENABLED=true", name)
+		}
+	}
+	if c.Auth.RegistrationAutoLogin && !c.Auth.RegistrationEnabled {
+		return fmt.Errorf("AUTH_REGISTRATION_AUTO_LOGIN requires AUTH_REGISTRATION_ENABLED=true")
+	}
+	if c.Auth.TOTPEnabled {
+		if c.Auth.TOTPEncryptionKey == "" {
+			return fmt.Errorf("AUTH_TOTP_ENABLED requires AUTH_TOTP_ENCRYPTION_KEY (base64-encoded 32-byte key, e.g. `openssl rand -base64 32`)")
+		}
+		if _, err := DecodeKey32(c.Auth.TOTPEncryptionKey); err != nil {
+			return fmt.Errorf("AUTH_TOTP_ENCRYPTION_KEY: %w", err)
+		}
+	}
+	if !c.Auth.TestOverridesAllowed {
+		for _, key := range []string{"AUTH_TEST_SHARED_SECRET", "AUTH_TEST_ACCESS_TTL", "AUTH_TEST_REFRESH_TTL"} {
+			if strings.TrimSpace(os.Getenv(key)) != "" {
+				return fmt.Errorf("%s is a performance-testing override and is only allowed with APP_ENV=dev or APP_ENV=test", key)
+			}
+		}
+	}
+	return nil
+}
+
+// DecodeKey32 decodes a base64 (standard or URL, padded or not) 32-byte key.
+func DecodeKey32(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		key, err := enc.DecodeString(raw)
+		if err != nil {
+			continue
+		}
+		if len(key) != 32 {
+			return nil, fmt.Errorf("must decode to 32 bytes, got %d", len(key))
+		}
+		return key, nil
+	}
+	return nil, errors.New("must be base64-encoded")
+}
+
+// isDevOrTestEnv reports whether APP_ENV names a development or test runtime.
+func isDevOrTestEnv(env string) bool {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "dev", "development", "local", "test":
+		return true
+	default:
+		return false
+	}
 }
 
 // Deprecations returns human-readable warnings for deprecated settings present

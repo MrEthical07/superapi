@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MrEthical07/superapi/internal/core/db/sqlcgen"
@@ -15,14 +16,23 @@ import (
 
 var ErrAuthUserNotFound = errors.New("auth user not found")
 
+// ErrAuthUserExists is returned by Create when the identifier is already taken
+// (unique violation on users.email).
+var ErrAuthUserExists = errors.New("auth user already exists")
+
+// pgUniqueViolation is the Postgres SQLSTATE for unique_violation.
+const pgUniqueViolation = "23505"
+
 // StoredUser is the storage-layer projection used by the auth repository.
 type StoredUser struct {
-	ID           string
-	TenantID     string
-	Email        string
-	PasswordHash string
-	Role         string
-	Status       string
+	ID             string
+	TenantID       string
+	Email          string
+	PasswordHash   string
+	Role           string
+	Status         string
+	AccountVersion uint32
+	TOTPEnabled    bool
 }
 
 // CreateStoredUserInput is the repository input model for creating auth users.
@@ -164,6 +174,10 @@ func (r *sqlcUserRepository) Create(ctx context.Context, input CreateStoredUserI
 		TenantID:     tenantOrDefault(input.TenantID),
 	})
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return StoredUser{}, ErrAuthUserExists
+		}
 		return StoredUser{}, fmt.Errorf("create user: %w", err)
 	}
 	return mapUserRow(row), nil
@@ -194,12 +208,14 @@ func (r *sqlcUserRepository) UpdateStatus(ctx context.Context, userID string, st
 // mirroring the COALESCE(role, empty) / id::text behavior of the prior raw SQL.
 func mapUserRow(row sqlcgen.User) StoredUser {
 	return StoredUser{
-		ID:           uuidToString(row.ID),
-		TenantID:     row.TenantID,
-		Email:        row.Email,
-		PasswordHash: row.PasswordHash,
-		Role:         textToRole(row.Role),
-		Status:       row.Status,
+		ID:             uuidToString(row.ID),
+		TenantID:       row.TenantID,
+		Email:          row.Email,
+		PasswordHash:   row.PasswordHash,
+		Role:           textToRole(row.Role),
+		Status:         row.Status,
+		AccountVersion: nonNegativeUint32(row.AccountVersion),
+		TOTPEnabled:    row.TotpEnabled,
 	}
 }
 
@@ -247,6 +263,22 @@ func tenantOrDefault(tenantID string) string {
 		return trimmed
 	}
 	return DefaultTenantID
+}
+
+// optionalText maps an empty string to SQL NULL.
+func optionalText(value string) pgtype.Text {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return pgtype.Text{Valid: false}
+	}
+	return pgtype.Text{String: trimmed, Valid: true}
+}
+
+func nonNegativeUint32(v int32) uint32 {
+	if v < 0 {
+		return 0
+	}
+	return uint32(v)
 }
 
 func textToRole(role pgtype.Text) string {

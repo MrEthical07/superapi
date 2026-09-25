@@ -12,6 +12,7 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/logx"
+	"github.com/MrEthical07/superapi/internal/core/notify"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
 	"github.com/MrEthical07/superapi/internal/core/tenant"
@@ -62,6 +63,12 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	notifier, err := notify.New(cfg.Notify, cfg.Env, log)
+	if err != nil {
+		deps.Close()
+		return nil, err
+	}
+	deps.Notifier = notify.NewDispatcher(notifier, log, cfg.Notify.Timeout, 64)
 	router.Use(httpx.CaptureRoutePattern)
 	if deps.Metrics != nil && deps.Metrics.Enabled() {
 		metricsHandler := deps.Metrics.Handler()

@@ -25,6 +25,8 @@ import (
 type StoreUserProvider struct {
 	repo           UserRepository
 	webauthnRepo   WebAuthnCredentialRepository
+	mfaRepo        MFARepository
+	cipher         SecretCipher
 	tenancyEnabled bool
 }
 
@@ -57,6 +59,16 @@ func (p *StoreUserProvider) WithWebAuthnRepository(repo WebAuthnCredentialReposi
 func (p *StoreUserProvider) WithTenancy(enabled bool) *StoreUserProvider {
 	if p != nil {
 		p.tenancyEnabled = enabled
+	}
+	return p
+}
+
+// WithMFA attaches TOTP/backup-code persistence and the cipher that encrypts
+// TOTP secrets at rest. Needed only when AUTH_TOTP_ENABLED=true.
+func (p *StoreUserProvider) WithMFA(repo MFARepository, cipher SecretCipher) *StoreUserProvider {
+	if p != nil {
+		p.mfaRepo = repo
+		p.cipher = cipher
 	}
 	return p
 }
@@ -188,6 +200,11 @@ func (p *StoreUserProvider) CreateUser(ctx context.Context, input goauth.CreateU
 		Status:       mapAccountStatusToString(input.Status),
 	})
 	if err != nil {
+		if errors.Is(err, ErrAuthUserExists) {
+			// goAuth maps this to ErrAccountExists after hashing the password,
+			// so duplicate and fresh registrations take comparable time.
+			return goauth.UserRecord{}, goauth.ErrProviderDuplicateIdentifier
+		}
 		return goauth.UserRecord{}, fmt.Errorf("create user: %w", err)
 	}
 	return p.toRecord(row), nil
@@ -209,44 +226,146 @@ func (p *StoreUserProvider) UpdateAccountStatus(ctx context.Context, userID stri
 	return p.toRecord(row), nil
 }
 
-// TOTP stubs — implement when MFA is needed.
-func (p *StoreUserProvider) GetTOTPSecret(_ context.Context, _ string) (*goauth.TOTPRecord, error) {
-	return nil, goauth.ErrUnauthorized
+// --- TOTP and backup codes ---
+//
+// These delegate to the MFA repository. TOTP secrets are encrypted with the
+// configured SecretCipher before they reach the database (goAuth hands the
+// provider the raw secret). Every call is scoped to the request tenant when
+// tenancy is enabled. With no MFA repository wired (AUTH_TOTP_ENABLED=false)
+// the store reports "no TOTP configured" and refuses mutations; goAuth never
+// invokes them while TOTP is disabled.
+
+// errMFAUnavailable is returned by MFA mutations when no MFA repository is wired.
+var errMFAUnavailable = errors.New("mfa persistence is not configured")
+
+// GetTOTPSecret returns the decrypted TOTP state. A user without TOTP gets an
+// empty record (not an error), matching goAuth's provider contract.
+func (p *StoreUserProvider) GetTOTPSecret(ctx context.Context, userID string) (*goauth.TOTPRecord, error) {
+	if !p.mfaReady() {
+		return &goauth.TOTPRecord{}, nil
+	}
+	state, found, err := p.mfaRepo.GetTOTP(ctx, p.scopeTenant(ctx), userID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return &goauth.TOTPRecord{}, nil
+	}
+	secret, err := p.cipher.Open(userID, state.SecretCiphertext)
+	if err != nil {
+		return nil, err
+	}
+	return &goauth.TOTPRecord{
+		Secret:          secret,
+		Enabled:         state.Enabled,
+		Verified:        state.Verified,
+		LastUsedCounter: state.LastUsedCounter,
+	}, nil
 }
 
-// EnableTOTP is a stub until MFA persistence is implemented.
-func (p *StoreUserProvider) EnableTOTP(_ context.Context, _ string, _ []byte) error {
-	return goauth.ErrUnauthorized
+// EnableTOTP stores the (encrypted) secret and sets TOTP enabled to the
+// verified flag: a fresh setup stays disabled until MarkTOTPVerified, then the
+// confirm step's EnableTOTP call turns it on and advances the account version.
+func (p *StoreUserProvider) EnableTOTP(ctx context.Context, userID string, secret []byte) error {
+	if !p.mfaReady() {
+		return errMFAUnavailable
+	}
+	if len(secret) == 0 {
+		return errors.New("enable totp: empty secret")
+	}
+	ciphertext, err := p.cipher.Seal(userID, secret)
+	if err != nil {
+		return err
+	}
+	return p.mfaErr(p.mfaRepo.UpsertTOTPSecret(ctx, p.scopeTenant(ctx), userID, ciphertext))
 }
 
-// DisableTOTP is a stub until MFA persistence is implemented.
-func (p *StoreUserProvider) DisableTOTP(_ context.Context, _ string) error {
-	return goauth.ErrUnauthorized
+// DisableTOTP removes the TOTP secret and all backup codes.
+func (p *StoreUserProvider) DisableTOTP(ctx context.Context, userID string) error {
+	if !p.mfaReady() {
+		return errMFAUnavailable
+	}
+	return p.mfaErr(p.mfaRepo.DisableTOTP(ctx, p.scopeTenant(ctx), userID))
 }
 
-// MarkTOTPVerified is a stub until MFA persistence is implemented.
-func (p *StoreUserProvider) MarkTOTPVerified(_ context.Context, _ string) error {
-	return goauth.ErrUnauthorized
+// MarkTOTPVerified flags the stored secret as verified.
+func (p *StoreUserProvider) MarkTOTPVerified(ctx context.Context, userID string) error {
+	if !p.mfaReady() {
+		return errMFAUnavailable
+	}
+	return p.mfaErr(p.mfaRepo.MarkTOTPVerified(ctx, p.scopeTenant(ctx), userID))
 }
 
-// UpdateTOTPLastUsedCounter is a stub until MFA persistence is implemented.
-func (p *StoreUserProvider) UpdateTOTPLastUsedCounter(_ context.Context, _ string, _ int64) error {
-	return goauth.ErrUnauthorized
+// UpdateTOTPLastUsedCounter records the last accepted TOTP counter. The update
+// only moves forward, so a code replayed concurrently is rejected here even if
+// both requests passed goAuth's in-memory counter check.
+func (p *StoreUserProvider) UpdateTOTPLastUsedCounter(ctx context.Context, userID string, counter int64) error {
+	if !p.mfaReady() {
+		return errMFAUnavailable
+	}
+	return p.mfaErr(p.mfaRepo.AdvanceTOTPCounter(ctx, p.scopeTenant(ctx), userID, counter))
 }
 
-// Backup code stubs — implement when MFA is needed.
-func (p *StoreUserProvider) GetBackupCodes(_ context.Context, _ string) ([]goauth.BackupCodeRecord, error) {
-	return nil, goauth.ErrUnauthorized
+// GetBackupCodes returns the hashes of the user's unused backup codes.
+func (p *StoreUserProvider) GetBackupCodes(ctx context.Context, userID string) ([]goauth.BackupCodeRecord, error) {
+	if !p.mfaReady() {
+		return []goauth.BackupCodeRecord{}, nil
+	}
+	hashes, err := p.mfaRepo.ListUnusedBackupCodes(ctx, p.scopeTenant(ctx), userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]goauth.BackupCodeRecord, len(hashes))
+	for i, h := range hashes {
+		out[i] = goauth.BackupCodeRecord{Hash: h}
+	}
+	return out, nil
 }
 
-// ReplaceBackupCodes is a stub until backup-code persistence is implemented.
-func (p *StoreUserProvider) ReplaceBackupCodes(_ context.Context, _ string, _ []goauth.BackupCodeRecord) error {
-	return goauth.ErrUnauthorized
+// ReplaceBackupCodes atomically replaces every backup code for the user.
+func (p *StoreUserProvider) ReplaceBackupCodes(ctx context.Context, userID string, codes []goauth.BackupCodeRecord) error {
+	if !p.mfaReady() {
+		return errMFAUnavailable
+	}
+	hashes := make([][32]byte, len(codes))
+	for i, c := range codes {
+		hashes[i] = c.Hash
+	}
+	return p.mfaErr(p.mfaRepo.ReplaceBackupCodes(ctx, p.scopeTenant(ctx), userID, hashes))
 }
 
-// ConsumeBackupCode is a stub until backup-code persistence is implemented.
-func (p *StoreUserProvider) ConsumeBackupCode(_ context.Context, _ string, _ [32]byte) (bool, error) {
-	return false, goauth.ErrUnauthorized
+// ConsumeBackupCode marks a matching unused code as used and reports whether
+// one was consumed. Single use holds under concurrency (one SQL statement).
+func (p *StoreUserProvider) ConsumeBackupCode(ctx context.Context, userID string, codeHash [32]byte) (bool, error) {
+	if !p.mfaReady() {
+		return false, nil
+	}
+	return p.mfaRepo.ConsumeBackupCode(ctx, p.scopeTenant(ctx), userID, codeHash)
+}
+
+func (p *StoreUserProvider) mfaReady() bool {
+	return p != nil && p.mfaRepo != nil && p.cipher != nil
+}
+
+func (p *StoreUserProvider) mfaErr(err error) error {
+	if errors.Is(err, ErrAuthUserNotFound) {
+		return goauth.ErrUserNotFound
+	}
+	return err
+}
+
+// scopeTenant returns the tenant MFA queries are restricted to: empty (no
+// restriction) with tenancy off; the request tenant, or goAuth's default
+// tenant when none is attached, with tenancy on. goAuth resolves the same
+// tenant from the context before calling any id-keyed provider method.
+func (p *StoreUserProvider) scopeTenant(ctx context.Context) string {
+	if p == nil || !p.tenancyEnabled {
+		return ""
+	}
+	if tenantID, ok := RequestTenantFromContext(ctx); ok {
+		return tenantID
+	}
+	return DefaultTenantID
 }
 
 // --- WebAuthn credential capability (goauth.WebAuthnCredentialProvider) ---
@@ -314,11 +433,13 @@ func (p *StoreUserProvider) createTenant(inputTenant string) string {
 
 func mapUserToRecord(row StoredUser) goauth.UserRecord {
 	return goauth.UserRecord{
-		UserID:       row.ID,
-		Identifier:   row.Email,
-		PasswordHash: row.PasswordHash,
-		Role:         row.Role,
-		Status:       parseAccountStatus(row.Status),
+		UserID:         row.ID,
+		Identifier:     row.Email,
+		PasswordHash:   row.PasswordHash,
+		Role:           row.Role,
+		Status:         parseAccountStatus(row.Status),
+		TOTPEnabled:    row.TOTPEnabled,
+		AccountVersion: row.AccountVersion,
 	}
 }
 

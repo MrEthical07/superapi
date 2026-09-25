@@ -15,7 +15,7 @@ const tenancyTestPassword = "correct-horse-battery-staple"
 
 func TestProjectGoAuthConfigNoDeprecatedTenantLint(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		cfg, err := auth.ProjectGoAuthConfig(auth.ModeHybrid, auth.TenancySettings{Enabled: enabled})
+		cfg, err := auth.ProjectGoAuthConfig(auth.ModeHybrid, auth.TenancySettings{Enabled: enabled}, auth.Features{})
 		if err != nil {
 			t.Fatalf("config (tenancy=%v): %v", enabled, err)
 		}
@@ -43,7 +43,7 @@ func TestBuildWithTenancyEnabled(t *testing.T) {
 	authtest.NewEngine(t, true, authtest.NewUserRepository())
 
 	// Fails fast when the capability is missing.
-	_, _, err := auth.NewGoAuthEngine(authtest.NewRedis(t), auth.ModeHybrid, auth.TenancySettings{Enabled: true},
+	_, _, err := auth.NewGoAuthEngine(authtest.NewRedis(t), auth.ModeHybrid, auth.TenancySettings{Enabled: true}, auth.Features{},
 		plainProvider{auth.NewStoreUserProvider(authtest.NewUserRepository())})
 	if err == nil {
 		t.Fatal("expected Build to fail for a provider without TenantAwareUserProvider")

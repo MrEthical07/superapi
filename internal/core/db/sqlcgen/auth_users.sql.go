@@ -14,7 +14,7 @@ import (
 const createAuthUser = `-- name: CreateAuthUser :one
 INSERT INTO users (email, password_hash, role, permissions, status, tenant_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id
+RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 `
 
 type CreateAuthUserParams struct {
@@ -46,12 +46,14 @@ func (q *Queries) CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.AccountVersion,
+		&i.TotpEnabled,
 	)
 	return i, err
 }
 
 const getAuthUserByID = `-- name: GetAuthUserByID :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
 WHERE id = $1
 `
@@ -69,12 +71,14 @@ func (q *Queries) GetAuthUserByID(ctx context.Context, id pgtype.UUID) (User, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.AccountVersion,
+		&i.TotpEnabled,
 	)
 	return i, err
 }
 
 const getAuthUserByIDInTenant = `-- name: GetAuthUserByIDInTenant :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
 WHERE tenant_id = $1 AND id = $2
 `
@@ -99,12 +103,14 @@ func (q *Queries) GetAuthUserByIDInTenant(ctx context.Context, arg GetAuthUserBy
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.AccountVersion,
+		&i.TotpEnabled,
 	)
 	return i, err
 }
 
 const getAuthUserByLogin = `-- name: GetAuthUserByLogin :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
 WHERE email = $1
 `
@@ -122,12 +128,14 @@ func (q *Queries) GetAuthUserByLogin(ctx context.Context, email string) (User, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.AccountVersion,
+		&i.TotpEnabled,
 	)
 	return i, err
 }
 
 const getAuthUserByLoginInTenant = `-- name: GetAuthUserByLoginInTenant :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
 WHERE tenant_id = $1 AND email = $2
 `
@@ -152,6 +160,8 @@ func (q *Queries) GetAuthUserByLoginInTenant(ctx context.Context, arg GetAuthUse
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.AccountVersion,
+		&i.TotpEnabled,
 	)
 	return i, err
 }
@@ -174,8 +184,8 @@ func (q *Queries) UpdateAuthUserPasswordHash(ctx context.Context, arg UpdateAuth
 }
 
 const updateAuthUserStatus = `-- name: UpdateAuthUserStatus :one
-UPDATE users SET status = $2, updated_at = NOW() WHERE id = $1
-RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id
+UPDATE users SET status = $2, account_version = account_version + 1, updated_at = NOW() WHERE id = $1
+RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 `
 
 type UpdateAuthUserStatusParams struct {
@@ -187,6 +197,7 @@ type UpdateAuthUserStatusParams struct {
 // tenant-scoped lookup before any status transition, and email-verification
 // confirm deliberately runs under the challenge's tenant rather than the
 // request's, so this update must not re-scope by the request tenant.
+// goAuth requires account_version to advance on every status transition.
 func (q *Queries) UpdateAuthUserStatus(ctx context.Context, arg UpdateAuthUserStatusParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateAuthUserStatus, arg.ID, arg.Status)
 	var i User
@@ -200,6 +211,8 @@ func (q *Queries) UpdateAuthUserStatus(ctx context.Context, arg UpdateAuthUserSt
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TenantID,
+		&i.AccountVersion,
+		&i.TotpEnabled,
 	)
 	return i, err
 }

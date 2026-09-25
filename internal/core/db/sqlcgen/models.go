@@ -24,15 +24,34 @@ type Tenant struct {
 }
 
 type User struct {
-	ID           pgtype.UUID        `json:"id"`
-	Email        string             `json:"email"`
-	PasswordHash string             `json:"password_hash"`
-	Role         pgtype.Text        `json:"role"`
-	Permissions  int64              `json:"permissions"`
-	Status       string             `json:"status"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	TenantID     string             `json:"tenant_id"`
+	ID             pgtype.UUID        `json:"id"`
+	Email          string             `json:"email"`
+	PasswordHash   string             `json:"password_hash"`
+	Role           pgtype.Text        `json:"role"`
+	Permissions    int64              `json:"permissions"`
+	Status         string             `json:"status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	TenantID       string             `json:"tenant_id"`
+	AccountVersion int32              `json:"account_version"`
+	TotpEnabled    bool               `json:"totp_enabled"`
+}
+
+type UserBackupCode struct {
+	ID        int64              `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	CodeHash  []byte             `json:"code_hash"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type UserTotp struct {
+	UserID           pgtype.UUID        `json:"user_id"`
+	SecretCiphertext []byte             `json:"secret_ciphertext"`
+	Verified         bool               `json:"verified"`
+	LastUsedCounter  int64              `json:"last_used_counter"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WebauthnCredential struct {
