@@ -18,7 +18,7 @@ PERF_REFRESH_BUFFER_SECONDS ?= 30
 PERF_SUSTAIN_RPS_RATIO ?= 0.95
 PERF_OUTPUT_DIR ?= performance/results
 
-.PHONY: fmt vet test tidy run db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module auth auth-config user perf-token load-k6-10k load-vegeta-10k bench-hotpath verify
+.PHONY: fmt vet test tidy run db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module user perf-token load-k6-10k load-vegeta-10k bench-hotpath verify
 
 fmt:
 	$(GO) fmt ./...
@@ -60,13 +60,6 @@ migrate-version:
 
 module:
 	$(GO) run ./cmd/modulegen $(if $(name),--name "$(name)",) $(if $(force),--force "$(force)",) $(if $(db),--db=$(db),) $(if $(auth),--auth=$(auth),) $(if $(tenant),--tenant=$(tenant),) $(if $(ratelimit),--ratelimit=$(ratelimit),) $(if $(cache),--cache=$(cache),) $(if $(migration),--migration=$(migration),)
-
-auth:
-	$(GO) run ./cmd/authgen
-
-auth-config:
-	@if [ -z "$(file)" ]; then echo "file is required: make auth-config file=authgen.yaml"; exit 1; fi
-	$(GO) run ./cmd/authgen --config "$(file)"
 
 perf-token:
 	$(GO) run ./cmd/perftoken --create-if-missing --output json
