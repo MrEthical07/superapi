@@ -36,6 +36,10 @@ func main() {
 		log.Fatalf("logger init failed: %v", err)
 	}
 
+	for _, warning := range cfg.Deprecations() {
+		logger.Warn().Msg(warning)
+	}
+
 	a, err := app.New(cfg, logger, modules.All())
 	if err != nil {
 		logger.Fatal().Err(err).Msg("app init failed")

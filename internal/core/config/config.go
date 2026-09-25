@@ -60,12 +60,41 @@ type AuthConfig struct {
 // tenant policies. When Enabled is true, tenant scoping/keying defaults return
 // and {tenant_id} routes must carry tenant policies.
 type TenancyConfig struct {
-	// Enabled turns on multi-tenant policy, cache, and rate-limit behavior.
+	// Enabled turns on multi-tenant policy, cache, and rate-limit behavior, the
+	// tenant resolution middleware, and goAuth's tenant-scoped user lookup.
 	Enabled bool
-	// EnforceIsolation requests goAuth's strict tenant isolation checks. It has
-	// no effect unless Enabled is true.
+	// Resolver selects how the request tenant is resolved: "header" (default)
+	// or "subdomain". Only used when Enabled is true.
+	Resolver string
+	// Header is the request header carrying the tenant id for the header
+	// resolver (default X-Tenant-ID).
+	Header string
+	// BaseDomain is the parent domain for the subdomain resolver; a request to
+	// acme.example.com with BaseDomain example.com resolves tenant "acme".
+	BaseDomain string
+	// Validate requires the resolved tenant to exist in the tenants table and
+	// be active (default true). Requires Postgres.
+	Validate bool
+	// ValidateCacheTTL bounds how long a tenant lookup result is cached
+	// in-process (default 30s). 0 disables the cache.
+	ValidateCacheTTL time.Duration
+	// ExemptPaths are exact request paths that skip tenant resolution
+	// (default /healthz, /readyz, /metrics). The metrics path is always exempt.
+	ExemptPaths []string
+	// EnforceIsolation is deprecated and ignored. goAuth v0.5.0 made
+	// MultiTenant.EnforceIsolation a no-op; tenant enforcement is governed by
+	// Enabled alone. The env var is still accepted for one release and logs a
+	// deprecation warning when set.
+	//
+	// Deprecated: remove TENANCY_ENFORCE_ISOLATION from your environment.
 	EnforceIsolation bool
 }
+
+// Tenancy resolver names accepted by TENANCY_RESOLVER.
+const (
+	TenancyResolverHeader    = "header"
+	TenancyResolverSubdomain = "subdomain"
+)
 
 // RateLimitConfig defines default policy values for route rate limiting.
 type RateLimitConfig struct {
@@ -341,6 +370,12 @@ func Load() (*Config, error) {
 		},
 		Tenancy: TenancyConfig{
 			Enabled:          getBool("TENANCY_ENABLED", false),
+			Resolver:         strings.ToLower(strings.TrimSpace(getenv("TENANCY_RESOLVER", TenancyResolverHeader))),
+			Header:           strings.TrimSpace(getenv("TENANCY_HEADER", "X-Tenant-ID")),
+			BaseDomain:       strings.ToLower(strings.Trim(strings.TrimSpace(getenv("TENANCY_BASE_DOMAIN", "")), ".")),
+			Validate:         getBool("TENANCY_VALIDATE", true),
+			ValidateCacheTTL: getDuration("TENANCY_VALIDATE_CACHE_TTL", 30*time.Second),
+			ExemptPaths:      getCSV("TENANCY_EXEMPT_PATHS", []string{"/healthz", "/readyz", "/metrics"}),
 			EnforceIsolation: getBool("TENANCY_ENFORCE_ISOLATION", false),
 		},
 		RateLimit: RateLimitConfig{
@@ -499,8 +534,30 @@ func (c *Config) Lint() error {
 	if c.Auth.Enabled && !c.Postgres.Enabled {
 		return fmt.Errorf("auth enabled requires postgres enabled")
 	}
-	if c.Tenancy.EnforceIsolation && !c.Tenancy.Enabled {
-		return fmt.Errorf("tenancy enforce-isolation requires tenancy enabled")
+	if c.Tenancy.Enabled {
+		switch c.Tenancy.Resolver {
+		case TenancyResolverHeader:
+			if err := validateTokens("tenancy header", []string{c.Tenancy.Header}); err != nil || c.Tenancy.Header == "" {
+				return fmt.Errorf("tenancy header must be a single non-empty header name")
+			}
+		case TenancyResolverSubdomain:
+			if c.Tenancy.BaseDomain == "" {
+				return fmt.Errorf("tenancy resolver %q requires TENANCY_BASE_DOMAIN", TenancyResolverSubdomain)
+			}
+		default:
+			return fmt.Errorf("invalid tenancy resolver: %q (valid: header, subdomain)", c.Tenancy.Resolver)
+		}
+		if c.Tenancy.Validate && !c.Postgres.Enabled {
+			return fmt.Errorf("tenancy validate requires postgres enabled (set TENANCY_VALIDATE=false to skip tenant existence checks)")
+		}
+		if c.Tenancy.ValidateCacheTTL < 0 {
+			return fmt.Errorf("tenancy validate cache ttl must be >= 0")
+		}
+		for _, p := range c.Tenancy.ExemptPaths {
+			if p == "" || p[0] != '/' {
+				return fmt.Errorf("tenancy exempt path must start with '/': %q", p)
+			}
+		}
 	}
 	if c.RateLimit.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("ratelimit enabled requires redis enabled")
@@ -804,6 +861,17 @@ func (c *Config) Lint() error {
 	}
 
 	return nil
+}
+
+// Deprecations returns human-readable warnings for deprecated settings present
+// in the loaded configuration. Callers log these at startup; they never fail
+// startup on their own.
+func (c *Config) Deprecations() []string {
+	var out []string
+	if _, ok := os.LookupEnv("TENANCY_ENFORCE_ISOLATION"); ok {
+		out = append(out, "TENANCY_ENFORCE_ISOLATION is deprecated and ignored: goAuth v0.5.0 made MultiTenant.EnforceIsolation a no-op; tenant enforcement is governed by TENANCY_ENABLED alone. Remove it from your environment; it will be rejected in a future release.")
+	}
+	return out
 }
 
 func getenv(key, fallback string) string {

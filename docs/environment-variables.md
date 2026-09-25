@@ -148,24 +148,40 @@ config + optional-migration step — see docs/enabling-webauthn.md.
 
 | Env var | Default | Notes |
 |---|---|---|
-| TENANCY_ENABLED | false | enables multi-tenant policy, cache, and rate-limit behavior |
-| TENANCY_ENFORCE_ISOLATION | false | requests goAuth strict tenant isolation; only meaningful when TENANCY_ENABLED=true |
+| TENANCY_ENABLED | false | enables multi-tenant policy, cache and rate-limit behavior, the tenant resolution middleware, and goAuth tenant-scoped user lookup |
+| TENANCY_RESOLVER | header | how the request tenant is resolved: `header` or `subdomain` |
+| TENANCY_HEADER | X-Tenant-ID | header carrying the tenant id (header resolver) |
+| TENANCY_BASE_DOMAIN | (empty) | parent domain for the subdomain resolver; required when `TENANCY_RESOLVER=subdomain` (`acme.example.com` -> tenant `acme`) |
+| TENANCY_VALIDATE | true | require the tenant to exist in `tenants` with `status='active'`; requires Postgres |
+| TENANCY_VALIDATE_CACHE_TTL | 30s | in-process cache for tenant validation results (positive and negative); `0` disables |
+| TENANCY_EXEMPT_PATHS | /healthz,/readyz,/metrics | exact paths that skip tenant resolution; the metrics path is always exempt |
 
 Behavior:
 
 - With TENANCY_ENABLED=false (default), tenancy is inert. Preset policies do not
   default to tenant scoping/keying (authenticated cache reads vary by user id
-  instead of tenant id), and a `{tenant_id}` path parameter is treated as an
-  ordinary parameter rather than forcing tenant policies onto the route.
-- With TENANCY_ENABLED=true, tenant scoping/keying defaults return and
-  `{tenant_id}` routes must carry `TenantRequired` + `TenantMatchFromPath`. The
-  flag is also propagated to goAuth via `MultiTenant.Enabled`.
+  instead of tenant id), a `{tenant_id}` path parameter is treated as an
+  ordinary parameter, no tenant middleware runs, and goAuth stays tenant-blind.
+- With TENANCY_ENABLED=true, tenant scoping/keying defaults return,
+  `{tenant_id}` routes must carry `TenantRequired` + `TenantMatchFromPath`, the
+  tenant middleware resolves and validates the tenant on every non-exempt
+  request (400 `tenant required`/`tenant invalid`, 404 `tenant not found`, 503
+  when validation cannot reach Postgres), and goAuth `MultiTenant.Enabled` is
+  set so every user lookup is scoped to that tenant. See docs/multi-tenancy.md.
 
 Lint dependency rules:
 
-- TENANCY_ENFORCE_ISOLATION=true requires TENANCY_ENABLED=true
+- TENANCY_RESOLVER must be `header` or `subdomain` (checked only when enabled)
+- TENANCY_RESOLVER=subdomain requires TENANCY_BASE_DOMAIN
+- TENANCY_VALIDATE=true requires POSTGRES_ENABLED=true
 
-See docs/policies.md and docs/removing-tenancy.md.
+Deprecated:
+
+- `TENANCY_ENFORCE_ISOLATION` is ignored since v0.9.0 (goAuth v0.5.0 made
+  `MultiTenant.EnforceIsolation` a no-op). It is still accepted for one release
+  and logs a deprecation warning at startup when set. Remove it.
+
+See docs/policies.md, docs/multi-tenancy.md and docs/removing-tenancy.md.
 
 ## 8. Rate-Limit Variables
 

@@ -27,8 +27,8 @@ remain available and enforce correctly if you attach them explicitly. The
 dependency rule "`TenantMatchFromPath` requires `TenantRequired`" holds
 regardless of the flag.
 
-`TENANCY_ENFORCE_ISOLATION=true` requires `TENANCY_ENABLED=true`; the config lint
-rejects the combination otherwise.
+`TENANCY_ENFORCE_ISOLATION` is deprecated and ignored (goAuth v0.5.0 made the
+underlying setting a no-op); remove it from your environment.
 
 ## 2. Delete tenancy from the codebase
 
