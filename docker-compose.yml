@@ -20,14 +20,23 @@ services:
       timeout: 3s
       retries: 30
 
+  # Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3 (not BSD). That is fine for
+  # local development, but review it before reusing this file in production.
+  # Valkey is a drop-in, BSD-licensed Redis fork (same port and protocol; the
+  # app needs no changes): to use it, switch the image, command and
+  # healthcheck lines to the commented Valkey variants below.
+  # See docs/getting-started.md ("Redis licence").
   redis:
     image: redis:8-alpine
+    # image: valkey/valkey:9-alpine
+    # With Valkey use: ["valkey-server", "--appendonly", "yes"]
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
+      # With Valkey use: ["CMD", "valkey-cli", "ping"]
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s

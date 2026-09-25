@@ -205,6 +205,10 @@ TRACING_INSECURE=false
 
 ### Redis
 
+Licence: the Redis 8 image used by `docker-compose.yml` is RSALv2 / SSPLv1 /
+AGPLv3. For production, review that licence or use Valkey (BSD-3-Clause,
+drop-in; see docs/getting-started.md).
+
 | Variable | Recommended prod value | Security rationale |
 |---|---|---|
 | `REDIS_ENABLED` | `true` if auth/rate-limit/cache depend on it | Explicit dependency posture. |

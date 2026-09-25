@@ -117,7 +117,8 @@ changes listed first.
 - **Env documentation guard**: `internal/tools/envcheck`, run by
   `superapi-verify` and a test, fails when code reads an env var missing from
   `.env.example` or `docs/environment-variables.md`.
-- **CI**: Postgres/Redis service containers, sqlc v1.31.1 drift check,
+- **CI**: a `docker` job that builds the image and validates
+  `docker compose config`; Postgres/Redis service containers, sqlc v1.31.1 drift check,
   `superapi-verify`, migrations up/down/up, gofmt, a `TENANCY_ENABLED=true` test
   pass, and a matrix job that runs `make init` (default and `--no-all`) on a
   copy and then that project's gate.
@@ -141,8 +142,16 @@ changes listed first.
 
 ### Dependencies
 
-- Go toolchain 1.26.5 -> 1.26.8 (`go.mod`, CI, Dockerfile).
-- goAuth v0.4.0 -> v0.5.0; go-webauthn v0.17.4 -> v0.18.2 (indirect, via goAuth).
+- Go toolchain 1.26.5 -> 1.26.8 (`go.mod`, CI, Dockerfile). Staying on the
+  Go 1.26 line for v0.9.0 is deliberate: Go 1.27 was released on
+  2026-08-19 (1.27.1 on 2026-09-01), and 1.26 remains supported until Go 1.28
+  ships. Keeping the toolchain unchanged limits v0.9.0 to the auth/tenancy
+  work; the move to Go 1.27 is scheduled for a v0.9.x release.
+- goAuth v0.4.0 -> v0.5.0 (latest). goAuth's own WebAuthn dependencies stay
+  at the versions goAuth pins and tests against (`go-webauthn/webauthn`
+  v0.17.4, `go-webauthn/x` v0.2.6, `fxamacker/cbor` v2.9.2); SuperAPI does not
+  override them. go-webauthn v0.18 has breaking changes and will arrive through
+  a goAuth release.
 - pgx v5.9.2 -> v5.11.0, go-redis v9.18.0 -> v9.22.0, chi v5.2.5 -> v5.3.2,
   golang-migrate v4.19.1 -> v4.20.1, zerolog v1.34.0 -> v1.35.1,
   prometheus client_golang v1.23.2 -> v1.24.1 (client_model v0.6.3),
@@ -157,6 +166,9 @@ changes listed first.
   images Postgres 18 / Redis 8. Postgres 18 images store data under
   `/var/lib/postgresql`, so the compose volume mount moved; recreate an old
   local volume with `make dev-reset`.
+- Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3. `docker-compose.yml` and the
+  docs call this out and carry a commented-out, BSD-licensed Valkey
+  (`valkey/valkey:9-alpine`) option.
 
 ### Deprecated
 

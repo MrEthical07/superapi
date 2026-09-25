@@ -26,6 +26,17 @@ This repository is published as a template for production-grade Go APIs.
 - Read module docs: `docs/modules.md` and `docs/crud-examples.md`
 <!-- template:end devx -->
 
+## Updating Dependencies
+- Update direct dependencies deliberately (`go get <module>@latest`, or
+  `go get -u` on a specific module), then `go mod tidy`.
+- Do not raise the version of a library's own dependency in this `go.mod`
+  (for example `github.com/go-webauthn/webauthn` under goAuth). MVS then forces
+  that library onto a version its own tests never ran against. Upgrade it in
+  the library, release it, and bump the library here. `go get -u ./...`
+  does exactly this for the whole graph, so review its diff line by line.
+- Keep `go.mod`'s `go` line, `.github/workflows/ci.yml` and the `Dockerfile`
+  builder image on the same Go version.
+
 ## Testing Expectations
 - Run `go test ./...` before opening a PR.
 - Run `go build ./...` and `go run ./cmd/superapi-verify ./...` before opening a PR.

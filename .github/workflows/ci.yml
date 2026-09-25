@@ -50,6 +50,50 @@ jobs:
           go test ./... -race
   # template:end init
 
+  # Builds the production image and exercises docker-compose.yml, which are
+  # otherwise untested: compose validation, image build, a non-root and
+  # liveness smoke test, and migrations run by the image against the compose
+  # Postgres.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+
+      - name: Build image
+        run: docker build -t superapi:ci .
+
+      - name: Image runs as non-root
+        run: |
+          user=$(docker inspect -f '{{.Config.User}}' superapi:ci)
+          echo "image user: $user"
+          case "$user" in ""|root|0|0:0) echo "image must not run as root"; exit 1;; esac
+
+      - name: Smoke test (minimal profile)
+        run: |
+          docker run -d --name api -p 8080:8080 -e APP_PROFILE=minimal superapi:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz; then echo; exit_code=0; break; fi
+            exit_code=1; sleep 1
+          done
+          docker logs api
+          docker rm -f api
+          exit $exit_code
+
+      - name: Compose stack and migrations from the image
+        run: |
+          docker compose up -d --wait
+          url="postgres://superapi:superapi@127.0.0.1:5432/superapi?sslmode=disable"
+          docker run --rm --network host -e POSTGRES_ENABLED=true -e POSTGRES_URL="$url" superapi:ci /app/migrate up
+          docker run --rm --network host -e POSTGRES_ENABLED=true -e POSTGRES_URL="$url" superapi:ci /app/migrate version
+          docker compose exec -T redis redis-cli ping
+
+      - name: Compose teardown
+        if: always()
+        run: docker compose down -v
+
   test:
     runs-on: ubuntu-latest
 

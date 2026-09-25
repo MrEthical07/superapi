@@ -108,6 +108,18 @@ go build ./... && go test ./... && go run ./cmd/superapi-verify ./...
 make test-integration      # with make dev-up running: Postgres integration tests
 ```
 
+## Redis licence
+
+`docker-compose.yml` uses `redis:8`. Since Redis 8 the open-source edition is
+licensed **RSALv2 / SSPLv1 / AGPLv3**, not BSD. That is fine for local
+development, but templates often get copied into production, so review the
+licence before running Redis 8 in your deployment. The compose file carries a
+commented-out **Valkey** option (`valkey/valkey:9-alpine`), a drop-in,
+BSD-3-Clause-licensed Redis fork: switch the image, command and healthcheck
+lines and nothing else changes (`REDIS_ADDR` and the app code stay the same).
+Managed offerings (ElastiCache/Memorystore for Valkey or Redis) are another
+option.
+
 ## Ship it
 
 ```bash
