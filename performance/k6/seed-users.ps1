@@ -33,7 +33,7 @@ $env:AUTH_MODE = $AuthMode
 for ($i = 1; $i -le $Count; $i++) {
     $email = "$Prefix+vu$i@$Domain"
 
-    $result = & go run ./cmd/perftoken --email $email --password $Password --role $Role --mode $AuthMode --create-if-missing true --output json 2>&1
+    $result = & go run ./cmd/perftoken --email $email --password $Password --role $Role --mode $AuthMode --create-if-missing=true --output json 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to seed user $email : $result"
     }

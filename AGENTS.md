@@ -59,11 +59,23 @@ Do not bypass policy.MustValidateRoute / validator-backed route checks.
 
 ## 6. Auth Integration Rules
 
-- Use goAuth integration in internal/core/auth.
+- Use goAuth (v0.5.0) integration in internal/core/auth; goAuth config lives in internal/core/auth/config.go and roles in roles.go.
+- Auth HTTP endpoints live in internal/modules/auth (handler -> service -> goAuth engine). The service is the only code that calls *goauth.Engine.
+- Optional endpoint groups are gated by AUTH_*_ENABLED flags and are not registered when off.
 - Keep goAuth user provider data-store independent from service/module layers.
-- Auth persistence must go through the auth repository over the storage boundary (sqlc queries).
+- Auth persistence must go through the auth repositories (user_repository.go, mfa_repository.go) over the storage boundary (sqlc queries).
 - Do not reimplement token parsing/validation in modules.
 - Keep auth mode behavior explicit (jwt_only, hybrid, strict).
+- Never return password-reset or email-verification secrets in HTTP responses; deliver them through internal/core/notify (Notifier). Keep request endpoints enumeration-safe (same status and body whether or not the account exists).
+- Never accept a role from client input on public endpoints; create privileged accounts with cmd/createuser (make user).
+- Never expose goAuth audit events to end users or tenant admins.
+
+## 6a. Tenancy Rules
+
+- Tenancy is off by default (TENANCY_ENABLED). When on, internal/core/tenant.Middleware resolves and validates the request tenant and attaches it with auth.WithRequestTenant (which calls goauth.WithTenantID).
+- Read the tenant with auth.RequestTenantFromContext or the principal's TenantID; never from headers in module code.
+- policy.AuthRequired rejects tokens from another tenant; tenant-scoped routes still need policy.TenantRequired (and TenantMatchFromPath for {tenant_id} paths).
+- Scope tenant-owned queries by tenant_id in SQL.
 
 ## 7. Cache Usage Rules
 
@@ -104,8 +116,11 @@ Never:
 - Modules: docs/modules.md, docs/module_guide.md, docs/crud-examples.md
 - Policies: docs/policies.md
 - Cache: docs/cache-guide.md
-- Auth: docs/auth-goauth.md, docs/authDocs/
+- Auth: docs/auth-flows.md, docs/auth-goauth.md (links goAuth docs pinned to the go.mod version), docs/auth-bootstrap.md
+- Tenancy: docs/multi-tenancy.md, docs/removing-tenancy.md
+- Getting started / clone flow: docs/getting-started.md
 - Runtime/config: docs/environment-variables.md, docs/workflows.md
+  (every env var the code reads must be in .env.example and docs/environment-variables.md; superapi-verify enforces it)
 
 ## 11. How To Add A New Feature (Primary Workflow)
 
@@ -131,6 +146,7 @@ Use this sequence for most feature work:
 - go test ./...
 - go build ./...
 - go run ./cmd/superapi-verify ./...
+- make test-integration (Postgres integration tests; needs make dev-up)
 
 6. Update documentation when behavior/config/API architecture changes.
 
@@ -240,6 +256,7 @@ Performance checks:
 
 Always compare before/after numbers when changing hot paths.
 
+<!-- template:begin maintainer -->
 ## 17. Release And Publish Checklist
 
 For release-impacting changes:
@@ -254,3 +271,4 @@ For release-impacting changes:
 5. Tag release after merge/publish prep:
 - git tag -a vX.Y.Z -m "Release vX.Y.Z"
 - git push origin vX.Y.Z
+<!-- template:end maintainer -->

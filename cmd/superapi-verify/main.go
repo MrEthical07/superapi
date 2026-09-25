@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/MrEthical07/superapi/internal/tools/envcheck"
 	"github.com/MrEthical07/superapi/internal/tools/validator"
 )
 
@@ -19,6 +21,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("superapi-verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	format := fs.String("format", "text", "output format: text|json")
+	envRoot := fs.String("env-root", ".", "repository root for the env documentation check (empty disables it)")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -33,6 +36,21 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "verify failed: %v\n", err)
 		return 2
+	}
+
+	// Every env var the code reads must be in .env.example and
+	// docs/environment-variables.md.
+	if root := strings.TrimSpace(*envRoot); root != "" {
+		if _, statErr := os.Stat(filepath.Join(root, ".env.example")); statErr == nil {
+			res, err := envcheck.Check(root)
+			if err != nil {
+				fmt.Fprintf(stderr, "verify failed: env check: %v\n", err)
+				return 2
+			}
+			for _, problem := range res.Problems() {
+				diagnostics = append(diagnostics, validator.Diagnostic{File: ".env.example", Message: problem})
+			}
+		}
 	}
 
 	normalizedFormat := strings.ToLower(strings.TrimSpace(*format))
@@ -85,6 +103,8 @@ func hintForDiagnostic(message string) string {
 		return "route path includes {tenant_id}; add policy.TenantRequired() and policy.TenantMatchFromPath(\"tenant_id\"). See docs/policies.md"
 	case strings.Contains(normalized, "requires varyby.userid or varyby.tenantid"):
 		return "CacheRead on authenticated routes must vary by identity. Add VaryBy.UserID or VaryBy.TenantID. See docs/cache-guide.md"
+	case strings.Contains(normalized, "read by the code but missing"):
+		return "document the variable in .env.example and docs/environment-variables.md"
 	case strings.Contains(normalized, "unsupported policy constructor"):
 		return "use supported policy constructors from internal/core/policy or extend static validator support first"
 	case strings.Contains(normalized, "variadic spread policies are not supported"):

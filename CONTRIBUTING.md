@@ -2,27 +2,45 @@
 
 This repository is published as a template for production-grade Go APIs.
 
+<!-- template:begin maintainer -->
 ## Before You Start
 - Do not install this repository via `go get`.
-- Use GitHub "Use this template" to create your own project.
+- Use GitHub "Use this template" to create your own project, then `make init`.
 - Template-generated projects are snapshots and do not auto-update from this source.
+<!-- template:end maintainer -->
 
 ## Local Development
-- Run API: `go run ./cmd/api`
+- Start Postgres + Redis: `make dev-up`, then `cp .env.example .env && make migrate-up`
+- Run API: `make run`
+- Check your toolchain: `make doctor`
 - Format code: `make fmt`
 - Vet code: `make vet`
-- Run tests: `go test ./...`
+- Run tests: `go test ./...` (`make test-integration` adds the Postgres integration tests)
 - Build all packages: `go build ./...`
 
+<!-- template:begin devx -->
 ## Adding a Module
 - Generate baseline module: `make module name=projects`
 - Optional DB scaffolding: `make module name=projects db=1`
 - Optional policy examples: `make module name=projects auth=1 tenant=1 ratelimit=1 cache=1`
 - Read module docs: `docs/modules.md` and `docs/crud-examples.md`
+<!-- template:end devx -->
+
+## Updating Dependencies
+- Update direct dependencies deliberately (`go get <module>@latest`, or
+  `go get -u` on a specific module), then `go mod tidy`.
+- Do not raise the version of a library's own dependency in this `go.mod`
+  (for example `github.com/go-webauthn/webauthn` under goAuth). MVS then forces
+  that library onto a version its own tests never ran against. Upgrade it in
+  the library, release it, and bump the library here. `go get -u ./...`
+  does exactly this for the whole graph, so review its diff line by line.
+- Keep `go.mod`'s `go` line, `.github/workflows/ci.yml` and the `Dockerfile`
+  builder image on the same Go version.
 
 ## Testing Expectations
 - Run `go test ./...` before opening a PR.
-- Run `go build ./...` before opening a PR.
+- Run `go build ./...` and `go run ./cmd/superapi-verify ./...` before opening a PR.
+- If you changed SQL, run `make sqlc-generate` and commit the generated code.
 - For hot-path changes, run `make bench-hotpath` and include before/after results.
 
 ## Coding Standards
@@ -32,11 +50,13 @@ This repository is published as a template for production-grade Go APIs.
 - Keep hot paths lean and production-safe.
 - Reuse typed app errors and centralized response handling.
 
+<!-- template:begin maintainer -->
 ## Governance Rules
 - No breaking changes without a version bump and migration notes.
 - Core changes require a pull request review.
 - Documentation updates are required for behavior/config/API changes.
 - Core modifications must be contributed back via pull requests.
+<!-- template:end maintainer -->
 
 ## Pull Request Checklist
 - Tests pass: `go test ./...`
@@ -45,6 +65,7 @@ This repository is published as a template for production-grade Go APIs.
 - Changelog updated when release-impacting
 - Backward compatibility considered or clearly documented
 
+<!-- template:begin maintainer -->
 ## Release Preparation Checklist
 - Update `CHANGELOG.md` with a new top release section (breaking changes, added, changed, removed, docs).
 - Update release metadata in `README.md`:
@@ -59,3 +80,4 @@ This repository is published as a template for production-grade Go APIs.
 - Create annotated release tag after merge/publish prep:
 	- `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
 	- `git push origin vX.Y.Z`
+<!-- template:end maintainer -->

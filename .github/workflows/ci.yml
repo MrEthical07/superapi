@@ -9,15 +9,130 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # template:begin init
+  # Runs `make init` against a copy of the template for the default and the
+  # everything-pruned combinations, then that project's own gate.
+  templateinit:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flags: ["", "--no-all"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
+
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+
+      - name: Dry run
+        run: go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }} --dry-run
+
+      - name: Initialize a copy and run its gate
+        run: |
+          dst="$RUNNER_TEMP/project"
+          mkdir -p "$dst"
+          git ls-files -z | xargs -0 cp --parents -t "$dst"
+          cd "$dst"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }}
+          if grep -rl "MrEthical07/superapi" .; then echo "old module path still referenced"; exit 1; fi
+          if grep -rlE "template:(begin|end) " .; then echo "template markers left behind"; exit 1; fi
+          git init -q && git add -A && git -c user.email=ci@example.com -c user.name=ci commit -qm init
+          make sqlc-generate && git diff --exit-code
+          go build ./...
+          go vet ./...
+          go run ./cmd/superapi-verify ./...
+          go test ./... -race
+  # template:end init
+
+  # Builds the production image and exercises docker-compose.yml, which are
+  # otherwise untested: compose validation, image build, a non-root and
+  # liveness smoke test, and migrations run by the image against the compose
+  # Postgres.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet
+
+      - name: Build image
+        run: docker build -t superapi:ci .
+
+      - name: Image runs as non-root
+        run: |
+          user=$(docker inspect -f '{{.Config.User}}' superapi:ci)
+          echo "image user: $user"
+          case "$user" in ""|root|0|0:0) echo "image must not run as root"; exit 1;; esac
+
+      - name: Smoke test (minimal profile)
+        run: |
+          docker run -d --name api -p 8080:8080 -e APP_PROFILE=minimal superapi:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz; then echo; exit_code=0; break; fi
+            exit_code=1; sleep 1
+          done
+          docker logs api
+          docker rm -f api
+          exit $exit_code
+
+      - name: Compose stack and migrations from the image
+        run: |
+          docker compose up -d --wait
+          url="postgres://superapi:superapi@127.0.0.1:5432/superapi?sslmode=disable"
+          docker run --rm --network host -e POSTGRES_ENABLED=true -e POSTGRES_URL="$url" superapi:ci /app/migrate up
+          docker run --rm --network host -e POSTGRES_ENABLED=true -e POSTGRES_URL="$url" superapi:ci /app/migrate version
+          docker compose exec -T redis redis-cli ping
+
+      - name: Compose teardown
+        if: always()
+        run: docker compose down -v
+
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: superapi
+          POSTGRES_PASSWORD: superapi
+          POSTGRES_DB: superapi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U superapi -d superapi"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      POSTGRES_URL: postgres://superapi:superapi@127.0.0.1:5432/superapi?sslmode=disable
+      # Enables the Postgres integration tests (internal/core/db/dbtest).
+      SUPERAPI_TEST_DATABASE_URL: postgres://superapi:superapi@127.0.0.1:5432/superapi?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.8"
 
       - name: Go env
         run: go env
@@ -27,12 +142,42 @@ jobs:
           go mod tidy
           git diff --exit-code
 
+      - name: Format check
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+
+      # Version pinned to the one recorded in internal/core/db/sqlcgen headers.
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+
+      - name: sqlc drift check
+        run: |
+          make sqlc-generate SQLC="$(go env GOPATH)/bin/sqlc"
+          git diff --exit-code
+          test -z "$(git status --porcelain)" || { git status --porcelain; echo "sqlc-generate produced untracked files"; exit 1; }
+
+      - name: Build
+        run: go build ./...
+
+      - name: Architecture and env verify
+        run: go run ./cmd/superapi-verify ./...
+
+      - name: Migrations (up, down, up)
+        run: |
+          make migrate-up
+          for i in 1 2 3 4 5 6; do make migrate-down; done
+          make migrate-up
+
       - name: Test
         run: go test ./... -race
 
+      - name: Test (TENANCY_ENABLED=true)
+        run: TENANCY_ENABLED=true go test ./... -race
+
       - name: Install golangci-lint
         run: |
-          GOBIN=$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.6
+          GOBIN=$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
       - name: Lint
         run: $(go env GOPATH)/bin/golangci-lint run
@@ -50,7 +195,7 @@ jobs:
         run: cyclonedx-gomod mod -licenses -json -output sbom.cdx.json
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-cyclonedx
           path: sbom.cdx.json

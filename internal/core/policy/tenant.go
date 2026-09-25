@@ -42,8 +42,10 @@ func TenancyEnabled() bool {
 // TenantRequired ensures authenticated requests carry tenant scope.
 //
 // Behavior:
-// - Returns 401 when authentication context is absent
-// - Returns 403 when tenant scope is missing
+//   - Returns 401 when authentication context is absent
+//   - Returns 403 when tenant scope is missing
+//   - Returns 404 when a request tenant was resolved by the tenant middleware
+//     (TENANCY_ENABLED=true) and differs from the principal's tenant
 //
 // Notes:
 // - Required for tenant-isolated routes
@@ -52,12 +54,17 @@ func TenantRequired() Policy {
 	p := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rid := requestid.FromContext(r.Context())
-			if _, ok := auth.FromContext(r.Context()); !ok {
+			principal, ok := auth.FromContext(r.Context())
+			if !ok {
 				response.Error(w, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
 				return
 			}
 			if err := tenant.RequireTenant(r.Context()); err != nil {
 				response.Error(w, apperr.New(apperr.CodeForbidden, http.StatusForbidden, "tenant scope required"), rid)
+				return
+			}
+			if requestTenant, ok := auth.RequestTenantFromContext(r.Context()); ok && !tenant.IsSameTenant(principal.TenantID, requestTenant) {
+				response.Error(w, apperr.New(apperr.CodeNotFound, http.StatusNotFound, "not found"), rid)
 				return
 			}
 			next.ServeHTTP(w, r)

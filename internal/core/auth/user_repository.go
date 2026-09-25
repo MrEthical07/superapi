@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MrEthical07/superapi/internal/core/db/sqlcgen"
@@ -15,17 +16,29 @@ import (
 
 var ErrAuthUserNotFound = errors.New("auth user not found")
 
+// ErrAuthUserExists is returned by Create when the identifier is already taken
+// (unique violation on users.email).
+var ErrAuthUserExists = errors.New("auth user already exists")
+
+// pgUniqueViolation is the Postgres SQLSTATE for unique_violation.
+const pgUniqueViolation = "23505"
+
 // StoredUser is the storage-layer projection used by the auth repository.
 type StoredUser struct {
-	ID           string
-	Email        string
-	PasswordHash string
-	Role         string
-	Status       string
+	ID             string
+	TenantID       string
+	Email          string
+	PasswordHash   string
+	Role           string
+	Status         string
+	AccountVersion uint32
+	TOTPEnabled    bool
 }
 
 // CreateStoredUserInput is the repository input model for creating auth users.
 type CreateStoredUserInput struct {
+	// TenantID is the owning tenant. Empty falls back to DefaultTenantID.
+	TenantID     string
 	Identifier   string
 	PasswordHash string
 	Role         string
@@ -33,9 +46,16 @@ type CreateStoredUserInput struct {
 }
 
 // UserRepository defines domain-level auth user persistence operations.
+//
+// The plain lookups are tenant-blind (goAuth's contract when multi-tenancy is
+// off). The *InTenant lookups constrain the query to one tenant in SQL and
+// return ErrAuthUserNotFound for a record that exists only in another tenant;
+// an empty tenant is never treated as "any tenant".
 type UserRepository interface {
 	GetByIdentifier(ctx context.Context, identifier string) (StoredUser, error)
 	GetByID(ctx context.Context, userID string) (StoredUser, error)
+	GetByIdentifierInTenant(ctx context.Context, tenantID, identifier string) (StoredUser, error)
+	GetByIDInTenant(ctx context.Context, tenantID, userID string) (StoredUser, error)
 	UpdatePasswordHash(ctx context.Context, userID, newHash string) error
 	Create(ctx context.Context, input CreateStoredUserInput) (StoredUser, error)
 	UpdateStatus(ctx context.Context, userID string, status string) (StoredUser, error)
@@ -81,6 +101,48 @@ func (r *sqlcUserRepository) GetByID(ctx context.Context, userID string) (Stored
 	return mapUserRow(row), nil
 }
 
+func (r *sqlcUserRepository) GetByIdentifierInTenant(ctx context.Context, tenantID, identifier string) (StoredUser, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return StoredUser{}, ErrAuthUserNotFound
+	}
+
+	row, err := r.pg.Queries(ctx).GetAuthUserByLoginInTenant(ctx, sqlcgen.GetAuthUserByLoginInTenantParams{
+		TenantID: tenantID,
+		Email:    strings.TrimSpace(identifier),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return StoredUser{}, ErrAuthUserNotFound
+		}
+		return StoredUser{}, fmt.Errorf("get user by identifier in tenant: %w", err)
+	}
+	return mapUserRow(row), nil
+}
+
+func (r *sqlcUserRepository) GetByIDInTenant(ctx context.Context, tenantID, userID string) (StoredUser, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return StoredUser{}, ErrAuthUserNotFound
+	}
+	id, err := parseUserID(userID)
+	if err != nil {
+		return StoredUser{}, fmt.Errorf("get user by id in tenant: %w", err)
+	}
+
+	row, err := r.pg.Queries(ctx).GetAuthUserByIDInTenant(ctx, sqlcgen.GetAuthUserByIDInTenantParams{
+		TenantID: tenantID,
+		ID:       id,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return StoredUser{}, ErrAuthUserNotFound
+		}
+		return StoredUser{}, fmt.Errorf("get user by id in tenant: %w", err)
+	}
+	return mapUserRow(row), nil
+}
+
 func (r *sqlcUserRepository) UpdatePasswordHash(ctx context.Context, userID, newHash string) error {
 	id, err := parseUserID(userID)
 	if err != nil {
@@ -109,8 +171,13 @@ func (r *sqlcUserRepository) Create(ctx context.Context, input CreateStoredUserI
 		Role:         roleToText(input.Role),
 		Permissions:  0,
 		Status:       strings.TrimSpace(input.Status),
+		TenantID:     tenantOrDefault(input.TenantID),
 	})
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return StoredUser{}, ErrAuthUserExists
+		}
 		return StoredUser{}, fmt.Errorf("create user: %w", err)
 	}
 	return mapUserRow(row), nil
@@ -141,11 +208,14 @@ func (r *sqlcUserRepository) UpdateStatus(ctx context.Context, userID string, st
 // mirroring the COALESCE(role, empty) / id::text behavior of the prior raw SQL.
 func mapUserRow(row sqlcgen.User) StoredUser {
 	return StoredUser{
-		ID:           uuidToString(row.ID),
-		Email:        row.Email,
-		PasswordHash: row.PasswordHash,
-		Role:         textToRole(row.Role),
-		Status:       row.Status,
+		ID:             uuidToString(row.ID),
+		TenantID:       row.TenantID,
+		Email:          row.Email,
+		PasswordHash:   row.PasswordHash,
+		Role:           textToRole(row.Role),
+		Status:         row.Status,
+		AccountVersion: nonNegativeUint32(row.AccountVersion),
+		TOTPEnabled:    row.TotpEnabled,
 	}
 }
 
@@ -185,6 +255,30 @@ func roleToText(role string) pgtype.Text {
 		return pgtype.Text{Valid: false}
 	}
 	return pgtype.Text{String: trimmed, Valid: true}
+}
+
+// tenantOrDefault maps an empty tenant to goAuth's default tenant.
+func tenantOrDefault(tenantID string) string {
+	if trimmed := strings.TrimSpace(tenantID); trimmed != "" {
+		return trimmed
+	}
+	return DefaultTenantID
+}
+
+// optionalText maps an empty string to SQL NULL.
+func optionalText(value string) pgtype.Text {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return pgtype.Text{Valid: false}
+	}
+	return pgtype.Text{String: trimmed, Valid: true}
+}
+
+func nonNegativeUint32(v int32) uint32 {
+	if v < 0 {
+		return 0
+	}
+	return uint32(v)
 }
 
 func textToRole(role pgtype.Text) string {

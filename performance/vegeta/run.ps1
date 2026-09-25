@@ -32,15 +32,13 @@ function New-WeightedTargets {
     param(
         [string]$NormalizedBaseUrl,
         [string]$Token,
-        [string]$ParseDurationBodyFile,
         [string]$Path
     )
 
     $routes = @(
         @{ Weight = 35; Method = "GET";  Path = "/healthz";               Headers = @{};                                        BodyFile = $null },
         @{ Weight = 25; Method = "GET";  Path = "/readyz";                Headers = @{};                                        BodyFile = $null },
-        @{ Weight = 20; Method = "POST"; Path = "/system/parse-duration"; Headers = @{ "Content-Type" = "application/json" };  BodyFile = $ParseDurationBodyFile },
-        @{ Weight = 20; Method = "GET";  Path = "/api/v1/system/whoami";  Headers = @{ "Authorization" = "Bearer $Token" };     BodyFile = $null }
+        @{ Weight = 40; Method = "GET";  Path = "/api/v1/auth/whoami";    Headers = @{ "Authorization" = "Bearer $Token" };     BodyFile = $null }
     )
 
     $builder = New-Object System.Text.StringBuilder
@@ -65,7 +63,7 @@ function New-WeightedTargets {
 Require-Command -Name $Vegeta
 
 if ([string]::IsNullOrWhiteSpace($AuthToken)) {
-    throw "AuthToken is required for authenticated /api/v1/system/whoami traffic."
+    throw "AuthToken is required for authenticated /api/v1/auth/whoami traffic."
 }
 
 if ($Rate -le 0) {
@@ -77,9 +75,7 @@ $normalizedBaseUrl = $BaseUrl.TrimEnd("/")
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $targetsPath = Join-Path $OutputDir "targets.txt"
-$parseDurationBodyPath = Join-Path $OutputDir "parse-duration-body.json"
-Set-Content -Path $parseDurationBodyPath -Value '{"duration":"250ms"}' -Encoding ascii
-New-WeightedTargets -NormalizedBaseUrl $normalizedBaseUrl -Token $AuthToken -ParseDurationBodyFile $parseDurationBodyPath -Path $targetsPath
+New-WeightedTargets -NormalizedBaseUrl $normalizedBaseUrl -Token $AuthToken -Path $targetsPath
 
 $resultFiles = @()
 

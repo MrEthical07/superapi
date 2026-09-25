@@ -12,8 +12,12 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/logx"
+	"github.com/MrEthical07/superapi/internal/core/notify"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
+	// template:begin tenancy
+	"github.com/MrEthical07/superapi/internal/core/tenant"
+	// template:end tenancy
 )
 
 // START HERE:
@@ -61,6 +65,12 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	notifier, err := notify.New(cfg.Notify, cfg.Env, log)
+	if err != nil {
+		deps.Close()
+		return nil, err
+	}
+	deps.Notifier = notify.NewDispatcher(notifier, log, cfg.Notify.Timeout, 64)
 	router.Use(httpx.CaptureRoutePattern)
 	if deps.Metrics != nil && deps.Metrics.Enabled() {
 		metricsHandler := deps.Metrics.Handler()
@@ -70,7 +80,11 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 		router.Handle(http.MethodGet, deps.Metrics.Path(), metricsHandler)
 	}
 
-	var handler http.Handler = httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing)
+	handler := httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing,
+		// template:begin tenancy
+		httpx.WithTenantResolver(tenantResolver(cfg, deps)),
+		// template:end tenancy
+	)
 	if deps.Metrics != nil {
 		handler = deps.Metrics.InstrumentHTTP(handler)
 	}
@@ -109,6 +123,34 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 
 	return a, nil
 }
+
+// template:begin tenancy
+// tenantResolver builds the tenant resolution middleware when tenancy is
+// enabled, or returns nil (no middleware) when it is off.
+func tenantResolver(cfg *config.Config, deps *Dependencies) func(http.Handler) http.Handler {
+	if cfg == nil || !cfg.Tenancy.Enabled {
+		return nil
+	}
+
+	exempt := append([]string(nil), cfg.Tenancy.ExemptPaths...)
+	if deps != nil && deps.Metrics != nil && deps.Metrics.Enabled() {
+		exempt = append(exempt, deps.Metrics.Path())
+	}
+
+	resolverCfg := tenant.ResolverConfig{
+		Resolver:    cfg.Tenancy.Resolver,
+		Header:      cfg.Tenancy.Header,
+		BaseDomain:  cfg.Tenancy.BaseDomain,
+		ExemptPaths: exempt,
+		CacheTTL:    cfg.Tenancy.ValidateCacheTTL,
+	}
+	if cfg.Tenancy.Validate && deps != nil && deps.DB != nil {
+		resolverCfg.Directory = tenant.NewRepository(deps.DB)
+	}
+	return tenant.Middleware(resolverCfg)
+}
+
+// template:end tenancy
 
 func requireBearerToken(next http.Handler, token string) http.Handler {
 	token = strings.TrimSpace(token)

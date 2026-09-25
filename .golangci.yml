@@ -1,13 +1,14 @@
+version: "2"
+
 run:
   timeout: 3m
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - govet
-    - staticcheck
     - ineffassign
+    - staticcheck
     - unused
-
-issues:
-  exclude-use-default: false
+  exclusions:
+    generated: lax

@@ -31,6 +31,7 @@
 package auth
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -40,18 +41,42 @@ import (
 )
 
 // TenancySettings controls goAuth multi-tenant behavior. It is populated from
-// application config (TENANCY_ENABLED / TENANCY_ENFORCE_ISOLATION) and passed
-// into ProjectGoAuthConfig so the goAuth engine matches the app-wide tenancy
-// decision. The zero value leaves multi-tenant behavior off.
+// application config (TENANCY_ENABLED) and passed into ProjectGoAuthConfig so
+// the goAuth engine matches the app-wide tenancy decision. The zero value
+// leaves multi-tenant behavior off.
 type TenancySettings struct {
-	// Enabled turns on goAuth multi-tenant handling.
+	// Enabled turns on goAuth multi-tenant handling. goAuth v0.5.0 then scopes
+	// every user lookup to the tenant attached with goauth.WithTenantID and
+	// requires the user provider to implement TenantAwareUserProvider.
 	Enabled bool
-	// EnforceIsolation requests strict tenant isolation checks (only meaningful
-	// when Enabled is true).
-	EnforceIsolation bool
 }
 
-func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, error) {
+// Features carries the opt-in auth feature flags (AUTH_*_ENABLED). Each flag
+// enables one goAuth config section below and the matching endpoint group in
+// internal/modules/auth. The zero value keeps every optional feature off.
+type Features struct {
+	// RegistrationAutoLogin issues tokens from CreateAccount
+	// (AUTH_REGISTRATION_AUTO_LOGIN).
+	RegistrationAutoLogin bool
+	// PasswordReset enables goAuth password reset (AUTH_PASSWORD_RESET_ENABLED).
+	PasswordReset bool
+	// EmailVerification enables goAuth email verification
+	// (AUTH_EMAIL_VERIFICATION_ENABLED); new accounts start pending.
+	EmailVerification bool
+	// EmailVerificationRequired blocks login until verified
+	// (AUTH_EMAIL_VERIFICATION_REQUIRED).
+	EmailVerificationRequired bool
+	// TOTP enables TOTP MFA and backup codes (AUTH_TOTP_ENABLED).
+	TOTP bool
+	// TOTPIssuer labels the account in authenticator apps (AUTH_TOTP_ISSUER).
+	TOTPIssuer string
+	// AllowTestOverrides permits the AUTH_TEST_* perf overrides. The app sets
+	// it only for APP_ENV=dev/test; any AUTH_TEST_* value is rejected otherwise.
+	AllowTestOverrides bool
+}
+
+// ProjectGoAuthConfig builds the goAuth configuration for this project.
+func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features) (goauth.Config, error) {
 	cfg := goauth.DefaultConfig()
 
 	// ------------------------------------------------------------
@@ -64,12 +89,21 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, err
 	// Multi-Tenant
 	// ------------------------------------------------------------
 	//
-	// Follows the application-wide tenancy decision (TENANCY_ENABLED). When
-	// tenancy is off this leaves goAuth's tenant handling inert; the default
-	// JWT carries no tenant, so enabling it only matters once principals carry
-	// a tenant id. See docs/policies.md and the "Removing tenancy" guide.
+	// Follows the application-wide tenancy decision (TENANCY_ENABLED). With
+	// tenancy off goAuth stays tenant-blind and uses its default tenant "0".
+	// With it on (goAuth v0.5.0) every user lookup is scoped to the tenant the
+	// tenant middleware attaches to the request context, and Build fails unless
+	// the provider implements goauth.TenantAwareUserProvider.
+	//
+	// MultiTenant.EnforceIsolation and MultiTenant.TenantHeader are deprecated
+	// no-ops in goAuth v0.5.0 and are intentionally left unset. Identifier
+	// uniqueness is owned by the users schema (see docs/multi-tenancy.md), so
+	// Account.AllowDuplicateIdentifierAcrossTenants is left at its default.
 	cfg.MultiTenant.Enabled = tenancy.Enabled
-	cfg.MultiTenant.EnforceIsolation = tenancy.Enabled && tenancy.EnforceIsolation
+	// goAuth's DefaultConfig still pre-fills this no-op field, which would
+	// trigger the tenant_header_noop lint once tenancy is on. The header is
+	// owned by SuperAPI's tenant middleware (TENANCY_HEADER) instead.
+	cfg.MultiTenant.TenantHeader = "" //nolint:staticcheck // clearing the deprecated no-op field is the point
 
 	// ------------------------------------------------------------
 	// JWT Behavior
@@ -91,8 +125,52 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, err
 	// Account Settings
 	// ------------------------------------------------------------
 
+	// Account.Enabled lets goAuth create accounts at all (cmd/createuser uses
+	// it). The public registration endpoint is gated separately by
+	// AUTH_REGISTRATION_ENABLED in the auth module. The role is never taken
+	// from request input; new accounts always get DefaultRole.
 	cfg.Account.Enabled = true
 	cfg.Account.DefaultRole = "user"
+	cfg.Account.AutoLogin = features.RegistrationAutoLogin
+
+	// ------------------------------------------------------------
+	// Password Reset (AUTH_PASSWORD_RESET_ENABLED)
+	// ------------------------------------------------------------
+	//
+	// goAuth default strategy is an opaque high-entropy token, delivered
+	// out-of-band by internal/core/notify. Switch to goauth.ResetOTP for
+	// numeric codes.
+	cfg.PasswordReset.Enabled = features.PasswordReset
+
+	// ------------------------------------------------------------
+	// Email Verification (AUTH_EMAIL_VERIFICATION_ENABLED)
+	// ------------------------------------------------------------
+	//
+	// With verification enabled, CreateAccount stores new users as
+	// pending_verification; RequireForLogin blocks login until verified.
+	cfg.EmailVerification.Enabled = features.EmailVerification
+	cfg.EmailVerification.RequireForLogin = features.EmailVerification && features.EmailVerificationRequired
+
+	// ------------------------------------------------------------
+	// TOTP + Backup Codes (AUTH_TOTP_ENABLED)
+	// ------------------------------------------------------------
+	//
+	// Secrets are encrypted at rest by the provider (AUTH_TOTP_ENCRYPTION_KEY).
+	// Replay protection stays on (goAuth default) and is also enforced in SQL.
+	//
+	// RequireForLogin makes goAuth challenge users who have enrolled in TOTP
+	// (users without TOTP are unaffected); without it enrollment would have no
+	// effect on login. RequireForPasswordReset is left off because goAuth then
+	// demands a TOTP proof from every reset, including users who never
+	// enrolled; enable it only if every account uses TOTP.
+	cfg.TOTP.Enabled = features.TOTP
+	cfg.TOTP.RequireForLogin = features.TOTP
+	if features.TOTP {
+		cfg.TOTP.Issuer = strings.TrimSpace(features.TOTPIssuer)
+		if cfg.TOTP.Issuer == "" {
+			cfg.TOTP.Issuer = "SuperAPI"
+		}
+	}
 
 	// ------------------------------------------------------------
 	// Session Ceiling / Remember-Me (goAuth v0.4.0)
@@ -133,6 +211,7 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, err
 		return goauth.Config{}, err
 	}
 
+	// template:begin webauthn
 	// ------------------------------------------------------------
 	// WebAuthn (goAuth v0.4.0) — scaffolded, disabled by default
 	// ------------------------------------------------------------
@@ -142,6 +221,7 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, err
 	// and the ceremony endpoints are inert. Enabling is a config + optional
 	// migration step (see docs/enabling-webauthn.md).
 	applyWebAuthnConfig(&cfg)
+	// template:end webauthn
 
 	// ------------------------------------------------------------
 	// Example: JWT Identity Overrides
@@ -186,32 +266,17 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, err
 	// and token lifetimes.
 	//
 	// These variables should not be used for normal application configuration.
+	// They switch JWT signing to a shared HS256 secret, so they are refused
+	// (startup fails) unless APP_ENV is dev or test.
 	//
 	// Examples:
 	//
 	// AUTH_TEST_SHARED_SECRET=benchmark-secret
 	// AUTH_TEST_ACCESS_TTL=30s
 	// AUTH_TEST_REFRESH_TTL=5m
-	if sharedSecret := strings.TrimSpace(os.Getenv("AUTH_TEST_SHARED_SECRET")); sharedSecret != "" {
-		cfg.JWT.SigningMethod = "hs256"
-		cfg.JWT.PrivateKey = []byte(sharedSecret)
-		cfg.JWT.PublicKey = []byte(sharedSecret)
-		cfg.JWT.Issuer = "superapi-perf"
-		cfg.JWT.Audience = "superapi-perf"
-		cfg.JWT.KeyID = "superapi-perf-key"
+	if err := applyTestOverrides(&cfg, features.AllowTestOverrides); err != nil {
+		return goauth.Config{}, err
 	}
-
-	if accessTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_ACCESS_TTL")); accessTTLRaw != "" {
-		if d, err := time.ParseDuration(accessTTLRaw); err == nil && d > 0 {
-			cfg.JWT.AccessTTL = d
-		}
-	}
-	if refreshTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_REFRESH_TTL")); refreshTTLRaw != "" {
-		if d, err := time.ParseDuration(refreshTTLRaw); err == nil && d > 0 {
-			cfg.JWT.RefreshTTL = d
-		}
-	}
-
 	// Run goAuth advisory lint checks.
 	//
 	// Lint warnings help identify risky or unusual configurations.
@@ -236,19 +301,14 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings) (goauth.Config, err
 
 // Common project customizations:
 //
-// Password Reset:
+// Password reset / email verification strategy (numeric codes):
 //
-// cfg.PasswordReset.Enabled = true
 // cfg.PasswordReset.Strategy = goauth.ResetOTP
+// cfg.EmailVerification.Strategy = goauth.VerificationOTP
 //
-// Email Verification:
+// Require TOTP for every login:
 //
-// cfg.EmailVerification.Enabled = true
-// cfg.EmailVerification.RequireForLogin = true
-//
-// TOTP:
-//
-// cfg.TOTP.Enabled = true
+// cfg.TOTP.RequireForLogin = true
 //
 // Session Hardening:
 //
@@ -269,4 +329,41 @@ func toGoAuthValidationMode(mode Mode) goauth.ValidationMode {
 	default:
 		return goauth.ModeHybrid
 	}
+}
+
+// testOverrideKeys are the AUTH_TEST_* perf overrides.
+var testOverrideKeys = []string{"AUTH_TEST_SHARED_SECRET", "AUTH_TEST_ACCESS_TTL", "AUTH_TEST_REFRESH_TTL"}
+
+// applyTestOverrides applies AUTH_TEST_* perf overrides. When allowed is
+// false (APP_ENV is not dev/test) any override present is an error, so a
+// shared HS256 signing secret can never silently reach production.
+func applyTestOverrides(cfg *goauth.Config, allowed bool) error {
+	if !allowed {
+		for _, key := range testOverrideKeys {
+			if strings.TrimSpace(os.Getenv(key)) != "" {
+				return fmt.Errorf("%s is only allowed with APP_ENV=dev or APP_ENV=test", key)
+			}
+		}
+		return nil
+	}
+
+	if sharedSecret := strings.TrimSpace(os.Getenv("AUTH_TEST_SHARED_SECRET")); sharedSecret != "" {
+		cfg.JWT.SigningMethod = "hs256"
+		cfg.JWT.PrivateKey = []byte(sharedSecret)
+		cfg.JWT.PublicKey = []byte(sharedSecret)
+		cfg.JWT.Issuer = "superapi-perf"
+		cfg.JWT.Audience = "superapi-perf"
+		cfg.JWT.KeyID = "superapi-perf-key"
+	}
+	if accessTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_ACCESS_TTL")); accessTTLRaw != "" {
+		if d, err := time.ParseDuration(accessTTLRaw); err == nil && d > 0 {
+			cfg.JWT.AccessTTL = d
+		}
+	}
+	if refreshTTLRaw := strings.TrimSpace(os.Getenv("AUTH_TEST_REFRESH_TTL")); refreshTTLRaw != "" {
+		if d, err := time.ParseDuration(refreshTTLRaw); err == nil && d > 0 {
+			cfg.JWT.RefreshTTL = d
+		}
+	}
+	return nil
 }

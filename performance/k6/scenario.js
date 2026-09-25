@@ -10,8 +10,8 @@ const AUTH_PASSWORD = __ENV.AUTH_PASSWORD || "";
 const AUTH_IDENTIFIER_PREFIX = (__ENV.AUTH_IDENTIFIER_PREFIX || "").trim();
 const AUTH_IDENTIFIER_DOMAIN = (__ENV.AUTH_IDENTIFIER_DOMAIN || "example.com").trim();
 const AUTH_USER_POOL_SIZE = Number(__ENV.AUTH_USER_POOL_SIZE || "1");
-const AUTH_LOGIN_PATH = (__ENV.AUTH_LOGIN_PATH || "/api/v1/system/auth/login").trim();
-const AUTH_REFRESH_PATH = (__ENV.AUTH_REFRESH_PATH || "/api/v1/system/auth/refresh").trim();
+const AUTH_LOGIN_PATH = (__ENV.AUTH_LOGIN_PATH || "/api/v1/auth/login").trim();
+const AUTH_REFRESH_PATH = (__ENV.AUTH_REFRESH_PATH || "/api/v1/auth/refresh").trim();
 const REQUEST_TIMEOUT = (__ENV.REQUEST_TIMEOUT || "5s").trim();
 
 const TARGET_RPS = Number(__ENV.TARGET_RPS || "10000");
@@ -58,18 +58,10 @@ const ROUTES = [
     headers: {},
   },
   {
-    name: "parse_duration",
-    weight: 20,
-    method: "POST",
-    path: "/system/parse-duration",
-    body: JSON.stringify({ duration: "250ms" }),
-    headers: { "Content-Type": "application/json" },
-  },
-  {
     name: "whoami",
-    weight: 20,
+    weight: 40,
     method: "GET",
-    path: "/api/v1/system/whoami",
+    path: "/api/v1/auth/whoami",
     body: null,
     headers: {},
   },

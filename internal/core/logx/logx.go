@@ -37,7 +37,7 @@ func NewWithWriter(cfg Config, out io.Writer) (*Logger, error) {
 		return nil, err
 	}
 
-	var w io.Writer = out
+	w := out
 	if strings.EqualFold(cfg.Format, "text") {
 		w = zerolog.NewConsoleWriter(func(cw *zerolog.ConsoleWriter) {
 			cw.Out = out

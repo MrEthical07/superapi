@@ -13,6 +13,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/db"
 	"github.com/MrEthical07/superapi/internal/core/metrics"
+	"github.com/MrEthical07/superapi/internal/core/notify"
 	"github.com/MrEthical07/superapi/internal/core/policy"
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 	"github.com/MrEthical07/superapi/internal/core/readiness"
@@ -55,7 +56,16 @@ type Dependencies struct {
 	// Limiter is the optional route rate limiter.
 	Limiter ratelimit.Limiter
 	// CacheMgr is the optional response cache manager.
-	CacheMgr  *cache.Manager
+	CacheMgr *cache.Manager
+	// Auth is the resolved auth config snapshot (mode and feature flags).
+	Auth config.AuthConfig
+	// Notifier delivers password-reset and email-verification secrets
+	// asynchronously. Set by App from NOTIFY_* config; nil in bare tests.
+	Notifier *notify.Dispatcher
+	// AuthUsers is the auth user repository (nil when auth is disabled). The
+	// auth module uses it to find the delivery address for reset and
+	// verification messages.
+	AuthUsers auth.UserRepository
 	authClose func()
 }
 
@@ -64,11 +74,52 @@ type DependencyBinder interface {
 	BindDependencies(*Dependencies)
 }
 
+// AuthFeatures maps the auth feature flags in config onto goAuth settings.
+func AuthFeatures(cfg *config.Config) auth.Features {
+	if cfg == nil {
+		return auth.Features{}
+	}
+	return auth.Features{
+		RegistrationAutoLogin:     cfg.Auth.RegistrationEnabled && cfg.Auth.RegistrationAutoLogin,
+		PasswordReset:             cfg.Auth.PasswordResetEnabled,
+		EmailVerification:         cfg.Auth.EmailVerificationEnabled,
+		EmailVerificationRequired: cfg.Auth.EmailVerificationRequired,
+		TOTP:                      cfg.Auth.TOTPEnabled,
+		TOTPIssuer:                cfg.Auth.TOTPIssuer,
+		AllowTestOverrides:        cfg.Auth.TestOverridesAllowed,
+	}
+}
+
+// NewDependencies initializes process dependencies from config. The server
+// (App) and command-line tools such as cmd/createuser share it so they build
+// the exact same goAuth engine. Call Close when done.
+func NewDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, error) {
+	return initDependencies(ctx, cfg)
+}
+
+// Close releases pooled connections and the auth engine. It does not shut
+// down tracing (App does that with its shutdown timeout).
+func (d *Dependencies) Close() {
+	if d == nil {
+		return
+	}
+	if d.authClose != nil {
+		d.authClose()
+	}
+	if d.Redis != nil {
+		_ = d.Redis.Close()
+	}
+	if d.Postgres != nil {
+		d.Postgres.Close()
+	}
+}
+
 func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, error) {
 	deps := &Dependencies{
 		Readiness: readiness.NewService(),
 		RateLimit: cfg.RateLimit,
 		Cache:     cfg.Cache,
+		Auth:      cfg.Auth,
 	}
 
 	// Apply the tenancy decision to the policy engine before any module
@@ -160,16 +211,38 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init auth provider: user repository unavailable")
 		}
 
+		userProvider := auth.NewStoreUserProvider(userRepo).WithTenancy(cfg.Tenancy.Enabled)
+
+		// template:begin webauthn
 		// The provider always carries the WebAuthn credential capability so
-		// enabling WebAuthn is a config + optional migration step. goAuth only
-		// exercises it when WEBAUTHN_ENABLED is set.
-		userProvider := auth.NewStoreUserProvider(userRepo).
-			WithWebAuthnRepository(auth.NewWebAuthnCredentialRepository(deps.DB))
+		// enabling WebAuthn is a config step. goAuth only exercises it when
+		// WEBAUTHN_ENABLED is set.
+		userProvider = userProvider.WithWebAuthnRepository(auth.NewWebAuthnCredentialRepository(deps.DB))
+		// template:end webauthn
+
+		// TOTP persistence (and the at-rest cipher) is only wired when TOTP
+		// is enabled; config lint guarantees the key is present and valid.
+		if cfg.Auth.TOTPEnabled {
+			key, err := config.DecodeKey32(cfg.Auth.TOTPEncryptionKey)
+			var cipher auth.SecretCipher
+			if err == nil {
+				cipher, err = auth.NewAESGCMCipher(key)
+			}
+			if err != nil {
+				if deps.Redis != nil {
+					_ = deps.Redis.Close()
+				}
+				if deps.Postgres != nil {
+					deps.Postgres.Close()
+				}
+				return nil, fmt.Errorf("init auth provider: totp encryption key: %w", err)
+			}
+			userProvider = userProvider.WithMFA(auth.NewMFARepository(deps.DB), cipher)
+		}
 
 		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{
-			Enabled:          cfg.Tenancy.Enabled,
-			EnforceIsolation: cfg.Tenancy.EnforceIsolation,
-		}, userProvider)
+			Enabled: cfg.Tenancy.Enabled,
+		}, AuthFeatures(cfg), userProvider)
 		if err != nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()
@@ -180,6 +253,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init auth provider: %w", err)
 		}
 		deps.AuthEngine = engine
+		deps.AuthUsers = userRepo
 		deps.authClose = closeFn
 	}
 

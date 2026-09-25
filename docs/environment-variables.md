@@ -125,12 +125,57 @@ Key rotation invariant (enforced by goAuth at Build and by SuperAPI at startup):
 - When AUTH_VERIFY_KEYS is set, AUTH_KEY_ID must be set and must name one of the
   entries in the map. Set both or neither.
 
+### 7.1 Auth feature flags
+
+Each flag enables one endpoint group in `internal/modules/auth` and the matching
+goAuth config section (`internal/core/auth/config.go`). All are off by default;
+a disabled group's routes are not registered (404). Every flag requires
+`AUTH_ENABLED=true`. See docs/auth-flows.md.
+
+| Env var | Default | Notes |
+|---|---|---|
+| AUTH_REGISTRATION_ENABLED | false | `POST /api/v1/auth/register` (enumeration-safe 202) |
+| AUTH_REGISTRATION_AUTO_LOGIN | false | return tokens (201) for newly created accounts. Trades away registration enumeration resistance. Requires AUTH_REGISTRATION_ENABLED |
+| AUTH_PASSWORD_RESET_ENABLED | false | `POST /api/v1/auth/password/reset/{request,confirm}` |
+| AUTH_EMAIL_VERIFICATION_ENABLED | false | `POST /api/v1/auth/email/verify/{request,confirm}`; new accounts start `pending_verification` |
+| AUTH_EMAIL_VERIFICATION_REQUIRED | true | block login until verified (only with AUTH_EMAIL_VERIFICATION_ENABLED) |
+| AUTH_TOTP_ENABLED | false | TOTP setup/confirm/disable and backup codes; users who enrolled are challenged at login |
+| AUTH_TOTP_ISSUER | APP_SERVICE_NAME | issuer label shown in authenticator apps |
+| AUTH_TOTP_ENCRYPTION_KEY | unset | base64-encoded 32-byte key encrypting TOTP secrets at rest (AES-256-GCM). Required when AUTH_TOTP_ENABLED=true. Generate with `openssl rand -base64 32`. Changing it makes stored TOTP secrets undecryptable |
+
+### 7.2 Notification delivery
+
+Password-reset and email-verification secrets are delivered out-of-band by
+`internal/core/notify` and never appear in HTTP responses.
+
+| Env var | Default | Notes |
+|---|---|---|
+| NOTIFY_DRIVER | noop | `noop` (discard) or `log` (development logger). Implement `notify.Notifier` for real email/SMS |
+| NOTIFY_LOG_SECRETS | false | log driver prints full secrets. Only allowed with APP_ENV=dev (lint) |
+| NOTIFY_TIMEOUT | 10s | per-delivery timeout (delivery is asynchronous) |
+
+### 7.3 Performance-testing overrides (dev/test only)
+
+`AUTH_TEST_*` switch JWT signing to a shared HS256 secret so several load
+generators can share tokens. They are **refused at startup unless APP_ENV is
+`dev` or `test`**. Never set them anywhere else.
+<!-- template:begin perf -->
+See docs/performance-testing.md.
+<!-- template:end perf -->
+
+| Env var | Default | Notes |
+|---|---|---|
+| AUTH_TEST_SHARED_SECRET | unset | HS256 shared signing secret for perf runs |
+| AUTH_TEST_ACCESS_TTL | unset | access-token TTL override for perf runs |
+| AUTH_TEST_REFRESH_TTL | unset | refresh-token TTL override for perf runs |
+
 ## 7b. WebAuthn Variables
 
 WebAuthn is scaffolded but disabled by default. When `WEBAUTHN_ENABLED=false`
-the ceremony endpoints return a "webauthn disabled" error, goAuth does not
-require the WebAuthn capability at Build, and no schema is needed. Enabling is a
-config + optional-migration step — see docs/enabling-webauthn.md.
+the ceremony endpoints return a "webauthn disabled" error and goAuth does not
+require the WebAuthn capability at Build. The `webauthn_credentials` table
+(migration 000004) is always applied by `make migrate-up` and stays inert until
+enabled — see docs/enabling-webauthn.md.
 
 | Env var | Default | Notes |
 |---|---|---|
@@ -148,24 +193,40 @@ config + optional-migration step — see docs/enabling-webauthn.md.
 
 | Env var | Default | Notes |
 |---|---|---|
-| TENANCY_ENABLED | false | enables multi-tenant policy, cache, and rate-limit behavior |
-| TENANCY_ENFORCE_ISOLATION | false | requests goAuth strict tenant isolation; only meaningful when TENANCY_ENABLED=true |
+| TENANCY_ENABLED | false | enables multi-tenant policy, cache and rate-limit behavior, the tenant resolution middleware, and goAuth tenant-scoped user lookup |
+| TENANCY_RESOLVER | header | how the request tenant is resolved: `header` or `subdomain` |
+| TENANCY_HEADER | X-Tenant-ID | header carrying the tenant id (header resolver) |
+| TENANCY_BASE_DOMAIN | (empty) | parent domain for the subdomain resolver; required when `TENANCY_RESOLVER=subdomain` (`acme.example.com` -> tenant `acme`) |
+| TENANCY_VALIDATE | true | require the tenant to exist in `tenants` with `status='active'`; requires Postgres |
+| TENANCY_VALIDATE_CACHE_TTL | 30s | in-process cache for tenant validation results (positive and negative); `0` disables |
+| TENANCY_EXEMPT_PATHS | /healthz,/readyz,/metrics | exact paths that skip tenant resolution; the metrics path is always exempt |
 
 Behavior:
 
 - With TENANCY_ENABLED=false (default), tenancy is inert. Preset policies do not
   default to tenant scoping/keying (authenticated cache reads vary by user id
-  instead of tenant id), and a `{tenant_id}` path parameter is treated as an
-  ordinary parameter rather than forcing tenant policies onto the route.
-- With TENANCY_ENABLED=true, tenant scoping/keying defaults return and
-  `{tenant_id}` routes must carry `TenantRequired` + `TenantMatchFromPath`. The
-  flag is also propagated to goAuth via `MultiTenant.Enabled`.
+  instead of tenant id), a `{tenant_id}` path parameter is treated as an
+  ordinary parameter, no tenant middleware runs, and goAuth stays tenant-blind.
+- With TENANCY_ENABLED=true, tenant scoping/keying defaults return,
+  `{tenant_id}` routes must carry `TenantRequired` + `TenantMatchFromPath`, the
+  tenant middleware resolves and validates the tenant on every non-exempt
+  request (400 `tenant required`/`tenant invalid`, 404 `tenant not found`, 503
+  when validation cannot reach Postgres), and goAuth `MultiTenant.Enabled` is
+  set so every user lookup is scoped to that tenant. See docs/multi-tenancy.md.
 
 Lint dependency rules:
 
-- TENANCY_ENFORCE_ISOLATION=true requires TENANCY_ENABLED=true
+- TENANCY_RESOLVER must be `header` or `subdomain` (checked only when enabled)
+- TENANCY_RESOLVER=subdomain requires TENANCY_BASE_DOMAIN
+- TENANCY_VALIDATE=true requires POSTGRES_ENABLED=true
 
-See docs/policies.md and docs/removing-tenancy.md.
+Deprecated:
+
+- `TENANCY_ENFORCE_ISOLATION` is ignored since v0.9.0 (goAuth v0.5.0 made
+  `MultiTenant.EnforceIsolation` a no-op). It is still accepted for one release
+  and logs a deprecation warning at startup when set. Remove it.
+
+See docs/policies.md, docs/multi-tenancy.md and docs/removing-tenancy.md.
 
 ## 8. Rate-Limit Variables
 
@@ -255,6 +316,12 @@ When APP_ENV is prod or production:
 - cache fail-open is rejected when cache enabled
 - metrics auth token is required when metrics enabled
 - tracing insecure default changes to false
+
+## 14a. Test-only Variables
+
+| Env var | Default | Notes |
+|---|---|---|
+| SUPERAPI_TEST_DATABASE_URL | unset | Postgres URL whose role may CREATE DATABASE. When set, integration tests (`internal/core/db/dbtest`) create, migrate and drop a throwaway database; otherwise they are skipped. `make test-integration` sets it from `.env` |
 
 ## 15. Practical Validation Tips
 

@@ -163,6 +163,14 @@ TRACING_INSECURE=false
 |---|---|---|
 | `AUTH_ENABLED` | `true` for non-public APIs | Avoids accidental anonymous data access. |
 | `AUTH_MODE` | `strict` for sensitive APIs; `hybrid` only with accepted revocation gap | `jwt_only`/`hybrid` can permit revoked token usage under certain conditions. |
+| `AUTH_REGISTRATION_AUTO_LOGIN` | `false` | Auto-login makes registration distinguish new from existing accounts (enumeration). |
+| `AUTH_EMAIL_VERIFICATION_REQUIRED` | `true` when verification is enabled | Blocks login from unverified addresses. |
+| `AUTH_TOTP_ENCRYPTION_KEY` | 32 random bytes, from a secret manager | Encrypts TOTP secrets at rest; losing or rotating it forces re-enrollment. |
+| `AUTH_TEST_*` | unset (refused outside dev/test) | Switch signing to a shared HS256 secret; perf-only. |
+| `NOTIFY_DRIVER` | a real notifier, never `log` | Reset/verification secrets must reach only the account owner. |
+| `NOTIFY_LOG_SECRETS` | `false` (refused outside dev) | Logs would contain account-takeover secrets. |
+| `TENANCY_VALIDATE` | `true` when tenancy is on | Rejects unknown/inactive tenants before any auth work. |
+| `HTTP_TRUSTED_PROXIES` | your proxy CIDRs only | Client IP feeds goAuth's abuse limiters and audit trail. |
 
 ### Rate limiting
 
@@ -196,6 +204,10 @@ TRACING_INSECURE=false
 | `POSTGRES_HEALTH_CHECK_TIMEOUT` | `1s` to `3s` | Keeps readiness checks bounded. |
 
 ### Redis
+
+Licence: the Redis 8 image used by `docker-compose.yml` is RSALv2 / SSPLv1 /
+AGPLv3. For production, review that licence or use Valkey (BSD-3-Clause,
+drop-in; see docs/getting-started.md).
 
 | Variable | Recommended prod value | Security rationale |
 |---|---|---|

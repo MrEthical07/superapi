@@ -2,6 +2,236 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.9.0 (2026-09-25)
+
+goAuth v0.5.0, the full auth lifecycle, and a clone-ready template. Tenancy now
+works end to end when enabled; every new auth feature is opt-in and off by
+default, so a single-tenant, minimal clone behaves like v0.8.0 apart from the
+changes listed first.
+
+**Behavior changes to note when upgrading:**
+
+- **Auth routes moved** from the `system` demo module to a dedicated `auth`
+  module: `/api/v1/system/auth/{login,mfa/confirm,refresh,logout,webauthn/*}`
+  are now `/api/v1/auth/...`, and `/api/v1/system/whoami` is
+  `/api/v1/auth/whoami`. There are no aliases. Request/response shapes are
+  unchanged. With `AUTH_ENABLED=false` the auth routes are no longer registered
+  (404 instead of 503).
+- **The `system` module is removed**, including `POST /system/parse-duration`
+  and its unused `system_settings` schema. Migration `000001` stays for history
+  but is a no-op on new databases.
+- **`make run` now starts the server** (`./cmd/api`); it used to run a
+  placeholder that printed `api-template: ok`. The root `main.go`/`doc.go` are
+  gone.
+- **`MAKEFILE` is renamed to `Makefile`**, so GNU make finds it on
+  case-sensitive filesystems (Linux, CI). Make targets now source `.env`, and
+  `migrate-*` default `DB_URL` to `POSTGRES_URL`.
+- **`TENANCY_ENFORCE_ISOLATION` is deprecated and ignored**: goAuth v0.5.0 made
+  `MultiTenant.EnforceIsolation` a no-op. It is still accepted (startup logs a
+  warning) and no longer fails lint without `TENANCY_ENABLED`.
+- **`AUTH_TEST_*` are refused unless `APP_ENV` is `dev` or `test`**: startup
+  fails instead of silently switching JWT signing to a shared HS256 secret.
+- **`TENANCY_ENABLED=true` now requires a tenant on every request** (except
+  `/healthz`, `/readyz`, `/metrics`) and, with the default `TENANCY_VALIDATE=true`,
+  a matching active `tenants` row. Before, the flag changed policy defaults but
+  nothing attached a tenant, so every login landed in goAuth tenant `"0"`.
+- **`account_version` now advances on every account-status change** and on
+  TOTP enable/disable (migration 000006). goAuth revokes sessions stamped with
+  an older version when the status changes, as designed.
+- **`cmd/authgen` (`make auth`, `make auth-config`) is removed**; its
+  regenerated schema would no longer match the provider. Use `make user` to
+  create accounts.
+- **`auth.NewGoAuthEngine` and `auth.ProjectGoAuthConfig` take an extra
+  `auth.Features` argument**, and `auth.TenancySettings` no longer has
+  `EnforceIsolation`.
+- **`perftoken --create-if-missing` defaults to false**; `make perf-token` and
+  the seed scripts pass it explicitly.
+- Turning tenancy on changes where goAuth stores reset and verification records
+  (request tenant instead of user tenant); links issued before the switch may
+  not resolve. Drain them or let users re-request.
+
+### Security
+
+- **goAuth v0.5.0 cross-tenant fixes** (these apply only with
+  `TENANCY_ENABLED=true`; single-tenant deployments were never affected):
+  cross-tenant account takeover via password reset, cross-tenant login, and
+  cross-tenant email verification. `StoreUserProvider` implements
+  `goauth.TenantAwareUserProvider` with the tenant predicate in SQL, so goAuth
+  can build with multi-tenancy on.
+- **Tokens are bound to the request tenant**: `policy.AuthRequired` rejects a
+  token whose tenant differs from the resolved tenant in every validation mode;
+  `policy.TenantRequired` returns 404 on the same mismatch.
+- **TOTP secrets are encrypted at rest** (AES-256-GCM, `AUTH_TOTP_ENCRYPTION_KEY`,
+  bound to the user id). goAuth hands providers the raw secret.
+- **Replay protection and single-use backup codes hold under concurrency**: the
+  TOTP counter update only moves forward, and backup codes are consumed with a
+  single conditional `UPDATE`.
+- **Enumeration-safe account endpoints**: registration and reset/verification
+  requests return the same 202 body whether or not the account exists; secrets
+  are delivered out-of-band only and never appear in responses. Registration
+  never accepts a role from the client.
+- `cmd/createuser` never takes a password as an argument (hidden prompt or
+  `--password-stdin`).
+- `NOTIFY_LOG_SECRETS` is refused outside `APP_ENV=dev`.
+
+### Added
+
+- **goAuth v0.5.0** (from v0.4.0).
+- **`internal/modules/auth`**: login, MFA confirm, refresh, logout, logout-all,
+  sessions, password change, whoami, WebAuthn ceremonies, plus flag-gated
+  groups: registration (`AUTH_REGISTRATION_ENABLED`, optional
+  `AUTH_REGISTRATION_AUTO_LOGIN`), password reset
+  (`AUTH_PASSWORD_RESET_ENABLED`), email verification
+  (`AUTH_EMAIL_VERIFICATION_ENABLED`, `AUTH_EMAIL_VERIFICATION_REQUIRED`), and
+  TOTP + backup codes (`AUTH_TOTP_ENABLED`, `AUTH_TOTP_ENCRYPTION_KEY`,
+  `AUTH_TOTP_ISSUER`). Disabled groups are not registered. Handlers pass client
+  IP and User-Agent to goAuth's limiters and audit trail.
+- **TOTP and backup-code persistence**: migration `000006_auth_mfa`
+  (`users.account_version`, `users.totp_enabled`, `user_totp`,
+  `user_backup_codes`), `MFARepository`, and real provider methods replacing
+  the stubs. `TOTP.RequireForLogin` follows `AUTH_TOTP_ENABLED`, so enrolled
+  users are challenged at login.
+- **Multi-tenancy**: migration `000005_users_tenant` (`users.tenant_id`, default
+  `'0'`; global email uniqueness kept; no FK to `tenants`), tenant-scoped
+  queries, and a tenant resolution middleware (`TENANCY_RESOLVER`
+  header|subdomain, `TENANCY_HEADER`, `TENANCY_BASE_DOMAIN`, `TENANCY_VALIDATE`,
+  `TENANCY_VALIDATE_CACHE_TTL`, `TENANCY_EXEMPT_PATHS`) that attaches the tenant
+  with `goauth.WithTenantID`. Missing/malformed tenant -> 400; unknown or
+  inactive -> 404.
+- **`internal/core/notify`**: `Notifier` interface, no-op default, dev log
+  driver (`NOTIFY_DRIVER`, `NOTIFY_LOG_SECRETS`, `NOTIFY_TIMEOUT`) and a bounded
+  asynchronous dispatcher.
+- **`cmd/createuser` / `make user`**: create accounts (first admin) through
+  the configured engine, with `--tenant`/`--create-tenant`.
+- **`cmd/templateinit` / `make init`**: rewrites the module path, resets
+  README/CHANGELOG/LICENSE/SECURITY, strips template-maintainer content, prunes
+  `--no-tenancy`, `--no-webauthn`, `--no-document-store`, `--no-devx`,
+  `--no-perf`, `--no-demo` (or `--no-all`), then deletes itself. Idempotent,
+  with `--dry-run` and `--keep-init`.
+- **Local dev stack**: `docker-compose.yml` (Postgres 18 + Redis 8),
+  `make dev-up`/`dev-down`/`dev-reset`, `make doctor`,
+  `make test-integration`, and a multi-stage distroless `Dockerfile` (api,
+  migrate, createuser).
+- **Postgres integration tests** (`internal/core/db/dbtest`, enabled by
+  `SUPERAPI_TEST_DATABASE_URL`) for tenant scoping and the MFA SQL.
+- **Env documentation guard**: `internal/tools/envcheck`, run by
+  `superapi-verify` and a test, fails when code reads an env var missing from
+  `.env.example` or `docs/environment-variables.md`.
+- **CI**: a `docker` job that builds the image and validates
+  `docker compose config`; Postgres/Redis service containers, sqlc v1.31.1 drift check,
+  `superapi-verify`, migrations up/down/up, gofmt, a `TENANCY_ENABLED=true` test
+  pass, and a matrix job that runs `make init` (default and `--no-all`) on a
+  copy and then that project's gate.
+- POSIX ports of the Vegeta runner and k6 user seeding.
+- `app.NewDependencies` / `Dependencies.Close` for command-line tools;
+  `auth.WithRequestTenant` / `auth.RequestTenantFromContext`.
+
+### Changed
+
+- `ProjectGoAuthConfig` clears goAuth's pre-filled no-op
+  `MultiTenant.TenantHeader`, so enabling tenancy lints clean.
+- `cmd/perftoken` builds its engine with `app.NewDependencies` instead of a
+  hand-rolled goAuth config (real role registry and JWT settings).
+- `.env.example` lists every variable the code reads, grouped and commented,
+  with no inline comments on active lines (works with `docker --env-file`).
+- WebAuthn code moved into dedicated files (`provider_webauthn.go`,
+  `config_webauthn.go`, `internal/modules/auth/webauthn.go`); behavior
+  unchanged.
+- Perf scenarios target `/api/v1/auth/*`; the former parse-duration share
+  moved to whoami.
+
+### Dependencies
+
+- Go toolchain 1.26.5 -> 1.26.8 (`go.mod`, CI, Dockerfile). Staying on the
+  Go 1.26 line for v0.9.0 is deliberate: Go 1.27 was released on
+  2026-08-19 (1.27.1 on 2026-09-01), and 1.26 remains supported until Go 1.28
+  ships. Keeping the toolchain unchanged limits v0.9.0 to the auth/tenancy
+  work; the move to Go 1.27 is scheduled for a v0.9.x release.
+- goAuth v0.4.0 -> v0.5.0 (latest). goAuth's own WebAuthn dependencies stay
+  at the versions goAuth pins and tests against (`go-webauthn/webauthn`
+  v0.17.4, `go-webauthn/x` v0.2.6, `fxamacker/cbor` v2.9.2); SuperAPI does not
+  override them. go-webauthn v0.18 has breaking changes and will arrive through
+  a goAuth release.
+- pgx v5.9.2 -> v5.11.0, go-redis v9.18.0 -> v9.22.0, chi v5.2.5 -> v5.3.2,
+  golang-migrate v4.19.1 -> v4.20.1, zerolog v1.34.0 -> v1.35.1,
+  prometheus client_golang v1.23.2 -> v1.24.1 (client_model v0.6.3),
+  miniredis v2.37.0 -> v2.39.0.
+- OpenTelemetry (otel, sdk, trace, metric, otlptrace/otlptracegrpc)
+  v1.43.0/v1.42.0 -> v1.46.0; grpc v1.79.3 -> v1.84.0; protobuf v1.36.12.
+- golang.org/x: crypto v0.57.0, net v0.59.0, sys v0.48.0, text v0.42.0,
+  sync v0.23.0; new golang.org/x/term v0.46.0 (password prompt).
+- Tooling: sqlc v1.30.0 -> v1.31.1 (generated headers only), golangci-lint
+  v1.64.6 -> v2.14.0 (`.golangci.yml` migrated to the v2 format; same linters),
+  GitHub Actions checkout/setup-go/upload-artifact -> v7, compose and CI
+  images Postgres 18 / Redis 8. Postgres 18 images store data under
+  `/var/lib/postgresql`, so the compose volume mount moved; recreate an old
+  local volume with `make dev-reset`.
+- Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3. `docker-compose.yml` and the
+  docs call this out and carry a commented-out, BSD-licensed Valkey
+  (`valkey/valkey:9-alpine`) option.
+
+### Deprecated
+
+- `TENANCY_ENFORCE_ISOLATION` (ignored; will be rejected in a future release).
+
+### Removed
+
+- The `system` module (`POST /system/parse-duration`) and the
+  `system_settings` sqlc schema/queries/generated code.
+- `cmd/authgen`, `authgen.example.yaml`, `make auth`, `make auth-config`.
+- The root placeholder `main.go`/`doc.go`.
+- `docs/authDocs/` (a stale copy of goAuth v0.3/v0.4 docs), replaced by links
+  pinned to goAuth v0.5.0 in `docs/auth-goauth.md`.
+- `auth.TenancySettings.EnforceIsolation`.
+
+### Fixed
+
+- Account-status transitions (email-verification confirm, disable, lock)
+  failed with goAuth's "account state transition failed": the provider never
+  advanced `account_version`.
+- `TENANCY_ENABLED=true` failed at startup on goAuth v0.5.0 (the provider did
+  not implement `TenantAwareUserProvider`), and nothing attached the request
+  tenant.
+- Duplicate registrations surfaced as a generic provider error instead of
+  goAuth's `ErrAccountExists`.
+- `make` could not find `MAKEFILE` on Linux/macOS; `make run` did not run the
+  server.
+- `seed-users.ps1` passed `--create-if-missing true` as two arguments, which
+  stopped Go flag parsing and dropped the flags after it.
+- Migration 000004's header no longer calls it optional (it is always applied
+  and inert until enabled).
+
+### Documentation
+
+- New: `docs/getting-started.md` (clone -> init -> run),
+  `docs/auth-flows.md` (every endpoint, flag, shape, error code, enumeration
+  notes), `docs/multi-tenancy.md` (tenant model, resolver config, uniqueness
+  choice, v0.5.0 fixes, adoption, audit-event warning).
+- Rewritten: `docs/auth-goauth.md`, `docs/auth-bootstrap.md` (make user, users
+  schema, roles), README (Quick Start with `make init`, goAuth v0.5.0),
+  `docs/trim-to-what-you-need.md` (init pruning flags, per-feature auth
+  deletion), `docs/removing-tenancy.md` (middleware, migrations, provider
+  methods).
+- Updated: `AGENTS.md`, `docs/environment-variables.md`, `docs/policies.md`,
+  `docs/architecture.md`, `docs/enabling-webauthn.md`, `docs/overview.md`,
+  `docs/workflows.md`, `docs/performance-testing.md` (Windows-first note,
+  `AUTH_TEST_*` guard), `docs/security-env-recommendations.md`,
+  `CONTRIBUTING.md`.
+
+### Verification
+
+- `make sqlc-generate` is idempotent (no diff on a second run).
+- `go build ./...`, `go vet ./...`, `golangci-lint run` (v2.14.0),
+  `go run ./cmd/superapi-verify ./...` pass.
+- `go test ./... -race` passes with and without `TENANCY_ENABLED=true`, and with
+  `SUPERAPI_TEST_DATABASE_URL` against Postgres 16.
+- Migrations 000001–000006 apply, roll back fully, and re-apply.
+- `templateinit` default and `--no-all` projects pass build, vet, verify, tests
+  and sqlc drift.
+- Manual smoke test against Postgres + Redis: tenancy (missing/unknown tenant,
+  cross-tenant login and token reuse) and the full lifecycle (register,
+  verification gate, verify, TOTP enroll + MFA login, reset).
+
 ## v0.8.0 (2026-07-15)
 
 A structural sweep of the data layer, auth, and tenancy, plus an optional

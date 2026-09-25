@@ -1,0 +1,47 @@
+# Local development dependencies: `make dev-up` / `make dev-down` / `make dev-reset`.
+# Credentials match .env.example. Ports bind to 127.0.0.1 only.
+name: superapi
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: superapi
+      POSTGRES_PASSWORD: superapi
+      POSTGRES_DB: superapi
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # Postgres 18+ images keep versioned data under /var/lib/postgresql.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superapi -d superapi"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Redis 8 is licensed RSALv2 / SSPLv1 / AGPLv3 (not BSD). That is fine for
+  # local development, but review it before reusing this file in production.
+  # Valkey is a drop-in, BSD-licensed Redis fork (same port and protocol; the
+  # app needs no changes): to use it, switch the image, command and
+  # healthcheck lines to the commented Valkey variants below.
+  # See docs/getting-started.md ("Redis licence").
+  redis:
+    image: redis:8-alpine
+    # image: valkey/valkey:9-alpine
+    # With Valkey use: ["valkey-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      # With Valkey use: ["CMD", "valkey-cli", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  postgres-data:
+  redis-data:
