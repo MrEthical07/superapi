@@ -16,10 +16,23 @@ import (
 // repository is wired the credential methods behave as an empty store; goAuth
 // only requires the capability when WebAuthn is enabled (WEBAUTHN_ENABLED), so
 // providing these methods unconditionally is safe.
+//
+// It implements goauth.TenantAwareUserProvider so goAuth v0.5.0 can build with
+// MultiTenant.Enabled. The tenant-scoped lookups constrain the query to the
+// tenant in SQL. When tenancy is disabled (the default) the provider leaves
+// UserRecord.TenantID empty, exactly as v0.8.0 did, so goAuth keeps using its
+// default tenant and single-tenant output is unchanged.
 type StoreUserProvider struct {
-	repo         UserRepository
-	webauthnRepo WebAuthnCredentialRepository
+	repo           UserRepository
+	webauthnRepo   WebAuthnCredentialRepository
+	tenancyEnabled bool
 }
+
+var (
+	_ goauth.UserProvider               = (*StoreUserProvider)(nil)
+	_ goauth.TenantAwareUserProvider    = (*StoreUserProvider)(nil)
+	_ goauth.WebAuthnCredentialProvider = (*StoreUserProvider)(nil)
+)
 
 const defaultLookupTimeout = 3 * time.Second
 
@@ -38,7 +51,18 @@ func (p *StoreUserProvider) WithWebAuthnRepository(repo WebAuthnCredentialReposi
 	return p
 }
 
-// GetUserByIdentifier looks up a user by login identifier.
+// WithTenancy records whether multi-tenancy (TENANCY_ENABLED) is on. When on,
+// returned records carry their stored tenant id; when off, TenantID is left
+// empty to preserve single-tenant behavior.
+func (p *StoreUserProvider) WithTenancy(enabled bool) *StoreUserProvider {
+	if p != nil {
+		p.tenancyEnabled = enabled
+	}
+	return p
+}
+
+// GetUserByIdentifier looks up a user by login identifier. It is tenant-blind,
+// which is goAuth's contract when multi-tenancy is disabled.
 func (p *StoreUserProvider) GetUserByIdentifier(identifier string) (goauth.UserRecord, error) {
 	if p == nil || p.repo == nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -54,10 +78,10 @@ func (p *StoreUserProvider) GetUserByIdentifier(identifier string) (goauth.UserR
 		}
 		return goauth.UserRecord{}, fmt.Errorf("get user by identifier: %w", err)
 	}
-	return mapUserToRecord(row), nil
+	return p.toRecord(row), nil
 }
 
-// GetUserByID looks up a user by canonical user id.
+// GetUserByID looks up a user by canonical user id (tenant-blind).
 func (p *StoreUserProvider) GetUserByID(userID string) (goauth.UserRecord, error) {
 	if p == nil || p.repo == nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -73,7 +97,50 @@ func (p *StoreUserProvider) GetUserByID(userID string) (goauth.UserRecord, error
 		}
 		return goauth.UserRecord{}, fmt.Errorf("get user by id: %w", err)
 	}
-	return mapUserToRecord(row), nil
+	return p.toRecord(row), nil
+}
+
+// GetUserByIdentifierInTenant resolves an identifier within tenantID only
+// (goauth.TenantAwareUserProvider). The tenant predicate is applied in SQL; an
+// identifier that exists only in another tenant, or an empty tenant, is
+// reported as not found.
+func (p *StoreUserProvider) GetUserByIdentifierInTenant(ctx context.Context, tenantID, identifier string) (goauth.UserRecord, error) {
+	if p == nil || p.repo == nil {
+		return goauth.UserRecord{}, goauth.ErrUserNotFound
+	}
+
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+
+	row, err := p.repo.GetByIdentifierInTenant(ctx, tenantID, identifier)
+	if err != nil {
+		if errors.Is(err, ErrAuthUserNotFound) {
+			return goauth.UserRecord{}, goauth.ErrUserNotFound
+		}
+		return goauth.UserRecord{}, fmt.Errorf("get user by identifier in tenant: %w", err)
+	}
+	return p.toRecord(row), nil
+}
+
+// GetUserByIDInTenant resolves a user id within tenantID only
+// (goauth.TenantAwareUserProvider). A user in another tenant, or an empty
+// tenant, is reported as not found.
+func (p *StoreUserProvider) GetUserByIDInTenant(ctx context.Context, tenantID, userID string) (goauth.UserRecord, error) {
+	if p == nil || p.repo == nil {
+		return goauth.UserRecord{}, goauth.ErrUserNotFound
+	}
+
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+
+	row, err := p.repo.GetByIDInTenant(ctx, tenantID, userID)
+	if err != nil {
+		if errors.Is(err, ErrAuthUserNotFound) {
+			return goauth.UserRecord{}, goauth.ErrUserNotFound
+		}
+		return goauth.UserRecord{}, fmt.Errorf("get user by id in tenant: %w", err)
+	}
+	return p.toRecord(row), nil
 }
 
 // UpdatePasswordHash persists a new password hash for the given user.
@@ -98,6 +165,15 @@ func lookupContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), defaultLookupTimeout)
 }
 
+// boundedContext applies the default lookup timeout to a caller context,
+// keeping any shorter deadline the caller already set.
+func boundedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, defaultLookupTimeout)
+}
+
 // CreateUser inserts a new auth user record.
 func (p *StoreUserProvider) CreateUser(ctx context.Context, input goauth.CreateUserInput) (goauth.UserRecord, error) {
 	if p == nil || p.repo == nil {
@@ -105,6 +181,7 @@ func (p *StoreUserProvider) CreateUser(ctx context.Context, input goauth.CreateU
 	}
 
 	row, err := p.repo.Create(ctx, CreateStoredUserInput{
+		TenantID:     p.createTenant(input.TenantID),
 		Identifier:   input.Identifier,
 		PasswordHash: input.PasswordHash,
 		Role:         input.Role,
@@ -113,7 +190,7 @@ func (p *StoreUserProvider) CreateUser(ctx context.Context, input goauth.CreateU
 	if err != nil {
 		return goauth.UserRecord{}, fmt.Errorf("create user: %w", err)
 	}
-	return mapUserToRecord(row), nil
+	return p.toRecord(row), nil
 }
 
 // UpdateAccountStatus updates account status and returns latest user record.
@@ -129,7 +206,7 @@ func (p *StoreUserProvider) UpdateAccountStatus(ctx context.Context, userID stri
 		}
 		return goauth.UserRecord{}, fmt.Errorf("update account status: %w", err)
 	}
-	return mapUserToRecord(row), nil
+	return p.toRecord(row), nil
 }
 
 // TOTP stubs — implement when MFA is needed.
@@ -214,6 +291,26 @@ func (p *StoreUserProvider) RemoveWebAuthnCredential(ctx context.Context, userID
 }
 
 // --- Mapping helpers ---
+
+// toRecord maps a stored user to goAuth's record. TenantID is only populated
+// when tenancy is enabled; with tenancy off it stays empty (v0.8.0 behavior).
+func (p *StoreUserProvider) toRecord(row StoredUser) goauth.UserRecord {
+	record := mapUserToRecord(row)
+	if p != nil && p.tenancyEnabled {
+		record.TenantID = row.TenantID
+	}
+	return record
+}
+
+// createTenant picks the tenant a new user is stored under. With tenancy on,
+// goAuth passes the request's tenant; with it off every user belongs to the
+// default tenant regardless of input.
+func (p *StoreUserProvider) createTenant(inputTenant string) string {
+	if p == nil || !p.tenancyEnabled {
+		return DefaultTenantID
+	}
+	return tenantOrDefault(inputTenant)
+}
 
 func mapUserToRecord(row StoredUser) goauth.UserRecord {
 	return goauth.UserRecord{

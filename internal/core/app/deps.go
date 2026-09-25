@@ -164,11 +164,11 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 		// enabling WebAuthn is a config + optional migration step. goAuth only
 		// exercises it when WEBAUTHN_ENABLED is set.
 		userProvider := auth.NewStoreUserProvider(userRepo).
+			WithTenancy(cfg.Tenancy.Enabled).
 			WithWebAuthnRepository(auth.NewWebAuthnCredentialRepository(deps.DB))
 
 		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{
-			Enabled:          cfg.Tenancy.Enabled,
-			EnforceIsolation: cfg.Tenancy.EnforceIsolation,
+			Enabled: cfg.Tenancy.Enabled,
 		}, userProvider)
 		if err != nil {
 			if deps.Redis != nil {

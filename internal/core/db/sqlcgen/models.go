@@ -32,6 +32,7 @@ type User struct {
 	Status       string             `json:"status"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	TenantID     string             `json:"tenant_id"`
 }
 
 type WebauthnCredential struct {
