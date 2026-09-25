@@ -2,7 +2,7 @@
 
 All notable changes to this template are documented in this file.
 
-## v0.9.0 (unreleased)
+## v0.9.0 (2026-09-25)
 
 goAuth v0.5.0, the full auth lifecycle, and a clone-ready template. Tenancy now
 works end to end when enabled; every new auth feature is opt-in and off by
