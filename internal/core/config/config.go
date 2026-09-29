@@ -145,13 +145,6 @@ type TenancyConfig struct {
 	// ExemptPaths are exact request paths that skip tenant resolution
 	// (default /healthz, /readyz, /metrics). The metrics path is always exempt.
 	ExemptPaths []string
-	// EnforceIsolation is deprecated and ignored. goAuth v0.5.0 made
-	// MultiTenant.EnforceIsolation a no-op; tenant enforcement is governed by
-	// Enabled alone. The env var is still accepted for one release and logs a
-	// deprecation warning when set.
-	//
-	// Deprecated: remove TENANCY_ENFORCE_ISOLATION from your environment.
-	EnforceIsolation bool
 	// template:end tenancy
 }
 
@@ -456,7 +449,6 @@ func Load() (*Config, error) {
 			Validate:         getBool("TENANCY_VALIDATE", true),
 			ValidateCacheTTL: getDuration("TENANCY_VALIDATE_CACHE_TTL", 30*time.Second),
 			ExemptPaths:      getCSV("TENANCY_EXEMPT_PATHS", []string{"/healthz", "/readyz", "/metrics"}),
-			EnforceIsolation: getBool("TENANCY_ENFORCE_ISOLATION", false),
 		},
 		// template:end tenancy
 		RateLimit: RateLimitConfig{
@@ -1092,7 +1084,7 @@ func isDevOrTestEnv(env string) bool {
 func (c *Config) Deprecations() []string {
 	var out []string
 	// template:begin tenancy
-	if _, ok := os.LookupEnv("TENANCY_ENFORCE_ISOLATION"); ok {
+	if EnvDeprecated("TENANCY_ENFORCE_ISOLATION") {
 		out = append(out, "TENANCY_ENFORCE_ISOLATION is deprecated and ignored: goAuth v0.5.0 made MultiTenant.EnforceIsolation a no-op; tenant enforcement is governed by TENANCY_ENABLED alone. Remove it from your environment; it will be rejected in a future release.")
 	}
 	// template:end tenancy
