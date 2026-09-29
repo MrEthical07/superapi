@@ -115,6 +115,20 @@ is begun on the pool for the inner call. Keep a single `WithTx` at the service
 boundary of a write use-case and do all repository writes inside that one
 callback, rather than nesting `WithTx` calls.
 
+### Exception: the goAuth provider
+
+goAuth calls `StoreUserProvider` directly, with no service in between, so for
+goAuth-driven writes that need more than one statement the provider is the
+service boundary. It is given a `TxRunner` (`*storage.Postgres`, via
+`WithTx(deps.DB)`) and wraps the repository call in `WithTx`. The one such
+write today is `ReplaceBackupCodes`: a delete followed by an insert, two
+statements because the `(user_id, code_hash)` unique constraint (migration
+000008) rejects re-inserting a hash that the same statement deletes. The
+repository never starts the transaction: `sqlcMFARepository.ReplaceBackupCodes`
+checks `storage.Postgres.InTx(ctx)` and returns `ErrTransactionRequired`
+outside one, so a wiring mistake fails loudly instead of losing a user's backup
+codes half-way.
+
 ## 8. Testing
 
 Because the boundary is a small type, services and repositories are easy to test.

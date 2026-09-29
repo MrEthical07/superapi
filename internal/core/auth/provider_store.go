@@ -25,7 +25,15 @@ type StoreUserProvider struct {
 	// template:end webauthn
 	mfaRepo        MFARepository
 	cipher         SecretCipher
+	tx             TxRunner
 	tenancyEnabled bool
+}
+
+// TxRunner runs fn in one database transaction: repository calls made with the
+// context passed to fn share it, and an error from fn rolls it back.
+// *storage.Postgres implements it.
+type TxRunner interface {
+	WithTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
 var (
@@ -58,6 +66,27 @@ func (p *StoreUserProvider) WithMFA(repo MFARepository, cipher SecretCipher) *St
 		p.cipher = cipher
 	}
 	return p
+}
+
+// WithTx gives the provider the transaction boundary it needs for goAuth-driven
+// writes that span several statements (replacing backup codes). goAuth calls
+// the provider directly, with no service in between, so the provider is the
+// service boundary for those writes and may call storage.Postgres.WithTx. Not
+// needed (and safe to leave nil) for in-memory repositories.
+func (p *StoreUserProvider) WithTx(tx TxRunner) *StoreUserProvider {
+	if p != nil {
+		p.tx = tx
+	}
+	return p
+}
+
+// inTx runs fn in a transaction when a runner is configured, otherwise
+// directly (in-memory repositories have nothing to roll back).
+func (p *StoreUserProvider) inTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if p.tx == nil {
+		return fn(ctx)
+	}
+	return p.tx.WithTx(ctx, fn)
 }
 
 // GetUserByIdentifier looks up a user by login identifier. It is tenant-blind,
@@ -309,7 +338,8 @@ func (p *StoreUserProvider) GetBackupCodes(ctx context.Context, userID string) (
 	return out, nil
 }
 
-// ReplaceBackupCodes atomically replaces every backup code for the user.
+// ReplaceBackupCodes replaces every backup code for the user in one
+// transaction, so a failure never leaves the user with a partial or empty set.
 func (p *StoreUserProvider) ReplaceBackupCodes(ctx context.Context, userID string, codes []goauth.BackupCodeRecord) error {
 	if !p.mfaReady() {
 		return errMFAUnavailable
@@ -318,7 +348,9 @@ func (p *StoreUserProvider) ReplaceBackupCodes(ctx context.Context, userID strin
 	for i, c := range codes {
 		hashes[i] = c.Hash
 	}
-	return p.mfaErr(p.mfaRepo.ReplaceBackupCodes(ctx, p.scopeTenant(ctx), userID, hashes))
+	return p.mfaErr(p.inTx(ctx, func(ctx context.Context) error {
+		return p.mfaRepo.ReplaceBackupCodes(ctx, p.scopeTenant(ctx), userID, hashes)
+	}))
 }
 
 // ConsumeBackupCode marks a matching unused code as used and reports whether

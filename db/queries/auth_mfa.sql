@@ -3,7 +3,10 @@
 -- Every query takes an optional tenant_id. NULL (tenancy disabled) scopes by
 -- user id only; a value restricts the operation to users in that tenant, so a
 -- user id from another tenant matches nothing. Each operation is a single
--- statement, so it is atomic without an explicit transaction.
+-- statement, so it is atomic without an explicit transaction, except
+-- ReplaceBackupCodes, which is a DeleteBackupCodes + InsertBackupCodes pair
+-- that the caller must run inside one transaction (the repository refuses to
+-- run outside one).
 
 -- name: GetUserTOTP :one
 SELECT t.secret_ciphertext, t.verified, t.last_used_counter, u.totp_enabled
@@ -86,18 +89,26 @@ WHERE b.user_id = sqlc.arg(user_id)
   AND (sqlc.narg(tenant_id)::text IS NULL OR u.tenant_id = sqlc.narg(tenant_id)::text)
 ORDER BY b.id;
 
--- name: ReplaceBackupCodes :execrows
--- Deletes every existing code and inserts the new set in one statement.
-WITH target AS (
-    SELECT users.id AS target_id FROM users
+-- name: DeleteBackupCodes :execrows
+-- First half of replacing a user's backup codes. Run it and InsertBackupCodes
+-- in one transaction: a single statement cannot do both because the unique
+-- (user_id, code_hash) constraint rejects re-inserting a hash the same
+-- statement deletes.
+DELETE FROM user_backup_codes
+WHERE user_id IN (
+    SELECT users.id FROM users
     WHERE users.id = sqlc.arg(user_id)
       AND (sqlc.narg(tenant_id)::text IS NULL OR users.tenant_id = sqlc.narg(tenant_id)::text)
-), deleted AS (
-    DELETE FROM user_backup_codes WHERE user_id IN (SELECT target_id FROM target)
-)
+);
+
+-- name: InsertBackupCodes :execrows
+-- Second half of replacing a user's backup codes. Inserts nothing when the user
+-- is not in scope (unknown id, or another tenant).
 INSERT INTO user_backup_codes (user_id, code_hash)
-SELECT target.target_id, code_hash
-FROM target, unnest(sqlc.arg(code_hashes)::bytea[]) AS code_hash;
+SELECT users.id, code_hash
+FROM users, unnest(sqlc.arg(code_hashes)::bytea[]) AS code_hash
+WHERE users.id = sqlc.arg(user_id)
+  AND (sqlc.narg(tenant_id)::text IS NULL OR users.tenant_id = sqlc.narg(tenant_id)::text);
 
 -- name: ConsumeBackupCode :execrows
 -- Atomic single use: the row lock plus the used_at IS NULL predicate mean two

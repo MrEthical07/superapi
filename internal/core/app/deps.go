@@ -237,7 +237,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 				}
 				return nil, fmt.Errorf("init auth provider: totp encryption key: %w", err)
 			}
-			userProvider = userProvider.WithMFA(auth.NewMFARepository(deps.DB), cipher)
+			userProvider = userProvider.WithMFA(auth.NewMFARepository(deps.DB), cipher).WithTx(deps.DB)
 		}
 
 		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{

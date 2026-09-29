@@ -49,7 +49,8 @@ Migrations `000003_auth_users`, `000005_users_tenant`, `000006_auth_mfa` and
 | `created_at`, `updated_at` | timestamps |
 
 Related tables: `user_totp` (AES-256-GCM encrypted secret, verified flag,
-last used counter), `user_backup_codes` (SHA-256 hashes, `used_at`),
+last used counter), `user_backup_codes` (SHA-256 hashes, `used_at`, unique per
+`(user_id, code_hash)` since migration 000008),
 `webauthn_credentials` (migration 000004), `tenants` (000002).
 
 All migrations are applied by `make migrate-up`. The WebAuthn, tenancy and MFA

@@ -64,6 +64,32 @@ func (q *Queries) ConsumeBackupCode(ctx context.Context, arg ConsumeBackupCodePa
 	return result.RowsAffected(), nil
 }
 
+const deleteBackupCodes = `-- name: DeleteBackupCodes :execrows
+DELETE FROM user_backup_codes
+WHERE user_id IN (
+    SELECT users.id FROM users
+    WHERE users.id = $1
+      AND ($2::text IS NULL OR users.tenant_id = $2::text)
+)
+`
+
+type DeleteBackupCodesParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	TenantID pgtype.Text `json:"tenant_id"`
+}
+
+// First half of replacing a user's backup codes. Run it and InsertBackupCodes
+// in one transaction: a single statement cannot do both because the unique
+// (user_id, code_hash) constraint rejects re-inserting a hash the same
+// statement deletes.
+func (q *Queries) DeleteBackupCodes(ctx context.Context, arg DeleteBackupCodesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteBackupCodes, arg.UserID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const disableUserTOTP = `-- name: DisableUserTOTP :one
 WITH target AS (
     SELECT users.id AS target_id FROM users
@@ -123,7 +149,10 @@ type GetUserTOTPRow struct {
 // Every query takes an optional tenant_id. NULL (tenancy disabled) scopes by
 // user id only; a value restricts the operation to users in that tenant, so a
 // user id from another tenant matches nothing. Each operation is a single
-// statement, so it is atomic without an explicit transaction.
+// statement, so it is atomic without an explicit transaction, except
+// ReplaceBackupCodes, which is a DeleteBackupCodes + InsertBackupCodes pair
+// that the caller must run inside one transaction (the repository refuses to
+// run outside one).
 func (q *Queries) GetUserTOTP(ctx context.Context, arg GetUserTOTPParams) (GetUserTOTPRow, error) {
 	row := q.db.QueryRow(ctx, getUserTOTP, arg.UserID, arg.TenantID)
 	var i GetUserTOTPRow
@@ -134,6 +163,30 @@ func (q *Queries) GetUserTOTP(ctx context.Context, arg GetUserTOTPParams) (GetUs
 		&i.TotpEnabled,
 	)
 	return i, err
+}
+
+const insertBackupCodes = `-- name: InsertBackupCodes :execrows
+INSERT INTO user_backup_codes (user_id, code_hash)
+SELECT users.id, code_hash
+FROM users, unnest($1::bytea[]) AS code_hash
+WHERE users.id = $2
+  AND ($3::text IS NULL OR users.tenant_id = $3::text)
+`
+
+type InsertBackupCodesParams struct {
+	CodeHashes [][]byte    `json:"code_hashes"`
+	UserID     pgtype.UUID `json:"user_id"`
+	TenantID   pgtype.Text `json:"tenant_id"`
+}
+
+// Second half of replacing a user's backup codes. Inserts nothing when the user
+// is not in scope (unknown id, or another tenant).
+func (q *Queries) InsertBackupCodes(ctx context.Context, arg InsertBackupCodesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertBackupCodes, arg.CodeHashes, arg.UserID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listUnusedBackupCodes = `-- name: ListUnusedBackupCodes :many
@@ -191,34 +244,6 @@ func (q *Queries) MarkUserTOTPVerified(ctx context.Context, arg MarkUserTOTPVeri
 	var user_id pgtype.UUID
 	err := row.Scan(&user_id)
 	return user_id, err
-}
-
-const replaceBackupCodes = `-- name: ReplaceBackupCodes :execrows
-WITH target AS (
-    SELECT users.id AS target_id FROM users
-    WHERE users.id = $2
-      AND ($3::text IS NULL OR users.tenant_id = $3::text)
-), deleted AS (
-    DELETE FROM user_backup_codes WHERE user_id IN (SELECT target_id FROM target)
-)
-INSERT INTO user_backup_codes (user_id, code_hash)
-SELECT target.target_id, code_hash
-FROM target, unnest($1::bytea[]) AS code_hash
-`
-
-type ReplaceBackupCodesParams struct {
-	CodeHashes [][]byte    `json:"code_hashes"`
-	UserID     pgtype.UUID `json:"user_id"`
-	TenantID   pgtype.Text `json:"tenant_id"`
-}
-
-// Deletes every existing code and inserts the new set in one statement.
-func (q *Queries) ReplaceBackupCodes(ctx context.Context, arg ReplaceBackupCodesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, replaceBackupCodes, arg.CodeHashes, arg.UserID, arg.TenantID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const upsertUserTOTPSecret = `-- name: UpsertUserTOTPSecret :one

@@ -51,6 +51,17 @@ func (p *Postgres) Queries(ctx context.Context) *sqlcgen.Queries {
 	return sqlcgen.New(p.pool)
 }
 
+// InTx reports whether ctx carries a transaction started by WithTx.
+// Repository operations that are only correct as several statements in one
+// transaction use it to refuse to run outside one; they never start it.
+func (p *Postgres) InTx(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	_, ok := ctx.Value(txKey{}).(pgx.Tx)
+	return ok
+}
+
 // WithTx runs fn inside a pgx transaction. The transaction is stashed in the
 // context passed to fn, so any repository call using Queries(ctx) within fn
 // participates in the same transaction. Services own this write boundary.

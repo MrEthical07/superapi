@@ -15,6 +15,10 @@ import (
 // move the stored counter forward (a replayed or concurrently used code).
 var ErrTOTPCounterNotAdvanced = errors.New("totp counter not advanced")
 
+// ErrTransactionRequired is returned by an operation that is only correct as
+// several statements in one transaction when it is called outside one.
+var ErrTransactionRequired = errors.New("operation must run inside a transaction")
+
 // TOTPState is the stored TOTP state for a user. SecretCiphertext is the
 // encrypted secret exactly as persisted; the provider decrypts it.
 type TOTPState struct {
@@ -28,8 +32,9 @@ type TOTPState struct {
 //
 // tenantID scopes every operation: empty means tenant-blind (tenancy
 // disabled); a value restricts the operation to users in that tenant, so a
-// user id from another tenant behaves as not found. Each method is a single
-// SQL statement and therefore atomic without a service-owned transaction.
+// user id from another tenant behaves as not found. Every method is a single
+// SQL statement and therefore atomic on its own, except ReplaceBackupCodes,
+// which needs the caller's transaction.
 type MFARepository interface {
 	// GetTOTP returns the user's TOTP state, or found=false when none exists.
 	GetTOTP(ctx context.Context, tenantID, userID string) (state TOTPState, found bool, err error)
@@ -45,7 +50,11 @@ type MFARepository interface {
 	DisableTOTP(ctx context.Context, tenantID, userID string) error
 	// ListUnusedBackupCodes returns the hashes of backup codes not yet used.
 	ListUnusedBackupCodes(ctx context.Context, tenantID, userID string) ([][32]byte, error)
-	// ReplaceBackupCodes atomically replaces every backup code for the user.
+	// ReplaceBackupCodes replaces every backup code for the user. It is a
+	// delete followed by an insert, so the caller must run it inside one
+	// transaction (storage.Postgres.WithTx); the relational implementation
+	// returns ErrTransactionRequired otherwise. The StoreUserProvider does
+	// this for every goAuth-driven replacement.
 	ReplaceBackupCodes(ctx context.Context, tenantID, userID string, hashes [][32]byte) error
 	// ConsumeBackupCode marks a matching unused code as used, reporting
 	// whether a code was consumed. Concurrent consumes of one code cannot both
@@ -162,24 +171,46 @@ func (r *sqlcMFARepository) ListUnusedBackupCodes(ctx context.Context, tenantID,
 }
 
 func (r *sqlcMFARepository) ReplaceBackupCodes(ctx context.Context, tenantID, userID string, hashes [][32]byte) error {
+	// Two statements (delete, then insert) are only atomic in one transaction,
+	// and a half-done replacement would leave the user without backup codes.
+	// The repository does not own transaction boundaries, so it refuses to run
+	// outside the caller's.
+	if !r.pg.InTx(ctx) {
+		return fmt.Errorf("replace backup codes: %w", ErrTransactionRequired)
+	}
 	id, err := parseUserID(userID)
 	if err != nil {
 		return err
 	}
-	raw := make([][]byte, len(hashes))
-	for i := range hashes {
-		raw[i] = append([]byte(nil), hashes[i][:]...)
+
+	// The unique (user_id, code_hash) constraint would reject a repeated hash
+	// within the new set; a code appearing twice is one code.
+	seen := make(map[[32]byte]struct{}, len(hashes))
+	raw := make([][]byte, 0, len(hashes))
+	for _, h := range hashes {
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		raw = append(raw, append([]byte(nil), h[:]...))
 	}
-	inserted, err := r.pg.Queries(ctx).ReplaceBackupCodes(ctx, sqlcgen.ReplaceBackupCodesParams{
+
+	q := r.pg.Queries(ctx)
+	scope := optionalText(tenantID)
+	if _, err := q.DeleteBackupCodes(ctx, sqlcgen.DeleteBackupCodesParams{UserID: id, TenantID: scope}); err != nil {
+		return fmt.Errorf("replace backup codes: delete: %w", err)
+	}
+	inserted, err := q.InsertBackupCodes(ctx, sqlcgen.InsertBackupCodesParams{
 		CodeHashes: raw,
 		UserID:     id,
-		TenantID:   optionalText(tenantID),
+		TenantID:   scope,
 	})
 	if err != nil {
-		return fmt.Errorf("replace backup codes: %w", err)
+		return fmt.Errorf("replace backup codes: insert: %w", err)
 	}
-	if inserted != int64(len(hashes)) {
-		// No user in scope (nothing inserted) or a partial insert.
+	if inserted != int64(len(raw)) {
+		// No user in scope (nothing inserted). The caller's transaction rolls
+		// back the delete when this error is returned.
 		return ErrAuthUserNotFound
 	}
 	return nil

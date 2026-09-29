@@ -197,3 +197,33 @@ func TestQueries_UsesTxWhenPresent(t *testing.T) {
 		t.Fatal("expected non-nil queries bound to tx")
 	}
 }
+
+func TestInTxReportsAnActiveTransaction(t *testing.T) {
+	tx := &stubTx{}
+	pg := newTestPostgres(&fakeBeginner{tx: tx})
+
+	if pg.InTx(context.Background()) {
+		t.Fatal("no transaction is active outside WithTx")
+	}
+	if pg.InTx(nil) { //nolint:staticcheck // a nil context must be tolerated
+		t.Fatal("a nil context has no transaction")
+	}
+
+	var inside bool
+	if err := pg.WithTx(context.Background(), func(ctx context.Context) error {
+		inside = pg.InTx(ctx)
+		return nil
+	}); err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+	if !inside {
+		t.Fatal("InTx must be true for the context passed to the WithTx callback")
+	}
+
+	// The transaction does not leak to the caller's own context.
+	outer := context.Background()
+	_ = pg.WithTx(outer, func(context.Context) error { return nil })
+	if pg.InTx(outer) {
+		t.Fatal("InTx leaked out of WithTx")
+	}
+}

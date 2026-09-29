@@ -113,7 +113,7 @@ module registers no routes. Everything else runs.
 4. Delete `internal/modules/auth/` and its line in `internal/modules/modules.go`,
    `internal/core/notify/`, `cmd/createuser/`, and the `AuthUsers`/`Notifier`
    dependency fields.
-5. Delete the auth migrations (`000003`, `000004`, `000005`, `000006`, `000007`),
+5. Delete the auth migrations (`000003`, `000004`, `000005`, `000006`, `000007`, `000008`),
    `db/schema/auth_*.sql`, `db/schema/webauthn_credentials.sql`,
    `db/queries/auth_*.sql`, `db/queries/webauthn_credentials.sql`, and re-run
    `make sqlc-generate`.

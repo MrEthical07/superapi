@@ -185,3 +185,113 @@ func TestMigration000007DownRestoresIndexes(t *testing.T) {
 		t.Fatal("unexpected indexes after 000007 down")
 	}
 }
+
+// Migration 000008 collapses duplicate backup codes (keeping an unused row when
+// there is one), then enforces uniqueness per user.
+func TestMigration000008BackupCodesUnique(t *testing.T) {
+	databaseURL, sourceURL := dbtest.NewDatabase(t)
+	m := migrateTo(t, databaseURL, sourceURL, 7)
+	conn := connect(t, databaseURL)
+	ctx := context.Background()
+
+	var userA, userB string
+	for email, dst := range map[string]*string{"a@example.com": &userA, "b@example.com": &userB} {
+		if err := conn.QueryRow(ctx, `INSERT INTO users (email, password_hash) VALUES ($1, 'h') RETURNING id::text`, email).Scan(dst); err != nil {
+			t.Fatalf("insert user: %v", err)
+		}
+	}
+	hash := func(b byte) []byte {
+		h := make([]byte, 32)
+		for i := range h {
+			h[i] = b
+		}
+		return h
+	}
+	insert := func(user string, code byte, used bool) {
+		t.Helper()
+		usedAt := "NULL"
+		if used {
+			usedAt = "NOW()"
+		}
+		if _, err := conn.Exec(ctx, `INSERT INTO user_backup_codes (user_id, code_hash, used_at) VALUES ($1, $2, `+usedAt+`)`, user, hash(code)); err != nil {
+			t.Fatalf("insert code: %v", err)
+		}
+	}
+	// Before 000008 duplicates are allowed:
+	insert(userA, 1, true)  // duplicate of the unused row below; the used row has the lower id
+	insert(userA, 1, false) // must be the survivor
+	insert(userA, 1, true)
+	insert(userA, 2, true) // all copies used: one of them survives
+	insert(userA, 2, true)
+	insert(userA, 3, false) // no duplicate: untouched
+	insert(userB, 1, false) // same hash as user A's, different user: untouched
+	insert(userB, 1, false) // duplicate for B: two unused, one survives
+
+	if err := m.Migrate(8); err != nil {
+		t.Fatalf("migrate to 8: %v", err)
+	}
+
+	type row struct {
+		user string
+		code byte
+		used bool
+	}
+	rows, err := conn.Query(ctx, `SELECT user_id::text, get_byte(code_hash, 0), used_at IS NOT NULL FROM user_backup_codes ORDER BY user_id, get_byte(code_hash, 0), id`)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		var code int
+		if err := rows.Scan(&r.user, &code, &r.used); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		r.code = byte(code)
+		got = append(got, r)
+	}
+	rows.Close()
+
+	count := func(user string, code byte) (n int, anyUsed bool) {
+		for _, r := range got {
+			if r.user == user && r.code == code {
+				n++
+				anyUsed = anyUsed || r.used
+			}
+		}
+		return n, anyUsed
+	}
+	if n, used := count(userA, 1); n != 1 || used {
+		t.Fatalf("user A code 1: %d rows, used=%v; want one unused survivor", n, used)
+	}
+	if n, used := count(userA, 2); n != 1 || !used {
+		t.Fatalf("user A code 2: %d rows, used=%v; want one (used) survivor", n, used)
+	}
+	if n, _ := count(userA, 3); n != 1 {
+		t.Fatalf("user A code 3: %d rows, want it untouched", n)
+	}
+	if n, _ := count(userB, 1); n != 1 {
+		t.Fatalf("user B code 1: %d rows, want the duplicate collapsed to one", n)
+	}
+	if len(got) != 4 {
+		t.Fatalf("%d rows remain, want 4: %+v", len(got), got)
+	}
+
+	// The constraint now holds, per user.
+	if _, err := conn.Exec(ctx, `INSERT INTO user_backup_codes (user_id, code_hash) VALUES ($1, $2)`, userA, hash(3)); err == nil {
+		t.Fatal("a duplicate (user_id, code_hash) must be rejected")
+	} else if !strings.Contains(err.Error(), "user_backup_codes_user_code_unique") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO user_backup_codes (user_id, code_hash) VALUES ($1, $2)`, userB, hash(3)); err != nil {
+		t.Fatalf("the same hash for another user is allowed: %v", err)
+	}
+
+	// Down restores the old shape (duplicates allowed again).
+	if err := m.Migrate(7); err != nil {
+		t.Fatalf("down to 7: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `INSERT INTO user_backup_codes (user_id, code_hash) VALUES ($1, $2)`, userA, hash(3)); err != nil {
+		t.Fatalf("duplicates are allowed again after down: %v", err)
+	}
+}
