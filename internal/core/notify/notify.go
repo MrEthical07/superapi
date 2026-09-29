@@ -9,9 +9,12 @@
 //   - Noop (default, NOTIFY_DRIVER=noop): discards messages.
 //   - Log (NOTIFY_DRIVER=log): development logger. Secrets are redacted unless
 //     APP_ENV=dev and NOTIFY_LOG_SECRETS=true.
+//   - SMTP (NOTIFY_DRIVER=smtp): plain-text mail over the standard library's
+//     net/smtp, with STARTTLS or implicit TLS.
 //
-// To deliver real email or SMS, implement Notifier (for example over SMTP or a
-// provider SDK) and return it from New. See docs/auth-flows.md.
+// To deliver through another provider, implement Notifier and register it with
+// RegisterDriver from your own package; New and config lint pick it up without
+// editing this package. See docs/auth-flows.md.
 package notify
 
 import (
@@ -20,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/logx"
 )
 
@@ -81,19 +83,6 @@ func (l *Log) write(kind, to, challenge string) {
 		Str("to", RedactAddress(to)).
 		Str("challenge", secret).
 		Msg("notify: message (log driver; not delivered)")
-}
-
-// New builds the configured notifier.
-func New(cfg config.NotifyConfig, env string, log *logx.Logger) (Notifier, error) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Driver)) {
-	case "", config.NotifyDriverNoop:
-		return Noop{}, nil
-	case config.NotifyDriverLog:
-		show := cfg.LogSecrets && strings.EqualFold(strings.TrimSpace(env), "dev")
-		return NewLog(log, show), nil
-	default:
-		return nil, fmt.Errorf("unknown notify driver %q", cfg.Driver)
-	}
 }
 
 // RedactSecret hides a secret while keeping its length visible for debugging.

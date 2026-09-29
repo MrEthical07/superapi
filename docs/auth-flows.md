@@ -244,6 +244,19 @@ type Notifier interface {
   `AUTH_PASSWORD_RESET_ENABLED` or `AUTH_EMAIL_VERIFICATION_ENABLED` is on
   with the noop driver unless `APP_ENV` is `dev`, `development`, `local` or
   `test`; there it only logs a warning at startup.
+<!-- template:begin smtp -->
+- `NOTIFY_DRIVER=smtp` sends plain-text mail through the standard library
+  (`net/smtp`, no dependency). Set `SMTP_HOST`, `SMTP_FROM`, and a link template
+  for each enabled feature, for example
+  `NOTIFY_RESET_URL=https://app.example.com/reset?token={token}`; `{token}` is
+  replaced with the percent-encoded challenge, and your front end posts it back
+  to `password/reset/confirm`. `SMTP_TLS` is `starttls` (default, mandatory
+  upgrade: nothing is sent, and no credentials are offered, if the server does
+  not support it), `implicit`, or `none` (dev only). Recipient and subject are
+  rejected if they contain a line break; the challenge and link are never
+  logged and addresses in errors are redacted. Variables:
+  [environment-variables.md](environment-variables.md).
+<!-- template:end smtp -->
 - `NOTIFY_DRIVER=log` logs a redacted message; the full secret is logged only
   with `APP_ENV=dev` and `NOTIFY_LOG_SECRETS=true` (lint enforces dev).
 - Production: implement `Notifier` over SMTP or your email/SMS provider (build
@@ -251,6 +264,43 @@ type Notifier interface {
   and return it from `notify.New`. Calls are made asynchronously by a bounded
   dispatcher with `NOTIFY_TIMEOUT`, so they must be safe to run after the HTTP
   response is written.
+
+### Adding your own driver
+
+`notify.RegisterDriver(name, factory)` makes a driver selectable through
+`NOTIFY_DRIVER` without editing `notify.New` or the config package; config lint
+accepts the name as soon as it is registered. Put it in your own package and
+import that package for its side effect from `cmd/api/main.go`:
+
+```go
+package sendgrid
+
+import (
+    "context"
+    "os"
+
+    "github.com/acme/foo/internal/core/config"
+    "github.com/acme/foo/internal/core/logx"
+    "github.com/acme/foo/internal/core/notify"
+)
+
+func init() {
+    notify.RegisterDriver("sendgrid", func(cfg config.NotifyConfig, env string, log *logx.Logger) (notify.Notifier, error) {
+        return newClient(os.Getenv("SENDGRID_API_KEY")) // fail startup on a bad setting
+    })
+}
+
+type client struct{ /* … */ }
+
+func (c *client) SendPasswordReset(ctx context.Context, to, challenge string) error { /* … */ return nil }
+func (c *client) SendEmailVerification(ctx context.Context, to, challenge string) error { /* … */ return nil }
+```
+
+Then `NOTIFY_DRIVER=sendgrid`. Names are case-insensitive; registering an empty
+name, a nil factory or a duplicate panics at startup. Your own environment
+variables must also be listed in `.env.example` and
+`docs/environment-variables.md` (`superapi-verify` checks). Treat the challenge
+as a secret: never log it in full or return it over HTTP.
 
 ## Creating the first user
 

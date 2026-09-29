@@ -61,6 +61,18 @@ var features = []feature{
 		TouchesSQL: true,
 	},
 	{
+		Flag:   "no-smtp",
+		Marker: "smtp",
+		Help:   "remove the built-in SMTP notifier and the SMTP_* / NOTIFY_*_URL config",
+		Paths: []string{
+			"internal/core/notify/smtp.go",
+			"internal/core/notify/smtp_test.go",
+			"internal/core/notify/fakesmtp_test.go",
+			"internal/core/config/notify_smtp.go",
+			"internal/core/config/notify_smtp_test.go",
+		},
+	},
+	{
 		Flag:   "no-document-store",
 		Marker: "document-store",
 		Help:   "remove the optional document (NoSQL) store package",

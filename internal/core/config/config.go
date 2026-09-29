@@ -96,6 +96,10 @@ type NotifyConfig struct {
 	LogSecrets bool
 	// Timeout bounds each asynchronous delivery attempt.
 	Timeout time.Duration
+	// template:begin smtp
+	// SMTP configures the built-in smtp driver (NOTIFY_DRIVER=smtp).
+	SMTP SMTPConfig
+	// template:end smtp
 }
 
 // Notify driver names accepted by NOTIFY_DRIVER.
@@ -509,6 +513,9 @@ func Load() (*Config, error) {
 		LogSecrets: getBool("NOTIFY_LOG_SECRETS", false),
 		Timeout:    getDuration("NOTIFY_TIMEOUT", 10*time.Second),
 	}
+	// template:begin smtp
+	cfg.Notify.SMTP = loadSMTP()
+	// template:end smtp
 
 	return cfg, nil
 }
@@ -618,11 +625,14 @@ func (c *Config) Lint() error {
 		return err
 	}
 	// template:end webauthn
-	switch c.Notify.Driver {
-	case NotifyDriverNoop, NotifyDriverLog:
-	default:
-		return fmt.Errorf("invalid notify driver: %q (valid: noop, log)", c.Notify.Driver)
+	if err := c.lintNotifyDriver(); err != nil {
+		return err
 	}
+	// template:begin smtp
+	if err := c.lintSMTP(); err != nil {
+		return err
+	}
+	// template:end smtp
 	if err := c.lintNotifyDelivery(); err != nil {
 		return err
 	}

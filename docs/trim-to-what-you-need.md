@@ -36,6 +36,7 @@ make init module=github.com/acme/foo name="Foo API" flags="--no-tenancy --no-web
 |---|---|
 | `--no-tenancy` | tenant resolver/directory, `tenants` table (migration 000002), `TENANCY_*` config, tenancy docs, `make user tenant=`. Keeps the generic tenant policy primitives and `users.tenant_id` (always `'0'`); remove those manually with [removing-tenancy.md](removing-tenancy.md) |
 | `--no-webauthn` | migration 000004, schema/queries/sqlc output, the credential repository and provider methods, ceremony routes, `WEBAUTHN_*` config |
+| `--no-smtp` | the SMTP notifier (`internal/core/notify/smtp.go`), its `SMTP_*` and `NOTIFY_*_URL` config and lint. Other drivers keep working; with reset/verification on you must register your own driver (see [auth-flows.md](auth-flows.md#adding-your-own-driver)) |
 | `--no-document-store` | `internal/storage/document/` and its doc |
 | `--no-devx` | `cmd/modulegen`, `cmd/modulesync`, `internal/devx/`, `make module`/`db-sync` (`make sqlc-generate` then runs sqlc directly) |
 | `--no-perf` | `performance/`, `cmd/perftoken`, `make perf-token`/`load-*`, the perf runbook |
@@ -163,6 +164,20 @@ If you will never use it, delete it cleanly (see docs/enabling-webauthn.md,
 Leaving it disabled costs nothing at runtime.
 
 ---
+
+<!-- template:begin smtp -->
+## SMTP notifier
+
+Disable: leave `NOTIFY_DRIVER` at `noop` or `log` (the SMTP settings are then
+ignored). Delete: remove `internal/core/notify/smtp.go`, `smtp_test.go`,
+`fakesmtp_test.go`, `internal/core/config/notify_smtp.go` and
+`notify_smtp_test.go`, the `SMTP` field, the `loadSMTP()` call and the
+`lintSMTP()` call in `internal/core/config/config.go`, and the `SMTP_*` /
+`NOTIFY_RESET_URL` / `NOTIFY_VERIFY_URL` rows in `.env.example` and
+`docs/environment-variables.md`. The driver registry (`notify.RegisterDriver`)
+stays; on a fresh clone `make init flags=--no-smtp` does all of this. Password
+reset and email verification then need a driver you register yourself.
+<!-- template:end smtp -->
 
 ## Tenancy
 
