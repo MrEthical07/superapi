@@ -26,10 +26,10 @@ Domain model (repo/service-facing):
 
 ```go
 type Project struct {
-    ID       string
-    TenantID string
-    Name     string
-    Status   string
+    ID      string
+    OwnerID string // the authenticated user who owns the project
+    Name    string
+    Status  string
 }
 ```
 
@@ -50,14 +50,14 @@ Example query source (`db/queries/projects.sql`):
 
 ```sql
 -- name: CreateProject :one
-INSERT INTO projects (id, tenant_id, name, status)
+INSERT INTO projects (id, owner_id, name, status)
 VALUES ($1, $2, $3, $4)
-RETURNING id, tenant_id, name, status;
+RETURNING id, owner_id, name, status;
 
 -- name: GetProjectByID :one
-SELECT id, tenant_id, name, status
+SELECT id, owner_id, name, status
 FROM projects
-WHERE tenant_id = $1 AND id = $2;
+WHERE owner_id = $1 AND id = $2;
 ```
 
 Example migration (up):
@@ -65,14 +65,14 @@ Example migration (up):
 ```sql
 CREATE TABLE IF NOT EXISTS projects (
     id         TEXT PRIMARY KEY,
-    tenant_id  TEXT NOT NULL,
+    owner_id   TEXT NOT NULL,
     name       TEXT NOT NULL,
     status     TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS projects_tenant_id_idx ON projects (tenant_id);
+CREATE INDEX IF NOT EXISTS projects_owner_id_idx ON projects (owner_id);
 ```
 
 Note:
@@ -86,18 +86,18 @@ Define repository interface in domain terms.
 
 ```go
 type CreateProjectInput struct {
-    ID       string
-    TenantID string
-    Name     string
-    Status   string
+    ID      string
+    OwnerID string
+    Name    string
+    Status  string
 }
 
 type ProjectRepository interface {
     Create(ctx context.Context, input CreateProjectInput) (Project, error)
-    GetByID(ctx context.Context, tenantID, id string) (Project, error)
-    List(ctx context.Context, tenantID string, limit int32) ([]Project, error)
-    Update(ctx context.Context, tenantID, id string, name string, status string) (Project, error)
-    Delete(ctx context.Context, tenantID, id string) error
+    GetByID(ctx context.Context, ownerID, id string) (Project, error)
+    List(ctx context.Context, ownerID string, limit int32) ([]Project, error)
+    Update(ctx context.Context, ownerID, id string, name string, status string) (Project, error)
+    Delete(ctx context.Context, ownerID, id string) error
 }
 ```
 
@@ -114,12 +114,12 @@ type service struct {
     repo *Repo
 }
 
-func (s *service) Create(ctx context.Context, tenantID string, req createProjectRequest) (Project, error) {
+func (s *service) Create(ctx context.Context, ownerID string, req createProjectRequest) (Project, error) {
     input := CreateProjectInput{
-        ID:       newProjectID(),
-        TenantID: tenantID,
-        Name:     strings.TrimSpace(req.Name),
-        Status:   strings.TrimSpace(strings.ToLower(req.Status)),
+        ID:      newProjectID(),
+        OwnerID: ownerID,
+        Name:    strings.TrimSpace(req.Name),
+        Status:  strings.TrimSpace(strings.ToLower(req.Status)),
     }
 
     var out Project
@@ -134,8 +134,8 @@ func (s *service) Create(ctx context.Context, tenantID string, req createProject
     return out, err
 }
 
-func (s *service) GetByID(ctx context.Context, tenantID, id string) (Project, error) {
-    return s.repo.GetByID(ctx, tenantID, id) // direct read, no tx
+func (s *service) GetByID(ctx context.Context, ownerID, id string) (Project, error) {
+    return s.repo.GetByID(ctx, ownerID, id) // direct read, no tx
 }
 ```
 
@@ -160,10 +160,10 @@ func NewRepo(pg *storage.Postgres) *Repo { return &Repo{pg: pg} }
 
 func (r *Repo) Create(ctx context.Context, in CreateProjectInput) (Project, error) {
     row, err := r.pg.Queries(ctx).CreateProject(ctx, sqlcgen.CreateProjectParams{
-        ID:       in.ID,
-        TenantID: in.TenantID,
-        Name:     in.Name,
-        Status:   in.Status,
+        ID:      in.ID,
+        OwnerID: in.OwnerID,
+        Name:    in.Name,
+        Status:  in.Status,
     })
     if err != nil {
         return Project{}, err
@@ -171,10 +171,10 @@ func (r *Repo) Create(ctx context.Context, in CreateProjectInput) (Project, erro
     return mapProjectRow(row), nil
 }
 
-func (r *Repo) GetByID(ctx context.Context, tenantID, id string) (Project, error) {
+func (r *Repo) GetByID(ctx context.Context, ownerID, id string) (Project, error) {
     row, err := r.pg.Queries(ctx).GetProjectByID(ctx, sqlcgen.GetProjectByIDParams{
-        TenantID: tenantID,
-        ID:       id,
+        OwnerID: ownerID,
+        ID:      id,
     })
     if err != nil {
         if errors.Is(err, pgx.ErrNoRows) {
@@ -188,7 +188,7 @@ func (r *Repo) GetByID(ctx context.Context, tenantID, id string) (Project, error
 // mapProjectRow converts a generated row into the domain model, keeping
 // sqlc/pgx types out of the service and public repository API.
 func mapProjectRow(row sqlcgen.Project) Project {
-    return Project{ID: row.ID, TenantID: row.TenantID, Name: row.Name, Status: row.Status}
+    return Project{ID: row.ID, OwnerID: row.OwnerID, Name: row.Name, Status: row.Status}
 }
 ```
 
@@ -211,12 +211,12 @@ Handler reads transport input and delegates to service.
 
 ```go
 func (h *Handler) Create(ctx *httpx.Context, req createProjectRequest) (projectResponse, error) {
-    tenantID, ok := tenant.TenantIDFromContext(ctx.Context())
+    principal, ok := ctx.Auth()
     if !ok {
-        return projectResponse{}, apperr.New(apperr.CodeForbidden, 403, "tenant scope required")
+        return projectResponse{}, apperr.New(apperr.CodeUnauthorized, 401, "authentication required")
     }
 
-    project, err := h.svc.Create(ctx.Context(), tenantID, req)
+    project, err := h.svc.Create(ctx.Context(), principal.UserID, req)
     if err != nil {
         return projectResponse{}, err
     }
@@ -232,7 +232,7 @@ No business workflow and no query execution in handler.
 Attach policies in required order:
 
 1. auth
-2. tenant
+2. isolation (only when an optional feature adds a scope check; this example has none)
 3. rbac
 4. rate limit
 5. cache
@@ -241,11 +241,14 @@ Attach policies in required order:
 Example route stack for GET /projects/{id}:
 
 - AuthRequired
-- TenantRequired
 - RateLimit
-- CacheRead
+- CacheRead (varies by `UserID`, because every project is owner-scoped)
 
-For write routes, add CacheInvalidate after auth/tenant/rbac/rate-limit policies.
+For write routes, add CacheInvalidate after the auth/rbac/rate-limit policies.
+
+An optional feature that scopes data (an organization, for example) adds its
+own isolation policy and cache key part; see [policies.md](policies.md) and
+[cache-guide.md](cache-guide.md#key-parts).
 
 ## 10. DTO Suggestions
 

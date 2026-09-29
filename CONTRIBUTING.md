@@ -22,7 +22,7 @@ This repository is published as a template for production-grade Go APIs.
 ## Adding a Module
 - Generate baseline module: `make module name=projects`
 - Optional DB scaffolding: `make module name=projects db=1`
-- Optional policy examples: `make module name=projects auth=1 tenant=1 ratelimit=1 cache=1`
+- Optional policy examples: `make module name=projects auth=1 ratelimit=1 cache=1` (features can add scaffold flags, passed through with `flags="..."`)
 - Read module docs: `docs/modules.md` and `docs/crud-examples.md`
 <!-- template:end devx -->
 

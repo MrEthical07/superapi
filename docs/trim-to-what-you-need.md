@@ -29,13 +29,12 @@ On a fresh clone, `make init` can delete whole features for you and leaves a
 project that passes the gate (CI checks the default and `--no-all`):
 
 ```bash
-make init module=github.com/acme/foo name="Foo API" flags="--no-tenancy --no-webauthn --no-perf"
+make init module=github.com/acme/foo name="Foo API" flags="--no-webauthn --no-perf"
 ```
 
 | Flag | What it removes |
 |---|---|
-| `--no-tenancy` | tenant resolver/directory, `tenants` table (migration 000002), `TENANCY_*` config, tenancy docs, `make user tenant=`. Keeps the generic tenant policy primitives and `users.tenant_id` (always `'0'`); remove those manually with [removing-tenancy.md](removing-tenancy.md) |
-| `--no-webauthn` | migration 000004, schema/queries/sqlc output, the credential repository and provider methods, ceremony routes, `WEBAUTHN_*` config |
+| `--no-webauthn` | the `webauthn`-marked blocks in the baseline migration `000001_init` (up and down; no numbered migration is deleted), the sqlc schema/queries/output, the credential repository and provider methods, ceremony routes, `WEBAUTHN_*` config |
 | `--no-smtp` | the SMTP notifier (`internal/core/notify/smtp.go`), its `SMTP_*` and `NOTIFY_*_URL` config and lint. Other drivers keep working; with reset/verification on you must register your own driver (see [auth-flows.md](auth-flows.md#adding-your-own-driver)) |
 | `--no-document-store` | `internal/storage/document/` and its doc |
 | `--no-devx` | `cmd/modulegen`, `cmd/modulesync`, `internal/devx/`, `make module`/`db-sync` (`make sqlc-generate` then runs sqlc directly) |
@@ -43,6 +42,15 @@ make init module=github.com/acme/foo name="Foo API" flags="--no-tenancy --no-web
 | `--no-perf` | `performance/`, `cmd/perftoken`, `make perf-token`/`load-*`, the perf runbook |
 | `--no-demo` | bundled example code (`internal/storage/document/example/`) |
 | `--no-all` | everything above |
+
+The table lists the general-purpose flags; the full list of prune flags
+(including the ones for optional features that ship as their own package) is
+printed by `go run ./cmd/templateinit --help`. A feature with its own removal
+guide has a `docs/removing-*.md` page.
+
+The TOTP tables in the baseline migration are wrapped in `totp` markers, but
+there is no prune flag for them; see [Individual auth features](#individual-auth-features)
+for the manual removal.
 
 `--dry-run` previews; `--keep-init` keeps the tool and its markers so you can
 prune more later. The sections below are the manual equivalents.
@@ -61,7 +69,6 @@ prune more later. The sections below are the manual equivalents.
 | Auth (goAuth) | `AUTH_ENABLED=false` | see [Auth](#auth-goauth) | engine is nil when off; no auth routes are registered |
 | Auth features (register, reset, verification, TOTP) | `AUTH_*_ENABLED=false` (default) | see [Auth features](#individual-auth-features) | routes not registered when off |
 | WebAuthn | `WEBAUTHN_ENABLED=false` (default) | see [WebAuthn](#webauthn) | table always migrated, inert until enabled |
-| Tenancy | `TENANCY_ENABLED=false` (default) | see [docs/removing-tenancy.md](removing-tenancy.md) | off by default |
 | Document store | not wired by default | delete the folder | see [Document store](#optional-document-store) |
 | Response cache | `CACHE_ENABLED=false` | see [Cache](#response-cache) | policies degrade to pass-through |
 | Rate limiting | `RATELIMIT_ENABLED=false` | see [Rate limiting](#rate-limiting) | |
@@ -114,8 +121,11 @@ module registers no routes. Everything else runs.
 4. Delete `internal/modules/auth/` and its line in `internal/modules/modules.go`,
    `internal/core/notify/`, `cmd/createuser/`, and the `AuthUsers`/`Notifier`
    dependency fields.
-5. Delete the auth migrations (`000003`, `000004`, `000005`, `000006`, `000007`, `000008`),
-   `db/schema/auth_*.sql`, `db/schema/webauthn_credentials.sql`,
+5. Remove the `users`, TOTP and WebAuthn tables from the baseline migration
+   `db/migrations/000001_init` (both `.up.sql` and `.down.sql`; it is yours to
+   edit until your first deployment, after which you add a migration that drops
+   them), and delete any optional feature migration that alters `users`
+   together with that feature. Then delete `db/schema/auth_*.sql`, `db/schema/webauthn_credentials.sql`,
    `db/queries/auth_*.sql`, `db/queries/webauthn_credentials.sql`, and re-run
    `make sqlc-generate`.
 6. Remove the `policy.AuthRequired` / RBAC usage from any route, and drop the
@@ -142,9 +152,10 @@ off. To delete one:
   `AUTH_EMAIL_VERIFICATION_*` config.
 - **TOTP + backup codes:** the `mfa/totp/*` and `mfa/backup-codes/*` routes,
   handlers and service methods; `mfa_repository.go`, `secret_cipher.go` and the
-  TOTP provider methods (return the old stubs); migration 000006's
-  `user_totp`/`user_backup_codes` tables and `db/*/auth_mfa.sql`; the
-  `AUTH_TOTP_*` config. Keep `users.account_version`: goAuth needs it for
+  TOTP provider methods (return the old stubs); the `totp`-marked block of
+  `db/migrations/000001_init` (the `user_totp`/`user_backup_codes` tables) and
+  `db/*/auth_mfa.sql`; the `AUTH_TOTP_*` config. There is no `--no-*` flag for
+  this on a fresh clone. Keep `users.account_version`: goAuth needs it for
   status transitions.
 
 ## WebAuthn
@@ -153,8 +164,9 @@ WebAuthn is **off by default** (`WEBAUTHN_ENABLED=false`) and forces no schema.
 If you will never use it, delete it cleanly (see docs/enabling-webauthn.md,
 "Removing WebAuthn entirely"):
 
-- `db/migrations/000004_webauthn_credentials.*`, `db/schema/webauthn_credentials.sql`,
-  `db/queries/webauthn_credentials.sql` (then `make sqlc-generate`).
+- the `webauthn`-marked blocks of `db/migrations/000001_init` (up and down),
+  `db/schema/webauthn_credentials.sql` and `db/queries/webauthn_credentials.sql`
+  (then `make sqlc-generate`).
 - `internal/core/auth/webauthn_repository.go`, `provider_webauthn.go` and
   `config_webauthn.go`, plus the `webauthnRepo` field on `StoreUserProvider`.
 - The `WithWebAuthnRepository(...)` call in `deps.go` and the
@@ -189,13 +201,6 @@ ignored). Delete: remove `internal/core/notify/smtp.go`, `smtp_test.go`,
 stays; on a fresh clone `make init flags=--no-smtp` does all of this. Password
 reset and email verification then need a driver you register yourself.
 <!-- template:end smtp -->
-
-## Tenancy
-
-Off by default (`TENANCY_ENABLED=false`) and fully deletable. See the dedicated
-guide: **[docs/removing-tenancy.md](removing-tenancy.md)**.
-
----
 
 ## Optional document (NoSQL) store
 

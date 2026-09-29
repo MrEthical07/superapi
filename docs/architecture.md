@@ -59,6 +59,10 @@ High-impact paths:
 	  module imports it)
 - internal/core/auth
 	- goAuth integration, sqlc-backed user provider, auth repository
+- internal/features
+	- the one place that lists the optional features compiled into the binary
+- internal/<feature>
+	- one directory per optional feature, outside core (see section 13)
 - internal/modules
 	- feature modules and route registration
 
@@ -104,14 +108,16 @@ Order:
 	 - create redis client
 	 - register readiness probe
 4. Create metrics service.
-5. Parse auth mode; apply the tenancy flag (`TENANCY_ENABLED`).
+5. Load the optional features (each reads and lints its own settings and returns
+   its hooks); parse auth mode.
 6. If auth enabled:
 	 - create the auth user repository over the `storage.Postgres` boundary
-	 - create the sqlc-backed `StoreUserProvider` (tenancy flag, WebAuthn
-	   credential repository, and — with AUTH_TOTP_ENABLED — the MFA repository
-	   and TOTP secret cipher)
-	 - create the goAuth engine (v0.6.0) with Redis + provider + tenancy
-	   settings + auth feature flags
+	 - create the sqlc-backed `StoreUserProvider` (WebAuthn credential
+	   repository, and — with AUTH_TOTP_ENABLED — the MFA repository and TOTP
+	   secret cipher); a feature may wrap it and the user repository
+	 - create the goAuth engine (v0.6.0) with Redis + provider + auth feature
+	   flags + the features' goAuth config mutators
+	 - register the features' auth extensions on the engine
 7. If rate-limit enabled:
 	 - create redis limiter
 8. If cache enabled:
@@ -140,7 +146,8 @@ Execution order (outermost to innermost):
 7. RequestTimeout
 8. Tracing
 9. AccessLog
-10. Router dispatch
+10. Feature middleware (only when a feature contributes one)
+11. Router dispatch
 
 Why this order matters:
 
@@ -169,9 +176,11 @@ Validation code is in:
 Key validations:
 
 - policy stage ordering
-- auth prerequisites for RBAC/tenant policies
-- tenant path rules for routes with tenant_id path params
-- cache safety rules on authenticated routes (must vary by user or tenant)
+- auth prerequisites for RBAC policies
+- cache safety rules on authenticated routes (must vary by user or an
+  identity-bearing key part)
+- route rules contributed by optional features (`policy.RouteRule`), applied by
+  the router and by `superapi-verify`
 
 ## 5. Handler, Adapter, and Response Model
 
@@ -286,9 +295,10 @@ SuperAPI is on goAuth **v0.6.0**. The engine is built in
 internal/core/auth/goauth_provider.go and receives a `goauth.UserProvider`.
 
 Current provider implementation: internal/core/auth/provider_store.go
-(`StoreUserProvider`). It also implements goAuth's `TenantAwareUserProvider`
-(tenant-scoped lookups, required when `TENANCY_ENABLED=true`), the TOTP and
-backup-code methods, and `WebAuthnCredentialProvider`.
+(`StoreUserProvider`). It also implements the TOTP and backup-code methods and
+`WebAuthnCredentialProvider`. The provider is keyed by the user ids goAuth hands
+it; an optional feature that scopes users wraps it with a decorator (section
+13).
 
 Provider path (sqlc data layer):
 
@@ -300,9 +310,8 @@ internal/core/auth/config.go. HTTP endpoints live in `internal/modules/auth`
 (handler -> service -> engine). See [docs/auth-goauth.md](auth-goauth.md) and
 [docs/auth-flows.md](auth-flows.md).
 
-With tenancy on, `internal/core/tenant.Middleware` (installed innermost in the
-global middleware chain) resolves and validates the tenant and attaches it
-with `goauth.WithTenantID`; see [docs/multi-tenancy.md](multi-tenancy.md).
+Optional features attach to this path through the hooks in section 13: a goAuth
+config mutator, a provider decorator, feature middleware and auth extensions.
 
 ## 9. Route-Level Flow Examples
 
@@ -323,7 +332,7 @@ Runtime path:
 3. goAuth asks StoreUserProvider for the user by identifier
 4. provider calls the auth repository
 5. repository runs `pg.Queries(ctx).GetAuthUserByLogin(...)` on the pool
-   (`GetAuthUserByLoginInTenant` when tenancy is on)
+   (a feature that scopes users decorates the provider)
 6. the generated row maps back to a goAuth user record
 7. goAuth issues tokens, or returns an MFA challenge if a second factor is required
 
@@ -398,7 +407,163 @@ When changing architecture-sensitive code, keep these guardrails:
 - do not mix relational and document backends in one module
 - do not manually edit generated files under internal/core/db/sqlcgen
 
-## 13. Related Docs
+## 13. Optional features
+
+An optional feature is a capability that some projects want and others delete:
+the template ships one (the package listed first in
+[internal/features/features.go](../internal/features/features.go)) as the
+reference implementation. Core never imports a feature. A feature lives in its
+own package outside `internal/core`, loads and lints its own settings, and plugs
+into core through a small set of plain hooks that are applied once at startup.
+Nothing is registered globally at run time.
+
+### 13.1 The registration point
+
+`internal/features/features.go` returns the features compiled into the binary:
+
+```go
+func All() []app.Feature {
+	return []app.Feature{
+		myFeature(),
+	}
+}
+```
+
+`cmd/api` passes the list to `app.New(cfg, log, modules, features.All()...)`;
+`cmd/createuser` passes it to `app.NewDependencies`. Adding a feature is one line
+here; removing it is deleting the line and the feature's files. A feature is
+*compiled in* once registered and *switched on* by its own settings.
+
+### 13.2 The hooks
+
+A feature implements `app.Feature`:
+
+```go
+type Feature interface {
+	Name() string
+	Load(core *config.Config) (*app.Hooks, error)
+}
+```
+
+`Load` runs after core config is loaded and linted. It reads and lints the
+feature's own environment and returns the hooks, or `nil` when the feature
+contributes nothing for this configuration. Every field of `app.Hooks` is
+optional:
+
+| Hook | What it does | Where it is applied |
+|---|---|---|
+| Settings: `config.EnvString/EnvBool/EnvInt/EnvDuration/EnvCSV` inside `Load` | the feature loads its own keys instead of adding fields to `config.Config`; `superapi-verify` finds the keys wherever the package lives and still requires them in `.env.example` and `docs/environment-variables.md` | `Load` |
+| `Deprecations` | startup warnings for retired keys read with `config.EnvDeprecated` (documented, but exempt from `.env.example`) | `app.New` logs them |
+| `GoAuthConfig` (`auth.ConfigMutator`) | switches on the goAuth settings the feature owns | `auth.ProjectGoAuthConfig`, before goAuth's lint |
+| `UserProvider` | wraps the core `*auth.StoreUserProvider` (a decorator) | `initDependencies`, before the engine is built |
+| `UserRepository` | wraps the core `auth.UserRepository` modules receive as `Dependencies.AuthUsers` | `initDependencies` |
+| `Middleware` | global middleware at a fixed position: innermost, after RequestID/ClientIP/recovery/CORS/headers/limits/tracing/access log, just before routing | `httpx.WithFeatureMiddleware` |
+| `AuthExtension` (`policy.AuthExtension`) | `Attribute` adds a principal attribute (`auth.AuthContext.Attributes`, read with `principal.Attribute(key)`); `Check` runs after goAuth accepted the token and rejects with the same 401 as an invalid token | `policy.UseAuthExtensions(engine, ...)`, read by every `policy.AuthRequired` on that engine |
+| `RouteRules` (`policy.RouteRule`) | extra checks on every registered route | `Mux.UseRouteRules` |
+
+Rules the hooks rely on:
+
+- **A provider decorator must keep every optional goAuth interface.** goAuth
+  detects capabilities by type assertion (for example
+  `WebAuthnCredentialProvider`), so a wrapper that hides one silently disables
+  it. Embed the core provider (`*auth.StoreUserProvider`) so every method is
+  promoted, override only what the feature must change, and add a compile-time
+  assertion (`var _ goauth.WebAuthnCredentialProvider = (*Provider)(nil)`) for
+  each interface the core provider satisfies. At most one feature may wrap the
+  provider.
+- **Attributes carry feature data.** Core has no feature-specific principal
+  fields. `whoami` reports each attribute as an extra top-level field under its
+  own key, so a feature that is not registered adds nothing.
+- **Cache and rate limits use generic parts.** `cache.KeyPart{Name, Extract,
+  Identity}` goes on `cache.CacheVaryBy.Parts` (a key component) and
+  `cache.CacheTagSpec.Parts` (an invalidation tag component). `Identity: true`
+  marks a part that names who the response is for; the safety rule for cached
+  authenticated responses is "vary by `UserID` **or** an identity-bearing
+  part". A tag part that resolves to an empty value is an error, never an
+  unscoped tag. Rate limits use `ratelimit.Rule{Scope, Keyer}` with a
+  feature-defined `Scope` and `Keyer`.
+- **Policies annotate themselves.** A feature policy is registered with
+  `policy.Annotate(p, policy.Metadata{Type, Name, Stage, Data})`. `Stage` places
+  it in the order (`policy.StageIsolation` sits between auth and RBAC) and
+  `Data` carries what route rules need. Policies are keyed by their function
+  value, so each distinct policy needs its own function literal.
+- **Presets for a feature** build their chain from `policy.ResolvePreset(opts...)`
+  and validate it with `policy.MustValidatePreset`.
+- **Commands and tools extend through their own seams.** `app.UserCLI` adds flags
+  and steps to `cmd/createuser`; `modulegen.RegisterExtension` adds a scaffolding
+  option; `validator.RegisterExtension` teaches `superapi-verify` the feature's
+  policies, identity-bearing cache parts, rules and hints. The last two register
+  from an `init` in a file of the feature's own (they are build-time tools, not
+  part of the running server).
+
+### 13.3 Ownership and removal
+
+A feature owns everything that mentions it, so removing it is mechanical:
+
+- its package directory (`internal/<feature>/`), including its tests and any
+  test helper package;
+- files elsewhere whose **name contains the feature name**: its migration
+  (`db/migrations/NNNNNN_<feature>.*`), sqlc schema mirror (`db/schema/<feature>.sql`),
+  queries (`db/queries/<feature>.sql`) and generated code, the verifier and
+  scaffolder extension files, its docs (`docs/<feature>.md`,
+  `docs/removing-<feature>.md`), its workflow;
+- one registration line in `internal/features/features.go`, plus its own
+  settings block in `.env.example` and `docs/environment-variables.md`, each
+  wrapped in the feature's template marker comments (see `cmd/templateinit`).
+
+`cmd/templateinit` prunes a feature by deleting the directory and every file
+named after it (`feature.NameContains`) and stripping the marked blocks. CI runs
+that on a copy and requires the pruned project to build, vet, lint, verify and
+pass its tests with no mention of the feature left. Core code, docs and tests
+outside those files must therefore never name a feature; describe the generic
+mechanism and let the feature's own docs describe the feature.
+
+### 13.4 Adding a feature
+
+1. Create `internal/<feature>/` with a type implementing `app.Feature` whose
+   `Load` reads and lints its settings and returns only the hooks it needs.
+2. Put SQL in `db/migrations/NNNNNN_<feature>.*`, `db/schema/<feature>.sql` and
+   `db/queries/<feature>.sql`; run `make sqlc-generate`. Core queries must not
+   mention the feature's columns.
+3. Add its settings to `.env.example` and `docs/environment-variables.md` in a
+   marked block.
+4. Register it in `internal/features/features.go` (one line, in a marked block).
+5. Add `docs/<feature>.md` and `docs/removing-<feature>.md`, and a `NameContains`
+   entry in `cmd/templateinit/features.go` so `--no-<feature>` exists.
+6. Keep a test that proves the feature's isolation claims (what it rejects, what
+   it leaves alone when switched off) next to the code.
+
+A minimal feature that adds a region to the principal and to cached responses:
+
+```go
+package regions
+
+type Feature struct{}
+
+func (Feature) Name() string { return "regions" }
+
+func (Feature) Load(core *config.Config) (*app.Hooks, error) {
+	if !config.EnvBool("REGIONS_ENABLED", false) {
+		return nil, nil // as if it were not compiled in
+	}
+	return &app.Hooks{
+		AuthExtension: &policy.AuthExtension{
+			Attribute: func(r *goauth.AuthResult) (string, string) { return "region", regionOf(r.UserID) },
+		},
+	}, nil
+}
+
+// CacheVary is what modules put in VaryBy.Parts.
+func CacheVary() cache.KeyPart {
+	return cache.KeyPart{
+		Name:     "region",
+		Identity: true,
+		Extract:  func(_ *http.Request, p auth.AuthContext) string { return p.Attribute("region") },
+	}
+}
+```
+
+## 14. Related Docs
 
 - [docs/overview.md](overview.md)
 - [docs/modules.md](modules.md)

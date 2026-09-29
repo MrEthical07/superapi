@@ -31,7 +31,7 @@ Preview first with `make init module=... flags=--dry-run`. Optional pruning:
 
 | Flag | Removes |
 |---|---|
-| `--no-tenancy` | tenant resolution, tenants table, `TENANCY_*` config |
+| `--no-tenancy` | multi-tenancy: `internal/tenancy`, its migration (`000002`), sqlc schema and queries, `TENANCY_*` config and docs |
 | `--no-webauthn` | WebAuthn credential store, ceremonies, `WEBAUTHN_*` |
 | `--no-document-store` | the optional NoSQL store package |
 | `--no-smtp` | the built-in SMTP notifier and `SMTP_*` config |
@@ -43,7 +43,8 @@ Preview first with `make init module=... flags=--dry-run`. Optional pruning:
 
 Example: `make init module=github.com/acme/foo name="Foo API" flags="--no-perf --no-webauthn"`.
 Every combination leaves a project that passes its own gate (CI checks the
-default and `--no-all`).
+default, `--no-tenancy` and `--no-all`). `--no-webauthn` strips the marked
+WebAuthn blocks from `000001_init` instead of deleting a numbered migration.
 <!-- template:end init -->
 
 ## Start dependencies and configure
@@ -54,6 +55,18 @@ cp .env.example .env        # credentials already match docker-compose.yml
 make migrate-up             # uses POSTGRES_URL from .env
 ```
 
+### Your migrations
+
+The template ships two migrations in `db/migrations`: `000001_init` (the auth
+schema: users, TOTP, backup codes, WebAuthn) and, if you kept it, a second one
+for an optional feature (`000002_<feature>`). **They are yours to edit freely
+until your first deployment**: reshape `users`, add columns, delete the second
+migration if you do not need it, renumber as you like, and keep the sqlc schema
+mirror in `db/schema` in step. **After your first deployment migrations are
+append-only**: never edit or renumber a file that has been applied anywhere;
+add a new one with `make migrate-create NAME=add_projects_table`, which numbers
+it after the last. See [workflows.md](workflows.md#51-migration-flow).
+
 ## Create the first user
 
 ```bash
@@ -61,8 +74,8 @@ make user email=admin@example.com role=admin
 # Password: (prompted, not echoed)
 ```
 
-See [auth-bootstrap.md](auth-bootstrap.md) for piping the password, tenants
-and roles.
+See [auth-bootstrap.md](auth-bootstrap.md) for piping the password, extra
+flags (`make user email=... flags="..."`) and roles.
 
 ## Run
 
@@ -92,7 +105,8 @@ NOTIFY_LOG_SECRETS=true      # dev only: log the full secret
 ```
 
 Reset and verification messages need a real `notify.Notifier` in production;
-see [auth-flows.md](auth-flows.md). Multi-tenancy: [multi-tenancy.md](multi-tenancy.md).
+see [auth-flows.md](auth-flows.md). Optional features:
+[architecture.md](architecture.md#13-optional-features).
 
 ## Build your first module
 

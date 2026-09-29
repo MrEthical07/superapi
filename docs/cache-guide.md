@@ -64,7 +64,7 @@ Canonical parts are appended in deterministic order:
 
 1. `route=...`
 2. `method=...` when `VaryBy.Method`
-3. `tenant=...` when `VaryBy.TenantID`
+3. `{part.Name}=...` for each entry of `VaryBy.Parts`, in the order listed (see [Key parts](#key-parts))
 4. `user=...` when `VaryBy.UserID`
 5. `role=...` when `VaryBy.Role`
 6. `path.{name}=...` for configured path params
@@ -76,6 +76,51 @@ Canonical parts are appended in deterministic order:
 Then:
 - `SHA-256(canonical)` is computed
 - first 16 bytes are hex-encoded as `short_hash`
+
+---
+
+## Key parts
+
+Core varies keys by method, user, role, path params, query params and headers.
+Anything else (an organization id, a region, a plan) comes from a
+`cache.KeyPart`, which an optional feature exports for its own dimension:
+
+```go
+type KeyPart struct {
+    Name     string                                            // renders "name=<value>"; letters, digits, _ - .
+    Extract  func(r *http.Request, p auth.AuthContext) string  // must be cheap and must not block
+    Identity bool                                              // names who the response is for
+}
+```
+
+A part rides on `cache.CacheVaryBy{Parts: ...}` (a component of the response
+key) and on `cache.CacheTagSpec{Parts: ...}` (a component of an invalidation
+tag). An empty value is tolerated in a key but is an error in a tag, because a
+write that cannot be scoped must not silently invalidate nothing.
+
+`Identity: true` marks a part that names who the response is for. It satisfies
+the authenticated-cache rule below (a cached authenticated response must vary
+by `UserID` or by an identity-bearing part).
+
+The examples in this guide use a hypothetical feature package `orgs` that
+exports one part for both uses:
+
+```go
+package orgs
+
+func CacheVary() cache.KeyPart { return orgPart() }
+func CacheTag() cache.KeyPart  { return orgPart() }
+
+func orgPart() cache.KeyPart {
+    return cache.KeyPart{
+        Name:     "org",
+        Identity: true,
+        Extract: func(_ *http.Request, p auth.AuthContext) string {
+            return p.Attribute("org_id") // attribute set by the feature's policy.AuthExtension
+        },
+    }
+}
+```
 
 ---
 
@@ -101,16 +146,16 @@ TagSpecs []cache.CacheTagSpec
 type CacheTagSpec struct {
     Name       string
     PathParams []string
-    TenantID   bool
     UserID     bool
+    Parts      []cache.KeyPart
     Literals   []cache.CacheTagLiteral
 }
 ```
 
 V1 supports only:
 - path params
-- auth tenant id
 - auth user id
+- feature key parts (`Parts`)
 - literal key/value dimensions
 
 Query/header-derived tag params are intentionally blocked in v1 to avoid cardinality explosion.
@@ -147,9 +192,9 @@ Use precise scopes to avoid over-invalidation.
 | Route type | Recommended tag spec |
 |---|---|
 | Detail endpoint | `Name: "project", PathParams: ["id"]` |
-| Tenant list endpoint | `Name: "project-list", TenantID: true` |
+| Org-scoped list endpoint | `Name: "project-list", Parts: [orgs.CacheTag()]` |
 | User self endpoint | `Name: "user-profile", UserID: true` |
-| Cross-entity list | `Name: "dashboard-list", TenantID: true, Literals: [{Key:"view",Value:"summary"}]` |
+| Cross-entity list | `Name: "dashboard-list", Parts: [orgs.CacheTag()], Literals: [{Key:"view",Value:"summary"}]` |
 
 ### Write route best practice
 
@@ -161,27 +206,27 @@ Example for project update:
 policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
     TagSpecs: []cache.CacheTagSpec{
         {Name: "project", PathParams: []string{"id"}},
-        {Name: "project-list", TenantID: true},
+        {Name: "project-list", Parts: []cache.KeyPart{orgs.CacheTag()}},
     },
 })
 ```
 
-This invalidates the updated project detail and tenant list keys without evicting unrelated projects from other ids.
+This invalidates the updated project detail and org list keys without evicting unrelated projects from other ids.
 
 ---
 
 ## Practical examples
 
-### Tenant project list read cache
+### Org-scoped project list read cache
 
 ```go
 policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
     TTL: 30 * time.Second,
     TagSpecs: []cache.CacheTagSpec{
-        {Name: "project-list", TenantID: true},
+        {Name: "project-list", Parts: []cache.KeyPart{orgs.CacheTag()}},
     },
     VaryBy: cache.CacheVaryBy{
-        TenantID:    true,
+        Parts:       []cache.KeyPart{orgs.CacheVary()},
         QueryParams: []string{"limit", "cursor"},
     },
 })
@@ -196,7 +241,7 @@ policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
         {Name: "project", PathParams: []string{"id"}},
     },
     VaryBy: cache.CacheVaryBy{
-        TenantID:   true,
+        Parts:      []cache.KeyPart{orgs.CacheVary()},
         PathParams: []string{"id"},
     },
 })
@@ -208,7 +253,7 @@ policy.CacheRead(m.cacheMgr, cache.CacheReadConfig{
 policy.CacheInvalidate(m.cacheMgr, cache.CacheInvalidateConfig{
     TagSpecs: []cache.CacheTagSpec{
         {Name: "project", PathParams: []string{"id"}},
-        {Name: "project-list", TenantID: true},
+        {Name: "project-list", Parts: []cache.KeyPart{orgs.CacheTag()}},
     },
 })
 ```
@@ -239,7 +284,7 @@ Cache write is bypassed when:
 5. Response is streaming/hijacked
 
 Auth safety rule still applies:
-- authenticated route cache requires `VaryBy.UserID` or `VaryBy.TenantID`.
+- authenticated route cache requires `VaryBy.UserID` or an identity-bearing `VaryBy.Parts` entry (`Identity: true`).
 
 ---
 

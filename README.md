@@ -1,7 +1,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.27+-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 <!-- template:begin maintainer -->
-[![Release](https://img.shields.io/badge/release-v0.10.0-brightgreen)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.11.0-brightgreen)](CHANGELOG.md)
 <!-- template:end maintainer -->
 
 # SuperAPI
@@ -51,7 +51,7 @@ API with Postgres, Redis, auth, cache and rate limiting disabled (values in
 
 - **Module architecture** with an enforced data flow: handler -> service ->
   repository -> sqlc -> pgx, checked by a static verifier (`superapi-verify`).
-- **Policy-ordered routes**: auth, tenant, RBAC, rate limit, cache and
+- **Policy-ordered routes**: auth, isolation, RBAC, rate limit, cache and
   cache-control are declared per route and validated statically.
 - **A complete auth lifecycle** on [goAuth](https://github.com/MrEthical07/goAuth)
   v0.6.0: login with remember-me, refresh, logout, logout-everywhere, sessions,
@@ -59,9 +59,6 @@ API with Postgres, Redis, auth, cache and rate limiting disabled (values in
   verification, TOTP with backup codes, and WebAuthn. Enumeration-safe
   responses; secrets are delivered out-of-band, never in HTTP responses. See
   [docs/auth-flows.md](docs/auth-flows.md).
-- **Multi-tenancy that is safe to turn on**: tenant resolution (header or
-  subdomain), validation, tenant-scoped user lookup and token binding behind
-  `TENANCY_ENABLED`. Off by default. See [docs/multi-tenancy.md](docs/multi-tenancy.md).
 - **Redis-backed response cache and rate limiting** with explicit `VaryBy` and
   tag invalidation.
 - **Observability**: Prometheus metrics, OpenTelemetry tracing, structured logs.
@@ -80,7 +77,7 @@ API with Postgres, Redis, auth, cache and rate limiting disabled (values in
 |---|---|
 | **Auth lifecycle is more than login.** Registration, reset, verification, MFA, sessions, key rotation, abuse limiting — hand-rolling these is where security bugs live. | goAuth v0.6.0 wired end to end: every lifecycle endpoint, feature-flagged, enumeration-safe, with TOTP secrets encrypted at rest. |
 | **Cache and rate-limit keys are a footgun.** | Policy-driven caching and rate limiting with explicit `VaryBy`/scope keying and tag-based invalidation. |
-| **Multi-tenancy is hard to add later and risky to get wrong.** | One `TENANCY_ENABLED` flag: validated tenant resolution, tenant-scoped goAuth lookups (the v0.5.0 cross-tenant fixes), token-to-tenant binding. |
+| **Optional capabilities tangle the core.** | Optional features plug in through generic core hooks (auth extensions, route rules, cache key parts, middleware) and live in their own packages, so a feature you do not need is deleted, not worked around. |
 | **Data-access discipline erodes.** | One enforced flow checked by `superapi-verify`. |
 | **Misconfiguration ships silently.** | Fail-fast startup lint; CI fails when an env var is read but undocumented. |
 | **Templates lock you in.** | `make init --no-*` prunes whole features; the rest disable by config. |
@@ -130,9 +127,7 @@ Guides: [docs/modules.md](docs/modules.md),
 - Policies: [docs/policies.md](docs/policies.md)
 - Cache guide: [docs/cache-guide.md](docs/cache-guide.md)
 - Auth: [docs/auth-flows.md](docs/auth-flows.md), [docs/auth-goauth.md](docs/auth-goauth.md), [docs/auth-bootstrap.md](docs/auth-bootstrap.md)
-<!-- template:begin tenancy -->
-- Multi-tenancy: [docs/multi-tenancy.md](docs/multi-tenancy.md), [docs/removing-tenancy.md](docs/removing-tenancy.md)
-<!-- template:end tenancy -->
+- Optional features and how they plug in: [docs/architecture.md](docs/architecture.md#13-optional-features) (each feature has its own guide under `docs/`)
 <!-- template:begin webauthn -->
 - WebAuthn: [docs/enabling-webauthn.md](docs/enabling-webauthn.md)
 <!-- template:end webauthn -->
@@ -174,7 +169,7 @@ an open-source authentication engine.
   receive automatic upstream updates.
 - Upgrades are manual: compare changes, port intentionally, and validate with
   tests and the verifier. The CHANGELOG lists behavior changes per release.
-- Current public template baseline: v0.10.0 (pre-1.0 by intent).
+- Current public template baseline: v0.11.0 (pre-1.0 by intent).
 
 ## Release Hygiene
 

@@ -19,21 +19,22 @@ enumeration-safety guarantees.
   in request body` (with `error.details.field` naming the field, for example
   `address.zip`), `request body must contain a single JSON object` (trailing
   data), `request body too large`, and `invalid JSON body` for anything else.
-  All are 400 `bad_request`.
-- With `TENANCY_ENABLED=true` every request (except `/healthz`, `/readyz`,
-  `/metrics`) needs a tenant (default header `X-Tenant-ID`); see
-  [multi-tenancy.md](multi-tenancy.md).
+  All are 400 `bad_request`. JSON bodies are always size-capped
+  (`HTTP_MIDDLEWARE_MAX_BODY_BYTES`, or 1 MiB when that is 0).
+- Optional features can add request-level requirements (for example a scope
+  every request must carry) and extra rejection cases; see the feature's own
+  guide. Rejections at authentication time always use the same 401.
 - Identifiers are **case-insensitive**. The module trims and lower-cases every
   identifier (register, login, password-reset and email-verification requests,
   and `make user`) before it reaches goAuth, so `Alice@Example.com` and
   `alice@example.com` are one account and share goAuth's per-identifier
-  limiters. Migration 000007 lower-cases stored emails and adds a unique index
-  on `lower(email)`; it refuses to run if two existing accounts differ only by
-  case (see the comment at the top of the migration for how to resolve them).
+  limiters. The baseline schema enforces this in the database too: `users.email`
+  has `CHECK (email = lower(email))` and a unique index on `lower(email)`
+  ([auth-bootstrap.md](auth-bootstrap.md)).
 - Endpoint groups that are disabled are **not registered**: they return 404
   like any unknown route. With `AUTH_ENABLED=false` no auth route exists.
 - Public endpoints are protected by goAuth's built-in abuse limiters (per
-  tenant + identifier and IP). The handler passes client IP and User-Agent to
+  identifier and IP). The handler passes client IP and User-Agent to
   goAuth. `whoami` and `password/change` also get the route rate limiter when
   `RATELIMIT_ENABLED=true`.
 
@@ -57,10 +58,9 @@ Related: `AUTH_REGISTRATION_AUTO_LOGIN`, `AUTH_EMAIL_VERIFICATION_REQUIRED`,
 | HTTP | `error.code` | When |
 |---|---|---|
 | 400 | `bad_request` | missing/oversized fields, unknown fields, invalid or expired challenge, invalid code, password policy/reuse, wrong current password |
-| 400 | `bad_request` `tenant required` / `tenant invalid` | tenancy on and no/malformed tenant |
-| 401 | `unauthorized` | bad credentials (including a wrong step-up `password`), bad refresh/access token, token from another tenant |
+| 401 | `unauthorized` | bad credentials (including a wrong step-up `password`), bad refresh/access token |
 | 403 | `forbidden` `authentication state rejected` | account pending verification, disabled, locked |
-| 404 | `not_found` | feature disabled; tenant unknown or inactive |
+| 404 | `not_found` | feature disabled |
 | 409 | `conflict` | TOTP already enabled (setup) or not enabled (disable/regenerate) |
 | 429 | `too_many_requests` | goAuth abuse limiter (including the password-verify limiter behind step-up and `password/change`) or route rate limiter |
 | 503 | `dependency_unavailable` | Redis/Postgres/goAuth backend unavailable |
@@ -86,8 +86,9 @@ or, when the account has TOTP (or WebAuthn) and a second factor is required,
 {"mfa_required": true, "mfa_challenge": "…", "mfa_type": "totp", "mfa_types": ["totp"]}
 ```
 
-Wrong password, unknown user and (with tenancy) a user from another tenant all
-return the same 401 `invalid credentials`.
+Wrong password and unknown user return the same 401 `invalid credentials`.
+An optional feature that scopes accounts keeps that: a user outside the request
+scope gets the same response.
 
 ### POST /api/v1/auth/mfa/confirm
 
@@ -112,7 +113,7 @@ Accepts an expired-but-authentic token.
 
 | Endpoint | Body | Response |
 |---|---|---|
-| `GET /api/v1/auth/whoami` | — | `{"user_id","tenant_id","role","permissions"}` |
+| `GET /api/v1/auth/whoami` | — | `{"user_id","role","permissions"}` plus one top-level field per attribute an optional feature attached to the principal |
 | `GET /api/v1/auth/sessions` | — | `{"sessions":[{"session_id","created_utc","expires_utc"}]}` |
 | `POST /api/v1/auth/logout/all` | — | `{"logged_out": true}`; revokes every session of the user |
 | `POST /api/v1/auth/password/change` | `{"current_password","new_password"}` | `{"changed": true}`; wrong current password -> 400 |
@@ -149,7 +150,7 @@ address that someone tried to register it.
 `{"identifier": "…"}` -> always **202** `{"accepted": true}`. goAuth returns a
 synthetic challenge for unknown identifiers (and sleeps to equalize timing). The
 real challenge is delivered through the notifier only when the account exists
-(in the request tenant), asynchronously so response time does not depend on it.
+(in the request scope, when a feature defines one), asynchronously so response time does not depend on it.
 The challenge is **never** in the response. Rate limited -> 429.
 
 ### POST /api/v1/auth/password/reset/confirm
@@ -180,7 +181,7 @@ real record.
 Either the full challenge from the message:
 
 ```json
-{"challenge": "tenant:verification-id:code"}
+{"challenge": "<opaque string from the message>"}
 ```
 
 or its parts (preferred by goAuth, since the code is then never inside an
@@ -190,9 +191,10 @@ opaque string that might be logged):
 {"verification_id": "…", "code": "…"}
 ```
 
--> `{"confirmed": true}`. The full-challenge form carries its own tenant and
-works regardless of the request tenant; the id+code form uses the request
-tenant.
+-> `{"confirmed": true}`. The full-challenge form is self-contained (goAuth
+encodes its lookup scope in it) and works regardless of any request-level
+scope an optional feature adds; the id+code form is resolved in the request's
+scope.
 
 ## TOTP and backup codes (`AUTH_TOTP_ENABLED`)
 

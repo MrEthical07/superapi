@@ -169,7 +169,6 @@ TRACING_INSECURE=false
 | `AUTH_TEST_*` | unset (refused outside dev/test) | Switch signing to a shared HS256 secret; perf-only. |
 | `NOTIFY_DRIVER` | a real notifier, never `log` | Reset/verification secrets must reach only the account owner. |
 | `NOTIFY_LOG_SECRETS` | `false` (refused outside dev) | Logs would contain account-takeover secrets. |
-| `TENANCY_VALIDATE` | `true` when tenancy is on | Rejects unknown/inactive tenants before any auth work. |
 | `HTTP_TRUSTED_PROXIES` | your proxy CIDRs only | Client IP feeds goAuth's abuse limiters and audit trail. |
 
 #### Rotating the TOTP encryption key

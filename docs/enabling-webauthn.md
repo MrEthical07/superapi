@@ -14,9 +14,10 @@ active until you enable it. This page covers what ships and how to turn it on.
   finish, list credentials, remove credential), auth-protected. While WebAuthn
   is disabled these return a "webauthn disabled" error (403-class), so they act
   as a working, self-documenting example.
-- Migration `db/migrations/000004_webauthn_credentials.up.sql` and its sqlc
-  schema mirror + queries. It is **always applied** by `make migrate-up` and
-  stays inert until WebAuthn is enabled.
+- The `webauthn_credentials` table, in the `webauthn`-marked block of the
+  baseline migration `db/migrations/000001_init.up.sql`, and its sqlc schema
+  mirror (`db/schema/webauthn_credentials.sql`) + queries. It is **always
+  applied** by `make migrate-up` and stays inert until WebAuthn is enabled.
 
 Because goAuth only requires the WebAuthn credential capability when
 `WebAuthn.Enabled` is true, shipping the provider methods and endpoints while
@@ -24,8 +25,8 @@ disabled is safe — `Build()` does not fail.
 
 ## Step 1 — make sure migrations are applied
 
-`make migrate-up` (it applies 000004 along with every other migration; nothing
-extra to do).
+`make migrate-up` (it applies `000001_init`, which includes the WebAuthn table,
+along with every other migration; nothing extra to do).
 
 ## Step 2 — enable via config
 
@@ -72,8 +73,10 @@ state in Redis under the `awn:` prefix.
 On a fresh clone, `make init flags=--no-webauthn` does all of this.
 <!-- template:end init -->
 
-Otherwise delete the migration (only on databases that never applied it),
-schema mirror and queries (`*webauthn_credentials*`, then `make sqlc-generate`),
+Otherwise delete the `webauthn`-marked block from `db/migrations/000001_init`
+(up and down; the baseline is yours to edit only until your first deployment,
+after which you add a migration that drops the table instead), the schema
+mirror and queries (`*webauthn_credentials*`, then `make sqlc-generate`),
 `internal/core/auth/webauthn_repository.go`, `provider_webauthn.go`,
 `config_webauthn.go`, the `webauthnRepo` field and `WithWebAuthnRepository` call
 in `deps.go`, the `applyWebAuthnConfig` call in `internal/core/auth/config.go`,

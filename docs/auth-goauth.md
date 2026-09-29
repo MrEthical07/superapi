@@ -7,7 +7,7 @@ version, rather than copied into this repository.
 
 - Endpoints, request/response shapes, flags and error codes: [docs/auth-flows.md](auth-flows.md)
 - Creating users, the users schema, roles: [docs/auth-bootstrap.md](auth-bootstrap.md)
-- Multi-tenant auth: [docs/multi-tenancy.md](multi-tenancy.md)
+- Optional features and the hooks they use: [docs/architecture.md](architecture.md#13-optional-features)
 - WebAuthn: [docs/enabling-webauthn.md](enabling-webauthn.md)
 
 ## 1. goAuth reference (pinned to v0.6.0)
@@ -20,11 +20,10 @@ Base: <https://github.com/MrEthical07/goAuth/tree/v0.6.0/docs>
 | Config lint codes | [config_lint.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/config_lint.md) | startup `goauth config lint` warnings |
 | Engine API | [api-reference.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/api-reference.md) | method signatures the auth module calls |
 | Flows | [flows.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/flows.md) | login, refresh, MFA, reset, verification sequences |
-| Multi-tenancy | [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/multi_tenancy.md) | `TenantAwareUserProvider` contract, enforced paths |
 | MFA / TOTP / backup codes | [mfa.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/mfa.md) | TOTP setup, replay protection, backup codes |
 | Password reset | [password_reset.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/password_reset.md) | strategies (token/OTP/UUID), limits |
 | Email verification | [email_verification.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/email_verification.md) | challenge format, enumeration resistance |
-| Sessions | [session.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/session.md) | remember-me, ceilings, tenant-scoped keys |
+| Sessions | [session.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/session.md) | remember-me, ceilings |
 | JWT and key rotation | [jwt.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/jwt.md) | `AUTH_KEY_ID` / `AUTH_VERIFY_KEYS` |
 | Rate limiting | [rate_limiting.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/rate_limiting.md) | the abuse limiters that protect public auth routes |
 | WebAuthn | [webauthn.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/webauthn.md) | ceremonies and the credential provider |
@@ -41,12 +40,12 @@ When you bump goAuth, update the version in these links together with `go.mod`.
 | goAuth config (the customization point) | `internal/core/auth/config.go` |
 | Roles and permissions | `internal/core/auth/roles.go` |
 | Engine construction | `internal/core/auth/goauth_provider.go` |
-| User provider (`UserProvider`, `TenantAwareUserProvider`, TOTP/backup codes) | `internal/core/auth/provider_store.go` |
+| Core user provider (`UserProvider`, TOTP/backup codes; scope-free) | `internal/core/auth/provider_store.go` |
 | WebAuthn provider methods | `internal/core/auth/provider_webauthn.go`, `webauthn_repository.go` |
 | Users repository (sqlc) | `internal/core/auth/user_repository.go` |
 | TOTP / backup-code repository (sqlc) | `internal/core/auth/mfa_repository.go` |
 | TOTP secret encryption at rest | `internal/core/auth/secret_cipher.go` |
-| Request tenant for goAuth | `internal/core/auth/tenant_context.go` |
+| Feature hooks (provider decorator, goAuth config mutator, auth extension) | `internal/core/app/feature.go`, `internal/features/features.go` |
 | HTTP endpoints (handler -> service -> engine) | `internal/modules/auth/` |
 | Reset / verification delivery | `internal/core/notify/` |
 | Route auth policy | `internal/core/policy/auth.go` |
@@ -66,13 +65,16 @@ With `AUTH_ENABLED=true` (requires `POSTGRES_ENABLED` and `REDIS_ENABLED`),
 `internal/core/app/deps.go`:
 
 1. builds `UserRepository` over the `storage.Postgres` boundary;
-2. builds `StoreUserProvider` with `WithTenancy(TENANCY_ENABLED)` and the
-   WebAuthn repository;
+2. builds `StoreUserProvider` with the WebAuthn repository;
 3. when `AUTH_TOTP_ENABLED=true`, attaches the MFA repository and the
    AES-256-GCM cipher keyed by `AUTH_TOTP_ENCRYPTION_KEY`;
-4. calls `auth.NewGoAuthEngine(redis, mode, tenancy, features, provider)`,
-   which runs `ProjectGoAuthConfig`, goAuth's config lint (high-severity
-   findings fail startup) and `Builder.Build()`.
+4. lets each registered optional feature (`internal/features/features.go`)
+   contribute through `app.Hooks`: a `UserProvider` decorator that wraps the
+   core provider, `GoAuthConfig` mutators, and a `policy.AuthExtension`;
+5. calls `auth.NewGoAuthEngine(redis, mode, features, provider, mutators...)`,
+   which runs `ProjectGoAuthConfig`, the mutators, goAuth's config lint
+   (high-severity findings fail startup) and `Builder.Build()`, then registers
+   the extensions with `policy.UseAuthExtensions(engine, ...)`.
 
 `cmd/createuser` calls the same `app.NewDependencies`, so tools build an
 identical engine.
@@ -82,13 +84,14 @@ identical engine.
 
 ## 4. Configuration map
 
-`ProjectGoAuthConfig(mode, tenancy, features)` starts from
-`goauth.DefaultConfig()` and applies:
+`ProjectGoAuthConfig(mode, features, mutators...)` starts from
+`goauth.DefaultConfig()`, applies the table below, then runs the feature
+mutators (`auth.ConfigMutator`, one per feature that needs goAuth settings of
+its own):
 
 | SuperAPI setting | goAuth field(s) |
 |---|---|
 | `AUTH_MODE` | `ValidationMode` |
-| `TENANCY_ENABLED` | `MultiTenant.Enabled` (the deprecated no-op `EnforceIsolation`/`TenantHeader` are left unset) |
 | `AUTH_REGISTRATION_AUTO_LOGIN` | `Account.AutoLogin` (`Account.Enabled` is always on so `make user` works) |
 | `AUTH_PASSWORD_RESET_ENABLED` | `PasswordReset.Enabled` |
 | `AUTH_EMAIL_VERIFICATION_ENABLED` / `_REQUIRED` | `EmailVerification.Enabled` / `RequireForLogin` |
@@ -106,19 +109,18 @@ choices (token TTLs, reset/verification strategy, `Security.ProductionMode`, …
 
 `policy.AuthRequired(engine, mode)` validates the bearer token through goAuth's
 middleware guard, returns 401 on failure, and injects `auth.AuthContext`
-(`UserID`, `TenantID`, `Role`, `Permissions`) for downstream policies and
-handlers. With tenancy on it also rejects a token whose tenant differs from the
-resolved request tenant (see docs/multi-tenancy.md). Never parse tokens in
-module code.
-
-With tenancy **off**, goAuth stamps its default tenant `"0"` into every token,
-so `AuthContext.TenantID` (and `whoami`'s `tenant_id`) is `"0"`. This is
-unchanged since v0.8.0.
+(`UserID`, `Role`, `Permissions`, `Attributes`) for downstream policies and
+handlers. Optional features take part through a `policy.AuthExtension`: it adds
+principal attributes (read with `principal.Attribute(key)`) and can run a
+post-authentication check that rejects the request with the same 401. See
+[policies.md](policies.md). Never parse tokens in module code.
 
 ## 6. Provider behavior worth knowing
 
-- **Tenant-scoped lookups.** `GetUserByIdentifierInTenant` / `GetUserByIDInTenant`
-  constrain the query in SQL and treat an empty tenant as not found.
+- **Scope-free core.** The core provider looks users up by identifier or id
+  with no extra scoping. A feature that scopes accounts wraps it with a
+  `UserProvider` decorator that keeps every optional goAuth interface the core
+  provider implements (goAuth detects capabilities by type assertion).
 - **Duplicates.** A unique violation on `users.email` maps to
   `goauth.ErrProviderDuplicateIdentifier`. goAuth reports `ErrAccountExists`
   after hashing the password, so duplicate and fresh registrations take similar
@@ -134,10 +136,10 @@ unchanged since v0.8.0.
   SQL update only moves `last_used_counter` forward.
 - **Backup codes** are SHA-256 hashes, consumed with one `UPDATE … WHERE used_at
   IS NULL`, so a code works once even under concurrent use.
-- `UpdatePasswordHash` and `UpdateAccountStatus` are keyed by user UUID. goAuth
-  always resolves the user in-tenant first, and email-verification confirm
-  intentionally runs under the challenge's tenant, so these do not re-scope by
-  the request tenant.
+- `UpdatePasswordHash`, `UpdateAccountStatus` and the MFA queries are keyed by
+  user UUID. goAuth resolves the user through the lookup first, so the core SQL
+  does not re-scope them; a feature that scopes accounts scopes the few calls
+  goAuth makes without that lookup in its own provider decorator.
 
 ## 7. Security rules for extensions
 
@@ -146,7 +148,7 @@ unchanged since v0.8.0.
 - Keep request endpoints enumeration-safe: the same status and body whether or
   not the account exists.
 - Never accept a role from client input on public endpoints.
-- Never expose goAuth audit events to end users or tenant admins; the audit
+- Never expose goAuth audit events to end users or your own product admins; the audit
   stream distinguishes cases responses deliberately hide.
 - Compare secrets you handle yourself with `crypto/subtle`.
 
@@ -154,10 +156,10 @@ unchanged since v0.8.0.
 
 | Symptom | Check |
 |---|---|
-| Startup: `MultiTenant is enabled but the user provider does not implement TenantAwareUserProvider` | a custom provider replaced `StoreUserProvider` without the tenant methods |
+| Startup: goAuth rejects the provider for a missing optional interface | a custom provider replaced `StoreUserProvider` (or a feature's decorator) without the optional goAuth interfaces it implements |
 | Startup: `AUTH_TOTP_ENABLED requires AUTH_TOTP_ENCRYPTION_KEY` | generate one: `openssl rand -base64 32` |
 | Startup: `AUTH_TEST_SHARED_SECRET is only allowed with APP_ENV=dev or APP_ENV=test` | remove `AUTH_TEST_*` outside dev/test |
-| Login 401 for a user that exists | tenancy on and wrong `X-Tenant-ID`, wrong password, or account locked (403) |
+| Login 401 for a user that exists | wrong password, or a scope an optional feature requires is missing or wrong |
 | Login 403 `authentication state rejected` | account pending verification, disabled or locked |
-| Every protected route 401 | token sent as `Authorization: Bearer …`? tenancy on and token from another tenant? |
+| Every protected route 401 | token sent as `Authorization: Bearer …`? expired? a feature's auth extension rejecting it? |
 | `goauth config lint` warnings at startup | see goAuth [config_lint.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/config_lint.md); only high severity fails startup |

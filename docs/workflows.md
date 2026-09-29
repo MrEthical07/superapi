@@ -101,7 +101,22 @@ context-threading gotcha.
 
 ### 5.1 Migration flow
 
-Create migration:
+The template ships `000001_init` (the auth schema) and an optional second
+migration for an optional feature. **They are yours to edit freely until your
+first deployment**: reshape `users`, delete the second migration if you do not
+need it, keep `db/schema` (the sqlc mirror) in step. **After your first
+deployment migrations are append-only**: a migration that has been applied
+anywhere is never edited or renumbered; the next change is a new file.
+
+Existing projects that were created from an earlier template version keep
+their own migration history. Never copy the shipped `000001`/`000002` files over
+a database that already ran the older numbered files (or replace your own
+history with them). golang-migrate stores only the current version number in
+`schema_migrations`; a database that ran the old eight files is at version 8,
+and `migrate up` then fails with `no migration found for version 8: read down
+for version 8 .: file does not exist`, because no file carries that version.
+
+Create migration (numbered after the highest existing file):
 
 ```bash
 make migrate-create NAME=add_projects_table
@@ -144,8 +159,8 @@ Runtime sequence:
 
 - app wiring creates the auth repository over the `storage.Postgres` boundary
 - app wiring creates the sqlc-backed `StoreUserProvider` from the repository
-- the goAuth engine (v0.6.0) is built with Redis + provider + tenancy settings
-  + auth feature flags
+- the goAuth engine (v0.6.0) is built with Redis + provider + auth feature flags
+  + the config mutators optional features contribute
 
 Create a user first: `make user email=you@example.com`.
 
@@ -213,7 +228,7 @@ Action:
 Likely causes:
 
 - policies attached in wrong order
-- missing tenant policy for tenant route
+- a feature isolation policy missing on a route that needs it
 - cache vary dimensions unsafe for authenticated route
 
 Action:

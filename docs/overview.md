@@ -9,7 +9,7 @@ This page is intentionally beginner-friendly. If you are new to this repository,
 Out of the box, SuperAPI provides:
 
 - A module-based API structure so features are isolated and easy to maintain.
-- A policy system for route behavior (auth, tenant, RBAC, rate-limit, cache, cache-control).
+- A policy system for route behavior (auth, isolation, RBAC, rate-limit, cache, cache-control).
 - A standard response envelope and typed application errors.
 - Built-in goAuth integration for login, refresh, and protected routes.
 - Redis-backed response caching and rate limiting.
@@ -25,7 +25,7 @@ problems every time. SuperAPI solves them and enforces the solution:
 
 - **Auth is a lifecycle, not a login handler.** goAuth v0.6.0 gives you login, refresh, logout, sessions, password change, and opt-in registration, password reset, email verification, TOTP + backup codes and WebAuthn, all wired as feature-flagged endpoints — not a JWT snippet you grow yourself.
 - **Cache/rate-limit keys are a footgun.** Keying is declared per route (explicit `VaryBy`/scope + tag invalidation), so you don't leak one user's cached response to another.
-- **Multi-tenancy is risky to retrofit.** It lives behind one `TENANCY_ENABLED` flag with clean seams: zero cost when off, first-class isolation when on, deletable if never needed.
+- **Optional capabilities tangle the core.** Optional features live in their own packages and plug in through generic core hooks (auth extensions, route rules, cache key parts, middleware), so a feature you do not need is deleted rather than worked around.
 - **Data-access discipline erodes.** One enforced flow (Service → Repository → sqlc → pgx) is checked by a static verifier that fails the build on violations — there is no second pattern to drift toward.
 - **Misconfiguration ships silently.** Startup linting rejects unsafe/contradictory config before the server takes traffic.
 - **Observability is always "later".** Metrics, tracing, and structured logs are wired in from day one.
