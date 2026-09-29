@@ -10,14 +10,17 @@ permissions:
 
 jobs:
   # template:begin init
-  # Runs `make init` against a copy of the template for the default and the
-  # everything-pruned combinations, then that project's own gate.
+  # Runs `make init` against a copy of the template for the default, the
+  # no-tenancy and the everything-pruned combinations, then that project's own
+  # gate. A project without tenancy must not mention it anywhere but the
+  # CHANGELOG; .github/tenancy-allowlist.txt lists any justified exception (the
+  # target is an empty list).
   templateinit:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        flags: ["", "--no-all"]
+        flags: ["", "--no-tenancy", "--no-all"]
     steps:
       - uses: actions/checkout@v7
 
@@ -43,6 +46,13 @@ jobs:
           if grep -rl "MrEthical07/superapi" .; then echo "old module path still referenced"; exit 1; fi
           if grep -rlE "template:(begin|end) " .; then echo "template markers left behind"; exit 1; fi
           git init -q && git add -A && git -c user.email=ci@example.com -c user.name=ci commit -qm init
+          case "${{ matrix.flags }}" in
+            *no-tenancy*|*no-all*)
+              allow=$(grep -vE '^[[:space:]]*(#|$)' "$GITHUB_WORKSPACE/.github/tenancy-allowlist.txt" | awk '{print ":!"$1}')
+              if git grep -n -i "tenan" -- . ':!CHANGELOG.md' $allow; then echo "tenancy left behind (see above)"; exit 1; fi
+              test "$(ls db/migrations/*.up.sql | wc -l)" = 1 || { echo "expected only 000001_init"; exit 1; }
+              ;;
+          esac
           make sqlc-generate && git diff --exit-code
           go build ./...
           go vet ./...
@@ -166,14 +176,11 @@ jobs:
       - name: Migrations (up, down, up)
         run: |
           make migrate-up
-          for i in 1 2 3 4 5 6; do make migrate-down; done
+          for f in db/migrations/*.up.sql; do make migrate-down; done
           make migrate-up
 
       - name: Test
         run: go test ./... -race
-
-      - name: Test (TENANCY_ENABLED=true)
-        run: TENANCY_ENABLED=true go test ./... -race
 
       - name: Install golangci-lint
         run: |

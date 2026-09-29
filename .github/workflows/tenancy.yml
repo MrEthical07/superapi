@@ -1,0 +1,53 @@
+name: tenancy
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The whole suite again with tenancy switched on, against Postgres and Redis.
+  test-enabled:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: superapi
+          POSTGRES_PASSWORD: superapi
+          POSTGRES_DB: superapi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U superapi -d superapi"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      POSTGRES_URL: postgres://superapi:superapi@127.0.0.1:5432/superapi?sslmode=disable
+      SUPERAPI_TEST_DATABASE_URL: postgres://superapi:superapi@127.0.0.1:5432/superapi?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+
+      - name: Test (TENANCY_ENABLED=true)
+        run: TENANCY_ENABLED=true go test ./... -race
