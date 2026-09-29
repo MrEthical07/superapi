@@ -216,7 +216,7 @@ func TestNoTenancyPrunesByName(t *testing.T) {
 	extra := map[string]string{
 		"internal/tenancy/feature.go":               "package tenancy\n",
 		"internal/features/tenancy.go":              "package features\n",
-		"internal/features/features.go":             "package features\n\nvar all = []int{\n\t// template:begin tenancy\n\t1,\n\t// template:end tenancy\n}\n",
+		"internal/features/features.go":             "package features\n\nvar all = []int{\n\t// template:" + "begin tenancy\n\t1,\n\t// template:" + "end tenancy\n}\n",
 		"db/migrations/000001_init.up.sql":          "CREATE TABLE users (id INT);\n",
 		"db/migrations/000002_tenancy.up.sql":       "ALTER TABLE users ADD COLUMN t INT;\n",
 		"db/migrations/000002_tenancy.down.sql":     "ALTER TABLE users DROP COLUMN t;\n",
