@@ -21,6 +21,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/logx"
@@ -105,12 +107,25 @@ func RedactAddress(addr string) string {
 // an account exists) or on the delivery backend's latency.
 //
 // Concurrency is bounded; when saturated, messages are dropped and logged
-// rather than queued without limit.
+// rather than queued without limit. Shutdown drains what is in flight when the
+// process stops.
 type Dispatcher struct {
 	next    Notifier
 	log     *logx.Logger
 	timeout time.Duration
 	slots   chan struct{}
+
+	// mu makes "closed" and "start a delivery" one step, so nothing can begin
+	// after Shutdown has started waiting.
+	mu     sync.Mutex
+	closed bool
+	wg     sync.WaitGroup
+	// inflight counts running deliveries, for Shutdown's abandoned count.
+	inflight atomic.Int64
+	// stop is cancelled by Shutdown to tell deliveries still running at the
+	// deadline to give up.
+	stopCtx context.Context
+	stop    context.CancelFunc
 }
 
 // NewDispatcher wraps next with bounded asynchronous delivery.
@@ -124,7 +139,15 @@ func NewDispatcher(next Notifier, log *logx.Logger, timeout time.Duration, maxIn
 	if maxInFlight <= 0 {
 		maxInFlight = 64
 	}
-	return &Dispatcher{next: next, log: log, timeout: timeout, slots: make(chan struct{}, maxInFlight)}
+	stopCtx, stop := context.WithCancel(context.Background())
+	return &Dispatcher{
+		next:    next,
+		log:     log,
+		timeout: timeout,
+		slots:   make(chan struct{}, maxInFlight),
+		stopCtx: stopCtx,
+		stop:    stop,
+	}
 }
 
 // PasswordReset schedules delivery of a password-reset challenge.
@@ -145,26 +168,84 @@ func (d *Dispatcher) dispatch(ctx context.Context, kind string, send func(contex
 	if d == nil {
 		return
 	}
+
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		d.warn(kind, "notify: dispatcher is shut down; message dropped")
+		return
+	}
 	select {
 	case d.slots <- struct{}{}:
 	default:
-		if d.log != nil {
-			d.log.Warn().Str("notification", kind).Msg("notify: dispatcher saturated; message dropped")
-		}
+		d.mu.Unlock()
+		d.warn(kind, "notify: dispatcher saturated; message dropped")
 		return
 	}
+	d.wg.Add(1)
+	d.inflight.Add(1)
+	d.mu.Unlock()
 
 	// Detach from the request so delivery survives the response, but keep
 	// request-scoped values (request id, tracing) for the notifier's logs.
 	base := context.WithoutCancel(ctx)
 	go func() {
-		defer func() { <-d.slots }()
+		defer func() {
+			<-d.slots
+			d.inflight.Add(-1)
+			d.wg.Done()
+		}()
 		sendCtx, cancel := context.WithTimeout(base, d.timeout)
 		defer cancel()
+		// Shutdown cancels stopCtx if this delivery is still running at the
+		// deadline, so a notifier that honours its context exits promptly.
+		release := context.AfterFunc(d.stopCtx, cancel)
+		defer release()
 		if err := send(sendCtx); err != nil && d.log != nil {
 			d.log.Error().Err(err).Str("notification", kind).Msg("notify: delivery failed")
 		}
 	}()
+}
+
+func (d *Dispatcher) warn(kind, msg string) {
+	if d.log != nil {
+		d.log.Warn().Str("notification", kind).Msg(msg)
+	}
+}
+
+// Shutdown stops accepting new messages, then waits for deliveries already in
+// flight until ctx is done. It returns how many had not finished by then (they
+// are abandoned and told to stop through their context).
+//
+// Call it after the HTTP server has stopped, so no handler can still be
+// producing messages, and before closing the resources a notifier may use. It
+// is safe to call more than once.
+func (d *Dispatcher) Shutdown(ctx context.Context) (abandoned int) {
+	if d == nil {
+		return 0
+	}
+	d.mu.Lock()
+	d.closed = true
+	d.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		d.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return 0
+	case <-ctx.Done():
+	}
+
+	// Out of time. Whatever is still running is abandoned: count it, then ask
+	// it to stop. A notifier that ignores its context keeps its goroutine
+	// until its own timeout, but nothing here waits for it.
+	abandoned = int(d.inflight.Load())
+	d.stop()
+	return abandoned
 }
 
 // Wait blocks until in-flight deliveries finish or ctx is done. Intended for

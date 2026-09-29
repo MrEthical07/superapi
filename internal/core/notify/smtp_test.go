@@ -1,14 +1,12 @@
 package notify
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"net/mail"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -423,24 +421,6 @@ func TestSMTPMissingLinkTemplate(t *testing.T) {
 	if err := n.SendEmailVerification(sendCtx(t), "alice@example.com", "tok"); err == nil || !strings.Contains(err.Error(), "NOTIFY_VERIFY_URL") {
 		t.Fatalf("err = %v, want a hint about NOTIFY_VERIFY_URL", err)
 	}
-}
-
-// syncBuffer is a bytes.Buffer safe for the dispatcher's concurrent writers.
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }
 
 // Through the real dispatcher, a failed delivery is logged without the

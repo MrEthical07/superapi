@@ -320,10 +320,46 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	return deps, nil
 }
 
+// drainNotifierWithinShutdown drains the dispatcher for whatever is left of the
+// shutdown timeout: the deadline set when shutdown began, or a fresh full
+// shutdown timeout on exit paths where graceful shutdown never began.
+func (a *App) drainNotifierWithinShutdown() {
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if a.shutdownDeadline.IsZero() {
+		ctx, cancel = context.WithTimeout(context.Background(), a.cfg.HTTP.ShutdownTimeout)
+	} else {
+		ctx, cancel = context.WithDeadline(context.Background(), a.shutdownDeadline)
+	}
+	defer cancel()
+	a.drainNotifier(ctx)
+}
+
+// drainNotifier stops the notification dispatcher and waits for in-flight
+// deliveries until ctx is done, logging how many had to be abandoned. It runs at
+// most once.
+func (a *App) drainNotifier(ctx context.Context) {
+	if a == nil || a.deps == nil || a.deps.Notifier == nil || a.notifierDrained {
+		return
+	}
+	a.notifierDrained = true
+
+	if abandoned := a.deps.Notifier.Shutdown(ctx); abandoned > 0 {
+		a.log.Warn().Int("abandoned", abandoned).Msg("shutdown: abandoned in-flight notification deliveries at the shutdown deadline")
+	}
+}
+
 func (a *App) closeDependencies() {
 	if a == nil || a.deps == nil {
 		return
 	}
+
+	// Pending notifications must finish (or be abandoned) while the resources
+	// a notifier may still use are open. Normally Run already drained them
+	// right after the HTTP server stopped; this covers every other exit path.
+	a.drainNotifierWithinShutdown()
 
 	if a.deps.Redis != nil {
 		if err := a.deps.Redis.Close(); err != nil {

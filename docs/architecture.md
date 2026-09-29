@@ -356,11 +356,18 @@ Path:
 
 During app shutdown:
 
-1. server shutdown with configured timeout
-2. close redis
-3. close postgres
-4. shutdown tracing
-5. close auth engine resources
+1. server shutdown with configured timeout (`HTTP_SHUTDOWN_TIMEOUT`)
+2. drain the notification dispatcher: it stops accepting messages, then waits
+   for password-reset / email-verification deliveries already in flight, for at
+   most what is left of the shutdown timeout. Deliveries still running at the
+   deadline are abandoned (told to stop through their context) and the count is
+   logged; a notifier that ignores its context cannot block exit. This runs
+   after the HTTP server has stopped, so no handler can queue another message,
+   and before redis/postgres close, since a notifier may still use them
+3. close redis
+4. close postgres
+5. shutdown tracing
+6. close auth engine resources
 
 ## 11. Data Layer At A Glance
 

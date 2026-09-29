@@ -41,6 +41,13 @@ type App struct {
 	modules []Module
 	router  *httpx.Mux
 	deps    *Dependencies
+
+	// shutdownDeadline is when graceful shutdown must be finished, set once
+	// shutdown begins. Zero until then.
+	shutdownDeadline time.Time
+	// notifierDrained records that pending notifications were already given
+	// their chance, so the drain never waits twice.
+	notifierDrained bool
 }
 
 // New builds an App instance, wires dependencies, and registers all modules.
@@ -208,12 +215,17 @@ func (a *App) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.HTTP.ShutdownTimeout)
 		defer cancel()
+		a.shutdownDeadline, _ = shutdownCtx.Deadline()
 
 		a.log.Info().Msg("shutdown initiated")
 		if err := a.server.Shutdown(shutdownCtx); err != nil {
 			a.log.Error().Err(err).Msg("shutdown error")
 			return err
 		}
+		// The HTTP server has stopped, so no handler can queue another
+		// message. Let deliveries already in flight finish (within what is
+		// left of the shutdown timeout) before Redis and Postgres close.
+		a.drainNotifier(shutdownCtx)
 		a.log.Info().Msg("shutdown complete")
 		// Give server goroutine a chance to exit cleanly.
 		select {
