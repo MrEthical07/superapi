@@ -14,6 +14,12 @@ enumeration-safety guarantees.
   `{"ok": true, "data": {…}, "request_id": "…"}` or
   `{"ok": false, "error": {"code": "…", "message": "…"}, "request_id": "…"}`.
 - Unknown JSON fields are rejected (400), so a client cannot sneak in `role`.
+  Request-body errors use fixed messages (never Go library text): `request body
+  is required`, `malformed JSON body`, `invalid JSON field type`, `unknown field
+  in request body` (with `error.details.field` naming the field, for example
+  `address.zip`), `request body must contain a single JSON object` (trailing
+  data), `request body too large`, and `invalid JSON body` for anything else.
+  All are 400 `bad_request`.
 - With `TENANCY_ENABLED=true` every request (except `/healthz`, `/readyz`,
   `/metrics`) needs a tenant (default header `X-Tenant-ID`); see
   [multi-tenancy.md](multi-tenancy.md).
@@ -52,11 +58,11 @@ Related: `AUTH_REGISTRATION_AUTO_LOGIN`, `AUTH_EMAIL_VERIFICATION_REQUIRED`,
 |---|---|---|
 | 400 | `bad_request` | missing/oversized fields, unknown fields, invalid or expired challenge, invalid code, password policy/reuse, wrong current password |
 | 400 | `bad_request` `tenant required` / `tenant invalid` | tenancy on and no/malformed tenant |
-| 401 | `unauthorized` | bad credentials, bad refresh/access token, token from another tenant |
+| 401 | `unauthorized` | bad credentials (including a wrong step-up `password`), bad refresh/access token, token from another tenant |
 | 403 | `forbidden` `authentication state rejected` | account pending verification, disabled, locked |
 | 404 | `not_found` | feature disabled; tenant unknown or inactive |
 | 409 | `conflict` | TOTP already enabled (setup) or not enabled (disable/regenerate) |
-| 429 | `too_many_requests` | goAuth abuse limiter or route rate limiter |
+| 429 | `too_many_requests` | goAuth abuse limiter (including the password-verify limiter behind step-up and `password/change`) or route rate limiter |
 | 503 | `dependency_unavailable` | Redis/Postgres/goAuth backend unavailable |
 
 ## Credentials
