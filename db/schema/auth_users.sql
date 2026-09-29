@@ -1,5 +1,5 @@
--- Hand-authored mirror of migrations 000003_auth_users, 000005_users_tenant
--- and the users columns from 000006_auth_mfa.
+-- Hand-authored mirror of migrations 000003_auth_users, 000005_users_tenant,
+-- the users columns from 000006_auth_mfa, and 000007_users_email_ci.
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -24,4 +24,7 @@ CREATE INDEX IF NOT EXISTS users_status_idx ON users (status);
 
 CREATE INDEX IF NOT EXISTS users_created_at_idx ON users (created_at);
 
-CREATE INDEX IF NOT EXISTS users_tenant_email_idx ON users (tenant_id, email);
+-- 000007_users_email_ci: identifiers are case-insensitive; uniqueness stays global.
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_unique_idx ON users (lower(email));
+
+CREATE INDEX IF NOT EXISTS users_tenant_email_lower_idx ON users (tenant_id, lower(email));

@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/auth"
@@ -26,10 +25,6 @@ const (
 // conservative character set.
 const maxTenantIDLength = 64
 
-// maxCacheEntries bounds the in-process validation cache so a flood of random
-// tenant ids cannot grow it without limit.
-const maxCacheEntries = 10_000
-
 // ResolverConfig configures the tenant resolution middleware.
 type ResolverConfig struct {
 	// Resolver is "header" (default) or "subdomain".
@@ -42,7 +37,8 @@ type ResolverConfig struct {
 	// metrics endpoints).
 	ExemptPaths []string
 	// Directory validates that the tenant exists and is active. Nil disables
-	// validation (TENANCY_VALIDATE=false).
+	// validation (TENANCY_VALIDATE=false). The subdomain resolver cannot work
+	// without it: it needs the directory to turn a slug into a tenant id.
 	Directory Directory
 	// CacheTTL caches validation results in-process. 0 disables caching.
 	CacheTTL time.Duration
@@ -72,11 +68,17 @@ func errTenantUnavailable(cause error) *apperr.AppError {
 // goauth.WithTenantID so goAuth scopes lookups, sessions and reset/verification
 // records to it).
 //
+// The header resolver reads a tenant id from the request header. The subdomain
+// resolver reads a slug from the host (acme.example.com -> "acme"), looks the
+// tenant up by tenants.slug, and attaches that tenant's id: the slug itself
+// never reaches goAuth, sessions, or module code.
+//
 // Responses:
 //   - 400 bad_request "tenant required" when no tenant can be resolved
-//   - 400 bad_request "tenant invalid" when the tenant id is malformed
+//   - 400 bad_request "tenant invalid" when the tenant id or slug is malformed
 //   - 404 not_found "tenant not found" when the tenant is unknown or inactive
-//   - 503 dependency_unavailable when validation cannot reach the database
+//   - 503 dependency_unavailable when validation cannot reach the database, or
+//     the subdomain resolver has no directory to look slugs up in
 //
 // Exempt paths (health/readiness/metrics) pass through untouched.
 //
@@ -89,8 +91,10 @@ func Middleware(cfg ResolverConfig) func(http.Handler) http.Handler {
 		}
 	}
 
+	resolver := ResolverHeader
 	extract := headerExtractor(cfg.Header)
 	if strings.EqualFold(strings.TrimSpace(cfg.Resolver), ResolverSubdomain) {
+		resolver = ResolverSubdomain
 		extract = subdomainExtractor(cfg.BaseDomain)
 	}
 
@@ -107,18 +111,25 @@ func Middleware(cfg ResolverConfig) func(http.Handler) http.Handler {
 			}
 
 			rid := requestid.FromContext(r.Context())
-			tenantID := extract(r)
-			if tenantID == "" {
+			value := extract(r)
+			if value == "" {
 				response.Error(w, errTenantRequired(), rid)
 				return
 			}
-			if !ValidTenantID(tenantID) {
+			valid := ValidTenantID
+			if resolver == ResolverSubdomain {
+				value = NormalizeSlug(value)
+				valid = ValidSlug
+			}
+			if !valid(value) {
 				response.Error(w, errTenantInvalid(), rid)
 				return
 			}
 
-			if cfg.Directory != nil {
-				active, err := lookupActive(r.Context(), cfg.Directory, cache, tenantID)
+			tenantID := value
+			switch {
+			case cfg.Directory != nil:
+				id, active, err := lookupTenant(r.Context(), cfg.Directory, cache, resolver, value)
 				if err != nil {
 					response.Error(w, errTenantUnavailable(err), rid)
 					return
@@ -127,11 +138,31 @@ func Middleware(cfg ResolverConfig) func(http.Handler) http.Handler {
 					response.Error(w, errTenantNotFound(), rid)
 					return
 				}
+				tenantID = id
+			case resolver == ResolverSubdomain:
+				// Misconfiguration (config lint refuses TENANCY_VALIDATE=false
+				// with this resolver): a slug is not a tenant id, so fail closed
+				// rather than attach it.
+				response.Error(w, errTenantUnavailable(errNoDirectoryForSubdomain), rid)
+				return
 			}
 
 			next.ServeHTTP(w, r.WithContext(auth.WithRequestTenant(r.Context(), tenantID)))
 		})
 	}
+}
+
+var errNoDirectoryForSubdomain = errors.New("the subdomain resolver needs a tenant directory (TENANCY_VALIDATE=true)")
+
+// NormalizeSlug returns the canonical form of a tenant slug: trimmed and
+// lower-cased. Slugs are stored in this form (hostnames are case-insensitive).
+func NormalizeSlug(slug string) string { return strings.ToLower(strings.TrimSpace(slug)) }
+
+// ValidSlug reports whether slug is an acceptable tenant slug: the same
+// character rules as ValidTenantID (1-64 characters from [a-z0-9._-] after
+// lower-casing, starting with an alphanumeric), and already lower-case.
+func ValidSlug(slug string) bool {
+	return slug == strings.ToLower(slug) && ValidTenantID(slug)
 }
 
 // ValidTenantID reports whether id is an acceptable tenant id: 1-64 characters
@@ -187,67 +218,30 @@ func subdomainExtractor(baseDomain string) func(*http.Request) string {
 	}
 }
 
-func lookupActive(ctx context.Context, dir Directory, cache *validationCache, tenantID string) (bool, error) {
-	if cache != nil {
-		if active, ok := cache.get(tenantID); ok {
-			return active, nil
-		}
+// lookupTenant resolves value (a tenant id for the header resolver, a slug for
+// the subdomain resolver) to the tenant's id and whether it may serve requests,
+// through the cache. Unknown tenants are reported as inactive.
+func lookupTenant(ctx context.Context, dir Directory, cache *validationCache, resolver, value string) (id string, active bool, err error) {
+	key := cacheKey(resolver, value)
+	if hit, ok := cache.get(key); ok {
+		return hit.ID, hit.Active, nil
 	}
 
-	record, err := dir.Get(ctx, tenantID)
+	var record Record
+	if resolver == ResolverSubdomain {
+		record, err = dir.GetBySlug(ctx, value)
+	} else {
+		record, err = dir.Get(ctx, value)
+	}
 	switch {
 	case errors.Is(err, ErrTenantNotFound):
-		cache.put(tenantID, false)
-		return false, nil
+		cache.put(key, cachedTenant{})
+		return "", false, nil
 	case err != nil:
-		return false, err
+		return "", false, err
 	}
 
-	active := record.Active()
-	cache.put(tenantID, active)
-	return active, nil
-}
-
-type cacheEntry struct {
-	active  bool
-	expires time.Time
-}
-
-// validationCache is a small TTL cache of tenant validation results. Negative
-// results are cached too so unknown ids cannot be used to hammer the database.
-type validationCache struct {
-	mu      sync.RWMutex
-	ttl     time.Duration
-	entries map[string]cacheEntry
-	now     func() time.Time
-}
-
-func newValidationCache(ttl time.Duration) *validationCache {
-	return &validationCache{ttl: ttl, entries: make(map[string]cacheEntry), now: time.Now}
-}
-
-func (c *validationCache) get(tenantID string) (bool, bool) {
-	if c == nil {
-		return false, false
-	}
-	c.mu.RLock()
-	entry, ok := c.entries[tenantID]
-	c.mu.RUnlock()
-	if !ok || c.now().After(entry.expires) {
-		return false, false
-	}
-	return entry.active, true
-}
-
-func (c *validationCache) put(tenantID string, active bool) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.entries) >= maxCacheEntries {
-		// Simple bounded behavior: drop everything rather than track LRU order.
-		c.entries = make(map[string]cacheEntry)
-	}
-	c.entries[tenantID] = cacheEntry{active: active, expires: c.now().Add(c.ttl)}
+	result := cachedTenant{ID: record.ID, Active: record.Active()}
+	cache.put(key, result)
+	return result.ID, result.Active, nil
 }

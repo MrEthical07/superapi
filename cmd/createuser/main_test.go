@@ -14,6 +14,7 @@ func TestParseFlags(t *testing.T) {
 		wantErr string
 	}{
 		{name: "ok", args: []string{"--email", " a@example.com ", "--role", "admin"}},
+		{name: "email is lower-cased", args: []string{"--email", " A@Example.COM ", "--role", "admin"}},
 		{name: "missing email", args: []string{}, wantErr: "--email is required"},
 		{name: "positional password rejected", args: []string{"--email", "a@example.com", "hunter2"}, wantErr: "never passed as an argument"},
 		// template:begin tenancy

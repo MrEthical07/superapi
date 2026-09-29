@@ -165,12 +165,54 @@ TRACING_INSECURE=false
 | `AUTH_MODE` | `strict` for sensitive APIs; `hybrid` only with accepted revocation gap | `jwt_only`/`hybrid` can permit revoked token usage under certain conditions. |
 | `AUTH_REGISTRATION_AUTO_LOGIN` | `false` | Auto-login makes registration distinguish new from existing accounts (enumeration). |
 | `AUTH_EMAIL_VERIFICATION_REQUIRED` | `true` when verification is enabled | Blocks login from unverified addresses. |
-| `AUTH_TOTP_ENCRYPTION_KEY` | 32 random bytes, from a secret manager | Encrypts TOTP secrets at rest; losing or rotating it forces re-enrollment. |
+| `AUTH_TOTP_ENCRYPTION_KEY` / `AUTH_TOTP_ENCRYPTION_KEYS` + `AUTH_TOTP_ENCRYPTION_ACTIVE_KID` | 32 random bytes per key, from a secret manager | Encrypts TOTP secrets at rest. Losing a key that still protects rows forces those users to re-enroll; rotate with a keyring instead of replacing the key (see [Rotating the TOTP encryption key](#rotating-the-totp-encryption-key)). |
 | `AUTH_TEST_*` | unset (refused outside dev/test) | Switch signing to a shared HS256 secret; perf-only. |
 | `NOTIFY_DRIVER` | a real notifier, never `log` | Reset/verification secrets must reach only the account owner. |
 | `NOTIFY_LOG_SECRETS` | `false` (refused outside dev) | Logs would contain account-takeover secrets. |
 | `TENANCY_VALIDATE` | `true` when tenancy is on | Rejects unknown/inactive tenants before any auth work. |
 | `HTTP_TRUSTED_PROXIES` | your proxy CIDRs only | Client IP feeds goAuth's abuse limiters and audit trail. |
+
+#### Rotating the TOTP encryption key
+
+TOTP secrets are encrypted at rest (AES-256-GCM). Ciphertexts record which key
+sealed them (format v2: version byte, key id, nonce, data; the user id is bound
+as authenticated data), so you can rotate without re-enrolling anyone. Changing
+`AUTH_TOTP_ENCRYPTION_KEY` in place, by contrast, makes every stored secret
+undecryptable.
+
+1. **Stage the new key next to the old one.** Keep the current
+   `AUTH_TOTP_ENCRYPTION_KEY` exactly as it is (it stays readable as key id
+   `default`, and still opens secrets written before key ids existed) and add:
+
+   ```
+   AUTH_TOTP_ENCRYPTION_KEYS=2026-09:<base64 of 32 new random bytes>
+   AUTH_TOTP_ENCRYPTION_ACTIVE_KID=2026-09
+   ```
+
+   `openssl rand -base64 32` makes a key. Deploy. New enrollments use
+   `2026-09`, and every secret a user's login touches is re-encrypted under it
+   (a best-effort write that never fails the login).
+2. **Move the rest.** Run `make rotate-totp-key` (or
+   `go run ./cmd/rotatetotpkey`) with the same environment. It re-encrypts every
+   remaining secret in batches (in the container image:
+   `docker run --rm --env-file .env <image> /app/rotatetotpkey`), prints progress per batch, never prints a
+   secret, and exits non-zero if any row could not be moved. `--dry-run` shows
+   what would change; `--batch-size` tunes the batch. It is safe to re-run and
+   to run while the API is serving traffic: each write is a compare-and-swap, so
+   a secret changed in the meantime is skipped, not overwritten.
+3. **Confirm nothing is left.** A second run should report `0` re-encrypted and
+   every row already under the active key.
+4. **Retire the old key.** Remove `AUTH_TOTP_ENCRYPTION_KEY` (and any old ids
+   from `AUTH_TOTP_ENCRYPTION_KEYS`) and redeploy. Only rows still sealed with a
+   removed key fail to decrypt, and the error names the key
+   (`... sealed with key "old", which is not in AUTH_TOTP_ENCRYPTION_KEYS ...`);
+   put the key back to recover them.
+
+Startup validates the settings: every key must decode to 32 bytes, key ids must
+be unique and use `[A-Za-z0-9._-]` (at most 32 characters), and
+`AUTH_TOTP_ENCRYPTION_ACTIVE_KID` must name one of the keys. A key id may not be
+`default` in the keyring while `AUTH_TOTP_ENCRYPTION_KEY` is set, since that
+name belongs to the single key.
 
 ### Rate limiting
 

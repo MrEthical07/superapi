@@ -26,7 +26,7 @@ PERF_SUSTAIN_RPS_RATIO ?= 0.95
 PERF_OUTPUT_DIR ?= performance/results
 # template:end perf
 
-.PHONY: fmt vet test test-integration tidy build run verify doctor dev-up dev-down dev-reset db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module user perf-token load-k6-10k load-vegeta-10k bench-hotpath init
+.PHONY: fmt vet test test-integration tidy build run verify doctor dev-up dev-down dev-reset db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module user rotate-totp-key perf-token load-k6-10k load-vegeta-10k bench-hotpath init
 
 # ---------------------------------------------------------------------------
 # Quality gates
@@ -70,11 +70,21 @@ user:
 	@if [ -z "$(email)" ]; then echo "email is required: make user email=you@example.com [role=admin] [tenant=acme] [create_tenant=1]"; exit 1; fi
 	@$(WITH_ENV) $(GO) run ./cmd/createuser --email "$(email)" $(if $(role),--role "$(role)",) $(if $(tenant),--tenant "$(tenant)",) $(if $(create_tenant),--create-tenant,) $(if $(password_stdin),--password-stdin,)
 
+# template:begin rotate-tool
+# Re-encrypt every stored TOTP secret under the active AUTH_TOTP_ENCRYPTION_*
+# key. Progress is printed per batch. Example: make rotate-totp-key dry_run=1
+rotate-totp-key:
+	@$(WITH_ENV) $(GO) run ./cmd/rotatetotpkey $(if $(dry_run),--dry-run,) $(if $(batch_size),--batch-size "$(batch_size)",)
+# template:end rotate-tool
+
 # Checks the local toolchain and configuration.
 doctor:
 	@ok=1; \
-	printf '%-10s' "go:";      if command -v $(GO) >/dev/null 2>&1; then $(GO) version; else echo "MISSING (https://go.dev/dl/)"; ok=0; fi; \
-	want=$$(sed -n 's/^go //p' go.mod); printf '%-10s%s\n' "go.mod:" "requires go $$want"; \
+	want=$$(sed -n 's/^go //p' go.mod); \
+	printf '%-10s' "go:";      if command -v $(GO) >/dev/null 2>&1; then GOTOOLCHAIN=local $(GO) version; have=$$(GOTOOLCHAIN=local $(GO) env GOVERSION | sed 's/^go//'); \
+	  if [ "$$(printf '%s\n%s\n' "$$want" "$$have" | sort -V | head -n1)" != "$$want" ]; then echo "          go.mod requires Go $$want or newer (https://go.dev/dl/)"; ok=0; fi; \
+	else echo "MISSING (https://go.dev/dl/)"; ok=0; fi; \
+	printf '%-10s%s\n' "go.mod:" "requires go $$want"; \
 	printf '%-10s' "sqlc:";    if command -v $(SQLC) >/dev/null 2>&1; then $(SQLC) version; else echo "missing (needed for make sqlc-generate: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1)"; fi; \
 	printf '%-10s' "docker:";  if $(DOCKER_COMPOSE) version >/dev/null 2>&1; then $(DOCKER_COMPOSE) version --short; else echo "missing (needed for make dev-up)"; fi; \
 	printf '%-10s' "migrate:"; echo "built in (go run ./cmd/migrate)"; \

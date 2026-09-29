@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	goauth "github.com/MrEthical07/goAuth"
@@ -223,11 +224,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 		// TOTP persistence (and the at-rest cipher) is only wired when TOTP
 		// is enabled; config lint guarantees the key is present and valid.
 		if cfg.Auth.TOTPEnabled {
-			key, err := config.DecodeKey32(cfg.Auth.TOTPEncryptionKey)
-			var cipher auth.SecretCipher
-			if err == nil {
-				cipher, err = auth.NewAESGCMCipher(key)
-			}
+			cipher, err := newTOTPCipher(cfg.Auth)
 			if err != nil {
 				if deps.Redis != nil {
 					_ = deps.Redis.Close()
@@ -237,7 +234,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 				}
 				return nil, fmt.Errorf("init auth provider: totp encryption key: %w", err)
 			}
-			userProvider = userProvider.WithMFA(auth.NewMFARepository(deps.DB), cipher)
+			userProvider = userProvider.WithMFA(auth.NewMFARepository(deps.DB), cipher).WithTx(deps.DB)
 		}
 
 		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{
@@ -320,10 +317,70 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 	return deps, nil
 }
 
+// drainNotifierWithinShutdown drains the dispatcher for whatever is left of the
+// shutdown timeout: the deadline set when shutdown began, or a fresh full
+// shutdown timeout on exit paths where graceful shutdown never began.
+func (a *App) drainNotifierWithinShutdown() {
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if a.shutdownDeadline.IsZero() {
+		ctx, cancel = context.WithTimeout(context.Background(), a.cfg.HTTP.ShutdownTimeout)
+	} else {
+		ctx, cancel = context.WithDeadline(context.Background(), a.shutdownDeadline)
+	}
+	defer cancel()
+	a.drainNotifier(ctx)
+}
+
+// drainNotifier stops the notification dispatcher and waits for in-flight
+// deliveries until ctx is done, logging how many had to be abandoned. It runs at
+// most once.
+func (a *App) drainNotifier(ctx context.Context) {
+	if a == nil || a.deps == nil || a.deps.Notifier == nil || a.notifierDrained {
+		return
+	}
+	a.notifierDrained = true
+
+	if abandoned := a.deps.Notifier.Shutdown(ctx); abandoned > 0 {
+		a.log.Warn().Int("abandoned", abandoned).Msg("shutdown: abandoned in-flight notification deliveries at the shutdown deadline")
+	}
+}
+
+// newTOTPCipher builds the TOTP secret cipher from AUTH_TOTP_ENCRYPTION_KEY /
+// AUTH_TOTP_ENCRYPTION_KEYS. The rotatetotpkey command builds the same cipher.
+func newTOTPCipher(cfg config.AuthConfig) (auth.SecretCipher, error) {
+	ring, err := cfg.TOTPKeyring()
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewKeyRingCipher(auth.KeyRing{Keys: ring.Keys, ActiveKID: ring.ActiveKID, LegacyKey: ring.LegacyKey})
+}
+
+// NewTOTPCipher is newTOTPCipher for command-line tools that re-encrypt stored
+// secrets (cmd/rotatetotpkey).
+func NewTOTPCipher(cfg config.AuthConfig) (auth.RotatableCipher, error) {
+	c, err := newTOTPCipher(cfg)
+	if err != nil {
+		return nil, err
+	}
+	rc, ok := c.(auth.RotatableCipher)
+	if !ok {
+		return nil, errors.New("totp cipher does not support rotation")
+	}
+	return rc, nil
+}
+
 func (a *App) closeDependencies() {
 	if a == nil || a.deps == nil {
 		return
 	}
+
+	// Pending notifications must finish (or be abandoned) while the resources
+	// a notifier may still use are open. Normally Run already drained them
+	// right after the HTTP server stopped; this covers every other exit path.
+	a.drainNotifierWithinShutdown()
 
 	if a.deps.Redis != nil {
 		if err := a.deps.Redis.Close(); err != nil {

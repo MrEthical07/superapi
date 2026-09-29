@@ -59,6 +59,7 @@ func (r *userAccountRepository) FindRecipient(ctx context.Context, identifier st
 	)
 	// The tenant middleware attaches a request tenant only when tenancy is
 	// enabled; mirror goAuth's lookup scope exactly.
+	identifier = coreauth.NormalizeIdentifier(identifier)
 	if tenantID, ok := coreauth.RequestTenantFromContext(ctx); ok {
 		row, err = r.users.GetByIdentifierInTenant(ctx, tenantID, identifier)
 	} else {

@@ -24,7 +24,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.26.8"
+          go-version: "1.27.1"
 
       - name: Install sqlc
         run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
@@ -132,7 +132,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.26.8"
+          go-version: "1.27.1"
 
       - name: Go env
         run: go env

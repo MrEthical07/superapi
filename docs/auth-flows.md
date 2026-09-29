@@ -14,9 +14,22 @@ enumeration-safety guarantees.
   `{"ok": true, "data": {…}, "request_id": "…"}` or
   `{"ok": false, "error": {"code": "…", "message": "…"}, "request_id": "…"}`.
 - Unknown JSON fields are rejected (400), so a client cannot sneak in `role`.
+  Request-body errors use fixed messages (never Go library text): `request body
+  is required`, `malformed JSON body`, `invalid JSON field type`, `unknown field
+  in request body` (with `error.details.field` naming the field, for example
+  `address.zip`), `request body must contain a single JSON object` (trailing
+  data), `request body too large`, and `invalid JSON body` for anything else.
+  All are 400 `bad_request`.
 - With `TENANCY_ENABLED=true` every request (except `/healthz`, `/readyz`,
   `/metrics`) needs a tenant (default header `X-Tenant-ID`); see
   [multi-tenancy.md](multi-tenancy.md).
+- Identifiers are **case-insensitive**. The module trims and lower-cases every
+  identifier (register, login, password-reset and email-verification requests,
+  and `make user`) before it reaches goAuth, so `Alice@Example.com` and
+  `alice@example.com` are one account and share goAuth's per-identifier
+  limiters. Migration 000007 lower-cases stored emails and adds a unique index
+  on `lower(email)`; it refuses to run if two existing accounts differ only by
+  case (see the comment at the top of the migration for how to resolve them).
 - Endpoint groups that are disabled are **not registered**: they return 404
   like any unknown route. With `AUTH_ENABLED=false` no auth route exists.
 - Public endpoints are protected by goAuth's built-in abuse limiters (per
@@ -45,11 +58,11 @@ Related: `AUTH_REGISTRATION_AUTO_LOGIN`, `AUTH_EMAIL_VERIFICATION_REQUIRED`,
 |---|---|---|
 | 400 | `bad_request` | missing/oversized fields, unknown fields, invalid or expired challenge, invalid code, password policy/reuse, wrong current password |
 | 400 | `bad_request` `tenant required` / `tenant invalid` | tenancy on and no/malformed tenant |
-| 401 | `unauthorized` | bad credentials, bad refresh/access token, token from another tenant |
+| 401 | `unauthorized` | bad credentials (including a wrong step-up `password`), bad refresh/access token, token from another tenant |
 | 403 | `forbidden` `authentication state rejected` | account pending verification, disabled, locked |
 | 404 | `not_found` | feature disabled; tenant unknown or inactive |
 | 409 | `conflict` | TOTP already enabled (setup) or not enabled (disable/regenerate) |
-| 429 | `too_many_requests` | goAuth abuse limiter or route rate limiter |
+| 429 | `too_many_requests` | goAuth abuse limiter (including the password-verify limiter behind step-up and `password/change`) or route rate limiter |
 | 503 | `dependency_unavailable` | Redis/Postgres/goAuth backend unavailable |
 
 ## Credentials
@@ -188,7 +201,7 @@ enroll are challenged at every login; users who do not are unaffected.
 
 | Endpoint | Body | Response / notes |
 |---|---|---|
-| `POST /api/v1/auth/mfa/totp/setup` | — | `{"secret_base32","otpauth_uri"}`. Render the URI as a QR code. 409 if TOTP is already enabled (disable first; replacing an active secret would break the user's authenticator) |
+| `POST /api/v1/auth/mfa/totp/setup` | `{"password"}` | step-up: the account password is required. `{"secret_base32","otpauth_uri"}`. Render the URI as a QR code. 409 if TOTP is already enabled (disable first; replacing an active secret would break the user's authenticator) |
 | `POST /api/v1/auth/mfa/totp/confirm` | `{"code"}` | `{"enabled": true, "backup_codes": [...]}`. Backup codes are shown once; only hashes are stored. goAuth revokes the user's sessions, so log in again |
 | `POST /api/v1/auth/mfa/totp/disable` | `{"code"}` | requires a current TOTP code; removes the secret and all backup codes. 409 if not enabled |
 | `POST /api/v1/auth/mfa/backup-codes/regenerate` | `{"code"}` | requires a current TOTP code; returns a fresh set and invalidates the old one |
@@ -198,6 +211,28 @@ enroll are challenged at every login; users who do not are unaffected.
 `POST /api/v1/auth/webauthn/register/begin`, `…/register/finish`,
 `GET /api/v1/auth/webauthn/credentials`, `POST /api/v1/auth/webauthn/credentials/remove`.
 All authenticated; see [enabling-webauthn.md](enabling-webauthn.md).
+
+## Step-up: sensitive actions need the password
+
+Adding or removing a second factor must not be possible with a stolen access
+token alone, so these endpoints also require the current account password:
+
+| Endpoint | Body |
+|---|---|
+| `POST /api/v1/auth/mfa/totp/setup` | `{"password": "…"}` |
+| `POST /api/v1/auth/webauthn/register/begin` | `{"password": "…"}` |
+| `POST /api/v1/auth/webauthn/credentials/remove` | `{"credential_id": "…", "password": "…"}` |
+
+The service checks the password with goAuth's `VerifyPassword` (never a local
+hash comparison) before doing anything else, including the "TOTP already
+enabled" check. Responses: **400** when `password` is missing, empty or over
+1024 bytes; **401** with the same body as a failed login when it is wrong; **429**
+when goAuth's password-verify limiter (shared with `password/change`) is
+exhausted; that limit holds even for the correct password until it resets.
+`totp/disable` and `backup-codes/regenerate` already require a current TOTP
+code and are unchanged. `webauthn/register/finish`, `GET credentials` and
+`totp/confirm` continue the flow that a password-checked call started and take
+no password.
 
 ## Delivering reset and verification messages
 
@@ -211,7 +246,23 @@ type Notifier interface {
 ```
 
 - `NOTIFY_DRIVER=noop` (default) discards messages. Reset and verification
-  cannot complete until you plug in a real notifier.
+  cannot complete with it, so **startup fails** when
+  `AUTH_PASSWORD_RESET_ENABLED` or `AUTH_EMAIL_VERIFICATION_ENABLED` is on
+  with the noop driver unless `APP_ENV` is `dev`, `development`, `local` or
+  `test`; there it only logs a warning at startup.
+<!-- template:begin smtp -->
+- `NOTIFY_DRIVER=smtp` sends plain-text mail through the standard library
+  (`net/smtp`, no dependency). Set `SMTP_HOST`, `SMTP_FROM`, and a link template
+  for each enabled feature, for example
+  `NOTIFY_RESET_URL=https://app.example.com/reset?token={token}`; `{token}` is
+  replaced with the percent-encoded challenge, and your front end posts it back
+  to `password/reset/confirm`. `SMTP_TLS` is `starttls` (default, mandatory
+  upgrade: nothing is sent, and no credentials are offered, if the server does
+  not support it), `implicit`, or `none` (dev only). Recipient and subject are
+  rejected if they contain a line break; the challenge and link are never
+  logged and addresses in errors are redacted. Variables:
+  [environment-variables.md](environment-variables.md).
+<!-- template:end smtp -->
 - `NOTIFY_DRIVER=log` logs a redacted message; the full secret is logged only
   with `APP_ENV=dev` and `NOTIFY_LOG_SECRETS=true` (lint enforces dev).
 - Production: implement `Notifier` over SMTP or your email/SMS provider (build
@@ -219,6 +270,43 @@ type Notifier interface {
   and return it from `notify.New`. Calls are made asynchronously by a bounded
   dispatcher with `NOTIFY_TIMEOUT`, so they must be safe to run after the HTTP
   response is written.
+
+### Adding your own driver
+
+`notify.RegisterDriver(name, factory)` makes a driver selectable through
+`NOTIFY_DRIVER` without editing `notify.New` or the config package; config lint
+accepts the name as soon as it is registered. Put it in your own package and
+import that package for its side effect from `cmd/api/main.go`:
+
+```go
+package sendgrid
+
+import (
+    "context"
+    "os"
+
+    "github.com/acme/foo/internal/core/config"
+    "github.com/acme/foo/internal/core/logx"
+    "github.com/acme/foo/internal/core/notify"
+)
+
+func init() {
+    notify.RegisterDriver("sendgrid", func(cfg config.NotifyConfig, env string, log *logx.Logger) (notify.Notifier, error) {
+        return newClient(os.Getenv("SENDGRID_API_KEY")) // fail startup on a bad setting
+    })
+}
+
+type client struct{ /* … */ }
+
+func (c *client) SendPasswordReset(ctx context.Context, to, challenge string) error { /* … */ return nil }
+func (c *client) SendEmailVerification(ctx context.Context, to, challenge string) error { /* … */ return nil }
+```
+
+Then `NOTIFY_DRIVER=sendgrid`. Names are case-insensitive; registering an empty
+name, a nil factory or a duplicate panics at startup. Your own environment
+variables must also be listed in `.env.example` and
+`docs/environment-variables.md` (`superapi-verify` checks). Treat the challenge
+as a secret: never log it in full or return it over HTTP.
 
 ## Creating the first user
 

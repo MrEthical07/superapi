@@ -1,0 +1,27 @@
+# Normalize line endings to LF in the repository and in working trees on every
+# platform, so gofmt, sqlc and shell scripts behave the same on Windows, macOS
+# and Linux.
+* text=auto eol=lf
+
+# Binary files: never touch line endings or produce text diffs.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.avif binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.tar binary
+*.7z binary
+*.mp4 binary
+*.mov binary
+*.wasm binary

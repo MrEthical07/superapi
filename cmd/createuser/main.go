@@ -154,7 +154,7 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	if fs.NArg() > 0 {
 		return options{}, fmt.Errorf("unexpected arguments: %v (the password is never passed as an argument)", fs.Args())
 	}
-	opts.email = strings.TrimSpace(opts.email)
+	opts.email = coreauth.NormalizeIdentifier(opts.email)
 	opts.role = strings.TrimSpace(opts.role)
 	if opts.email == "" {
 		return options{}, errors.New("--email is required")

@@ -141,6 +141,8 @@ a disabled group's routes are not registered (404). Every flag requires
 | AUTH_EMAIL_VERIFICATION_REQUIRED | true | block login until verified (only with AUTH_EMAIL_VERIFICATION_ENABLED) |
 | AUTH_TOTP_ENABLED | false | TOTP setup/confirm/disable and backup codes; users who enrolled are challenged at login |
 | AUTH_TOTP_ISSUER | APP_SERVICE_NAME | issuer label shown in authenticator apps |
+| AUTH_TOTP_ENCRYPTION_KEYS | unset | keyring for rotating the encryption key: comma-separated `kid:base64key` (key ids are 1-32 characters of `[A-Za-z0-9._-]`, unique; every key is 32 bytes). Needs `AUTH_TOTP_ENCRYPTION_ACTIVE_KID`. May be combined with `AUTH_TOTP_ENCRYPTION_KEY` while rotating |
+| AUTH_TOTP_ENCRYPTION_ACTIVE_KID | unset | key id in the keyring that seals new secrets; required with `AUTH_TOTP_ENCRYPTION_KEYS`. With only `AUTH_TOTP_ENCRYPTION_KEY` the implicit id is `default` |
 | AUTH_TOTP_ENCRYPTION_KEY | unset | base64-encoded 32-byte key encrypting TOTP secrets at rest (AES-256-GCM). Required when AUTH_TOTP_ENABLED=true. Generate with `openssl rand -base64 32`. Changing it makes stored TOTP secrets undecryptable |
 
 ### 7.2 Notification delivery
@@ -150,9 +152,25 @@ Password-reset and email-verification secrets are delivered out-of-band by
 
 | Env var | Default | Notes |
 |---|---|---|
-| NOTIFY_DRIVER | noop | `noop` (discard) or `log` (development logger). Implement `notify.Notifier` for real email/SMS |
+| NOTIFY_DRIVER | noop | `noop` (discard), `log` (development logger), or any driver registered with `notify.RegisterDriver` (see [auth-flows.md](auth-flows.md#delivering-reset-and-verification-messages)). With `AUTH_PASSWORD_RESET_ENABLED` or `AUTH_EMAIL_VERIFICATION_ENABLED` on, `noop` is refused at startup unless APP_ENV is dev/development/local/test (warning only there) |
 | NOTIFY_LOG_SECRETS | false | log driver prints full secrets. Only allowed with APP_ENV=dev (lint) |
 | NOTIFY_TIMEOUT | 10s | per-delivery timeout (delivery is asynchronous) |
+<!-- template:begin smtp -->
+
+**SMTP driver** (`NOTIFY_DRIVER=smtp`, standard library only). Every field is
+checked at startup.
+
+| Env var | Default | Notes |
+|---|---|---|
+| SMTP_HOST | unset | required; bare host name or IP (no scheme, port or path) |
+| SMTP_PORT | 587 / 465 / 25 | defaults from `SMTP_TLS`: 587 for `starttls`, 465 for `implicit`, 25 for `none` |
+| SMTP_USERNAME | unset | PLAIN auth user; set together with `SMTP_PASSWORD` or not at all |
+| SMTP_PASSWORD | unset | PLAIN auth password. Never logged |
+| SMTP_FROM | unset | required sender, `addr@example.com` or `Name <addr@example.com>` |
+| SMTP_TLS | starttls | `starttls` (upgrade is mandatory; nothing is sent in the clear), `implicit` (TLS from the first byte), or `none` (only with APP_ENV=dev) |
+| NOTIFY_RESET_URL | unset | absolute http(s) link template containing `{token}` exactly once; required with `AUTH_PASSWORD_RESET_ENABLED`. The token is percent-encoded |
+| NOTIFY_VERIFY_URL | unset | same, for `AUTH_EMAIL_VERIFICATION_ENABLED` |
+<!-- template:end smtp -->
 
 ### 7.3 Performance-testing overrides (dev/test only)
 
@@ -196,9 +214,9 @@ enabled — see docs/enabling-webauthn.md.
 | TENANCY_ENABLED | false | enables multi-tenant policy, cache and rate-limit behavior, the tenant resolution middleware, and goAuth tenant-scoped user lookup |
 | TENANCY_RESOLVER | header | how the request tenant is resolved: `header` or `subdomain` |
 | TENANCY_HEADER | X-Tenant-ID | header carrying the tenant id (header resolver) |
-| TENANCY_BASE_DOMAIN | (empty) | parent domain for the subdomain resolver; required when `TENANCY_RESOLVER=subdomain` (`acme.example.com` -> tenant `acme`) |
+| TENANCY_BASE_DOMAIN | (empty) | parent domain for the subdomain resolver; required when `TENANCY_RESOLVER=subdomain` (`acme.example.com` -> the tenant whose `tenants.slug` is `acme`; its id is attached) |
 | TENANCY_VALIDATE | true | require the tenant to exist in `tenants` with `status='active'`; requires Postgres |
-| TENANCY_VALIDATE_CACHE_TTL | 30s | in-process cache for tenant validation results (positive and negative); `0` disables |
+| TENANCY_VALIDATE_CACHE_TTL | 30s | in-process cache for tenant validation results; `0` disables. Bounded LRU (10,000 active + 1,000 unknown/inactive entries); negative results expire after a quarter of this TTL (min 1s) |
 | TENANCY_EXEMPT_PATHS | /healthz,/readyz,/metrics | exact paths that skip tenant resolution; the metrics path is always exempt |
 
 Behavior:
@@ -217,7 +235,7 @@ Behavior:
 Lint dependency rules:
 
 - TENANCY_RESOLVER must be `header` or `subdomain` (checked only when enabled)
-- TENANCY_RESOLVER=subdomain requires TENANCY_BASE_DOMAIN
+- TENANCY_RESOLVER=subdomain requires TENANCY_BASE_DOMAIN and TENANCY_VALIDATE=true (the slug is looked up in `tenants`)
 - TENANCY_VALIDATE=true requires POSTGRES_ENABLED=true
 
 Deprecated:

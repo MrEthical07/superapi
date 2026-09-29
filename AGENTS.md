@@ -42,6 +42,7 @@ reference, but do not preserve legacy SQL-centric or dual data-access patterns.
 - Transactions apply to write paths only.
 - Read paths must not be forced into transaction context; Queries(ctx) binds to the pool when no tx is active.
 - pgx transaction behavior belongs only to the storage boundary implementation.
+- The goAuth user provider (StoreUserProvider) is the service boundary for goAuth-driven writes, because goAuth calls it directly with no service in between, so it may call storage.Postgres.WithTx for multi-statement writes (replacing backup codes); its repositories still never start transactions.
 
 ## 5. Route Creation Rules
 
@@ -59,7 +60,7 @@ Do not bypass policy.MustValidateRoute / validator-backed route checks.
 
 ## 6. Auth Integration Rules
 
-- Use goAuth (v0.5.0) integration in internal/core/auth; goAuth config lives in internal/core/auth/config.go and roles in roles.go.
+- Use goAuth (v0.6.0) integration in internal/core/auth; goAuth config lives in internal/core/auth/config.go and roles in roles.go.
 - Auth HTTP endpoints live in internal/modules/auth (handler -> service -> goAuth engine). The service is the only code that calls *goauth.Engine.
 - Optional endpoint groups are gated by AUTH_*_ENABLED flags and are not registered when off.
 - Keep goAuth user provider data-store independent from service/module layers.

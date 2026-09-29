@@ -5,9 +5,11 @@
 package authtest
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +42,7 @@ func (r *UserRepository) GetByIdentifier(_ context.Context, identifier string) (
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, u := range r.users {
-		if u.Email == strings.TrimSpace(identifier) {
+		if u.Email == auth.NormalizeIdentifier(identifier) {
 			return u, nil
 		}
 	}
@@ -63,7 +65,7 @@ func (r *UserRepository) GetByIdentifierInTenant(_ context.Context, tenantID, id
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, u := range r.users {
-		if u.TenantID == tenantID && u.Email == strings.TrimSpace(identifier) {
+		if u.TenantID == tenantID && u.Email == auth.NormalizeIdentifier(identifier) {
 			return u, nil
 		}
 	}
@@ -100,7 +102,7 @@ func (r *UserRepository) Create(_ context.Context, input auth.CreateStoredUserIn
 	u := auth.StoredUser{
 		ID:             hex.EncodeToString(b[:]),
 		TenantID:       tenantOrDefault(input.TenantID),
-		Email:          strings.TrimSpace(input.Identifier),
+		Email:          auth.NormalizeIdentifier(input.Identifier),
 		PasswordHash:   input.PasswordHash,
 		Role:           input.Role,
 		Status:         input.Status,
@@ -219,6 +221,41 @@ func (m *MFARepository) AdvanceTOTPCounter(_ context.Context, tenantID, userID s
 	st.LastUsedCounter = counter
 	m.totp[userID] = st
 	return nil
+}
+
+func (m *MFARepository) RotateTOTPSecret(_ context.Context, tenantID, userID string, prev, next []byte) (bool, error) {
+	m.users.mu.Lock()
+	defer m.users.mu.Unlock()
+	if _, ok := m.inScope(tenantID, userID); !ok {
+		return false, auth.ErrAuthUserNotFound
+	}
+	st, ok := m.totp[userID]
+	if !ok || !bytes.Equal(st.SecretCiphertext, prev) {
+		return false, nil
+	}
+	st.SecretCiphertext = append([]byte(nil), next...)
+	m.totp[userID] = st
+	return true, nil
+}
+
+func (m *MFARepository) ListTOTPSecrets(_ context.Context, afterUserID string, limit int) ([]auth.TOTPSecretRow, error) {
+	m.users.mu.Lock()
+	defer m.users.mu.Unlock()
+	ids := make([]string, 0, len(m.totp))
+	for id := range m.totp {
+		if id > afterUserID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	if limit >= 0 && len(ids) > limit {
+		ids = ids[:limit]
+	}
+	out := make([]auth.TOTPSecretRow, len(ids))
+	for i, id := range ids {
+		out[i] = auth.TOTPSecretRow{UserID: id, Ciphertext: append([]byte(nil), m.totp[id].SecretCiphertext...)}
+	}
+	return out, nil
 }
 
 func (m *MFARepository) DisableTOTP(_ context.Context, tenantID, userID string) error {

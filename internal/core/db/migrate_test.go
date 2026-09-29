@@ -17,8 +17,13 @@ func TestMigrationSourceURL(t *testing.T) {
 	if !strings.HasPrefix(u, "file://") {
 		t.Fatalf("url = %q, want file:// prefix", u)
 	}
-	if runtime.GOOS == "windows" && !strings.Contains(u, ":/") {
-		t.Fatalf("windows url = %q, expected drive path", u)
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(u, ":/") {
+			t.Fatalf("windows url = %q, expected drive path", u)
+		}
+		if strings.HasPrefix(u, "file:///") {
+			t.Fatalf("windows url = %q, golang-migrate needs file://D:/... (no third slash)", u)
+		}
 	}
 }
 

@@ -62,7 +62,7 @@ func TestNewNotifierDrivers(t *testing.T) {
 	} else if _, ok := n.(Noop); !ok {
 		t.Fatalf("default driver = %T, want Noop", n)
 	}
-	if _, err := New(config.NotifyConfig{Driver: "smtp"}, "dev", nil); err == nil {
+	if _, err := New(config.NotifyConfig{Driver: "carrier-pigeon"}, "dev", nil); err == nil {
 		t.Fatal("unknown driver must error")
 	}
 }

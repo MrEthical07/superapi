@@ -17,6 +17,8 @@ type fakeDirectory struct {
 	tenants map[string]Record
 	err     error
 	calls   atomic.Int32
+	// slugCalls counts GetBySlug calls (also included in calls).
+	slugCalls atomic.Int32
 }
 
 func (d *fakeDirectory) Get(_ context.Context, id string) (Record, error) {
@@ -31,10 +33,27 @@ func (d *fakeDirectory) Get(_ context.Context, id string) (Record, error) {
 	return rec, nil
 }
 
+func (d *fakeDirectory) GetBySlug(_ context.Context, slug string) (Record, error) {
+	d.calls.Add(1)
+	d.slugCalls.Add(1)
+	if d.err != nil {
+		return Record{}, d.err
+	}
+	for _, rec := range d.tenants {
+		if rec.Slug == slug {
+			return rec, nil
+		}
+	}
+	return Record{}, ErrTenantNotFound
+}
+
 func newDirectory() *fakeDirectory {
 	return &fakeDirectory{tenants: map[string]Record{
-		"acme":    {ID: "acme", Status: StatusActive},
-		"dormant": {ID: "dormant", Status: StatusInactive},
+		"acme":    {ID: "acme", Slug: "acme", Status: StatusActive},
+		"dormant": {ID: "dormant", Slug: "dormant", Status: StatusInactive},
+		// A tenant whose slug differs from its id: the subdomain resolver must
+		// attach the id.
+		"t-42": {ID: "t-42", Slug: "globex", Status: StatusActive},
 	}}
 }
 
@@ -164,9 +183,9 @@ func TestMiddlewareCachesValidation(t *testing.T) {
 func TestValidationCacheExpiry(t *testing.T) {
 	c := newValidationCache(time.Second)
 	now := time.Unix(1000, 0)
-	c.now = func() time.Time { return now }
-	c.put("acme", true)
-	if active, ok := c.get("acme"); !ok || !active {
+	setClock(c, func() time.Time { return now })
+	c.put("acme", cachedTenant{ID: "acme", Active: true})
+	if got, ok := c.get("acme"); !ok || !got.Active {
 		t.Fatal("expected fresh cache hit")
 	}
 	now = now.Add(2 * time.Second)

@@ -81,6 +81,13 @@ type AuthConfig struct {
 	// TOTPEncryptionKey encrypts TOTP secrets at rest (AES-256-GCM). It is a
 	// base64-encoded 32-byte key and is required when TOTPEnabled.
 	TOTPEncryptionKey string
+	// TOTPEncryptionKeys is a keyring for rotating the encryption key: a
+	// comma-separated list of kid:base64key (AUTH_TOTP_ENCRYPTION_KEYS).
+	// TOTPEncryptionActiveKID names the key that seals new secrets. Either
+	// this or TOTPEncryptionKey is required when TOTPEnabled; both may be set
+	// during a rotation (see docs/security-env-recommendations.md).
+	TOTPEncryptionKeys      string
+	TOTPEncryptionActiveKID string
 	// TestOverridesAllowed reports whether AUTH_TEST_* perf overrides may be
 	// used; derived from APP_ENV (dev/test only). Not an env var.
 	TestOverridesAllowed bool
@@ -96,6 +103,10 @@ type NotifyConfig struct {
 	LogSecrets bool
 	// Timeout bounds each asynchronous delivery attempt.
 	Timeout time.Duration
+	// template:begin smtp
+	// SMTP configures the built-in smtp driver (NOTIFY_DRIVER=smtp).
+	SMTP SMTPConfig
+	// template:end smtp
 }
 
 // Notify driver names accepted by NOTIFY_DRIVER.
@@ -432,6 +443,8 @@ func Load() (*Config, error) {
 			TOTPEnabled:               getBool("AUTH_TOTP_ENABLED", false),
 			TOTPIssuer:                strings.TrimSpace(getenv("AUTH_TOTP_ISSUER", "")),
 			TOTPEncryptionKey:         strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_KEY", "")),
+			TOTPEncryptionKeys:        strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_KEYS", "")),
+			TOTPEncryptionActiveKID:   strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_ACTIVE_KID", "")),
 			TestOverridesAllowed:      isDevOrTestEnv(env),
 		},
 		// template:begin tenancy
@@ -509,6 +522,9 @@ func Load() (*Config, error) {
 		LogSecrets: getBool("NOTIFY_LOG_SECRETS", false),
 		Timeout:    getDuration("NOTIFY_TIMEOUT", 10*time.Second),
 	}
+	// template:begin smtp
+	cfg.Notify.SMTP = loadSMTP()
+	// template:end smtp
 
 	return cfg, nil
 }
@@ -613,10 +629,21 @@ func (c *Config) Lint() error {
 	if err := c.lintAuthFeatures(); err != nil {
 		return err
 	}
-	switch c.Notify.Driver {
-	case NotifyDriverNoop, NotifyDriverLog:
-	default:
-		return fmt.Errorf("invalid notify driver: %q (valid: noop, log)", c.Notify.Driver)
+	// template:begin webauthn
+	if err := c.lintWebAuthn(); err != nil {
+		return err
+	}
+	// template:end webauthn
+	if err := c.lintNotifyDriver(); err != nil {
+		return err
+	}
+	// template:begin smtp
+	if err := c.lintSMTP(); err != nil {
+		return err
+	}
+	// template:end smtp
+	if err := c.lintNotifyDelivery(); err != nil {
+		return err
 	}
 	if c.Notify.LogSecrets && !strings.EqualFold(strings.TrimSpace(c.Env), "dev") {
 		return fmt.Errorf("NOTIFY_LOG_SECRETS=true is only allowed with APP_ENV=dev")
@@ -634,6 +661,11 @@ func (c *Config) Lint() error {
 		case TenancyResolverSubdomain:
 			if c.Tenancy.BaseDomain == "" {
 				return fmt.Errorf("tenancy resolver %q requires TENANCY_BASE_DOMAIN", TenancyResolverSubdomain)
+			}
+			// The subdomain is a slug; only the tenants table can turn it into
+			// the tenant id that goAuth and modules use.
+			if !c.Tenancy.Validate {
+				return fmt.Errorf("tenancy resolver %q looks tenants up by slug in the tenants table, so it requires TENANCY_VALIDATE=true (and Postgres)", TenancyResolverSubdomain)
 			}
 		default:
 			return fmt.Errorf("invalid tenancy resolver: %q (valid: header, subdomain)", c.Tenancy.Resolver)
@@ -972,11 +1004,8 @@ func (c *Config) lintAuthFeatures() error {
 		return fmt.Errorf("AUTH_REGISTRATION_AUTO_LOGIN requires AUTH_REGISTRATION_ENABLED=true")
 	}
 	if c.Auth.TOTPEnabled {
-		if c.Auth.TOTPEncryptionKey == "" {
-			return fmt.Errorf("AUTH_TOTP_ENABLED requires AUTH_TOTP_ENCRYPTION_KEY (base64-encoded 32-byte key, e.g. `openssl rand -base64 32`)")
-		}
-		if _, err := DecodeKey32(c.Auth.TOTPEncryptionKey); err != nil {
-			return fmt.Errorf("AUTH_TOTP_ENCRYPTION_KEY: %w", err)
+		if _, err := c.Auth.TOTPKeyring(); err != nil {
+			return err
 		}
 	}
 	if !c.Auth.TestOverridesAllowed {
@@ -987,6 +1016,48 @@ func (c *Config) lintAuthFeatures() error {
 		}
 	}
 	return nil
+}
+
+// notifyDeliveryFlags names the enabled auth features that depend on a working
+// notifier, in a stable order.
+func (c *Config) notifyDeliveryFlags() []string {
+	var flags []string
+	if c.Auth.PasswordResetEnabled {
+		flags = append(flags, "AUTH_PASSWORD_RESET_ENABLED")
+	}
+	if c.Auth.EmailVerificationEnabled {
+		flags = append(flags, "AUTH_EMAIL_VERIFICATION_ENABLED")
+	}
+	return flags
+}
+
+func (c *Config) usesNoopNotifier() bool {
+	driver := strings.ToLower(strings.TrimSpace(c.Notify.Driver))
+	return driver == "" || driver == NotifyDriverNoop
+}
+
+// lintNotifyDelivery refuses to start a non-development deployment whose
+// password-reset or email-verification feature can never deliver its message.
+// The noop driver discards every challenge, so with verification on new
+// accounts would sit in pending_verification forever, and reset emails would
+// never arrive. In dev/test it is allowed (and warned about, see Warnings).
+func (c *Config) lintNotifyDelivery() error {
+	flags := c.notifyDeliveryFlags()
+	if len(flags) == 0 || !c.usesNoopNotifier() || isDevOrTestEnv(c.Env) {
+		return nil
+	}
+	return fmt.Errorf("%s needs a notifier that delivers messages, but NOTIFY_DRIVER is noop, which discards every reset and verification message (users could never finish either flow); set NOTIFY_DRIVER=smtp (or a driver your project registers), or turn the feature off. noop is only allowed with APP_ENV=dev or APP_ENV=test", strings.Join(flags, " and "))
+}
+
+// Warnings returns human-readable startup warnings about settings that are
+// valid but almost certainly not what a real deployment wants. Callers log
+// these at startup; they never fail startup on their own.
+func (c *Config) Warnings() []string {
+	var out []string
+	if flags := c.notifyDeliveryFlags(); len(flags) > 0 && c.usesNoopNotifier() {
+		out = append(out, strings.Join(flags, " and ")+" is on but NOTIFY_DRIVER=noop discards every reset and verification message, so those flows cannot complete. Allowed here because APP_ENV="+strings.TrimSpace(c.Env)+"; startup fails in other environments. Use NOTIFY_DRIVER=log to see the messages locally, or NOTIFY_DRIVER=smtp to send them.")
+	}
+	return out
 }
 
 // DecodeKey32 decodes a base64 (standard or URL, padded or not) 32-byte key.

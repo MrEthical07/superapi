@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MrEthical07/superapi/internal/core/db/sqlcgen"
 	"github.com/MrEthical07/superapi/internal/core/storage"
@@ -14,6 +15,16 @@ import (
 // ErrTOTPCounterNotAdvanced is returned when a TOTP counter update would not
 // move the stored counter forward (a replayed or concurrently used code).
 var ErrTOTPCounterNotAdvanced = errors.New("totp counter not advanced")
+
+// ErrTransactionRequired is returned by an operation that is only correct as
+// several statements in one transaction when it is called outside one.
+var ErrTransactionRequired = errors.New("operation must run inside a transaction")
+
+// TOTPSecretRow is one stored TOTP ciphertext, as scanned by key rotation.
+type TOTPSecretRow struct {
+	UserID     string
+	Ciphertext []byte
+}
 
 // TOTPState is the stored TOTP state for a user. SecretCiphertext is the
 // encrypted secret exactly as persisted; the provider decrypts it.
@@ -28,8 +39,9 @@ type TOTPState struct {
 //
 // tenantID scopes every operation: empty means tenant-blind (tenancy
 // disabled); a value restricts the operation to users in that tenant, so a
-// user id from another tenant behaves as not found. Each method is a single
-// SQL statement and therefore atomic without a service-owned transaction.
+// user id from another tenant behaves as not found. Every method is a single
+// SQL statement and therefore atomic on its own, except ReplaceBackupCodes,
+// which needs the caller's transaction.
 type MFARepository interface {
 	// GetTOTP returns the user's TOTP state, or found=false when none exists.
 	GetTOTP(ctx context.Context, tenantID, userID string) (state TOTPState, found bool, err error)
@@ -45,7 +57,20 @@ type MFARepository interface {
 	DisableTOTP(ctx context.Context, tenantID, userID string) error
 	// ListUnusedBackupCodes returns the hashes of backup codes not yet used.
 	ListUnusedBackupCodes(ctx context.Context, tenantID, userID string) ([][32]byte, error)
-	// ReplaceBackupCodes atomically replaces every backup code for the user.
+	// RotateTOTPSecret swaps the stored ciphertext for next only if it still
+	// equals prev (compare-and-swap), reporting whether it did. It is how a
+	// secret is re-encrypted under a new key without ever overwriting a
+	// concurrent change.
+	RotateTOTPSecret(ctx context.Context, tenantID, userID string, prev, next []byte) (swapped bool, err error)
+	// ListTOTPSecrets returns up to limit stored ciphertexts with a user id
+	// greater than afterUserID ("" for the first page), across all tenants, in
+	// user id order. It is for the rotatetotpkey command.
+	ListTOTPSecrets(ctx context.Context, afterUserID string, limit int) ([]TOTPSecretRow, error)
+	// ReplaceBackupCodes replaces every backup code for the user. It is a
+	// delete followed by an insert, so the caller must run it inside one
+	// transaction (storage.Postgres.WithTx); the relational implementation
+	// returns ErrTransactionRequired otherwise. The StoreUserProvider does
+	// this for every goAuth-driven replacement.
 	ReplaceBackupCodes(ctx context.Context, tenantID, userID string, hashes [][32]byte) error
 	// ConsumeBackupCode marks a matching unused code as used, reporting
 	// whether a code was consumed. Concurrent consumes of one code cannot both
@@ -129,6 +154,49 @@ func (r *sqlcMFARepository) AdvanceTOTPCounter(ctx context.Context, tenantID, us
 	return nil
 }
 
+func (r *sqlcMFARepository) RotateTOTPSecret(ctx context.Context, tenantID, userID string, prev, next []byte) (bool, error) {
+	id, err := parseUserID(userID)
+	if err != nil {
+		return false, err
+	}
+	swapped, err := r.pg.Queries(ctx).RotateUserTOTPSecret(ctx, sqlcgen.RotateUserTOTPSecretParams{
+		NextCiphertext: next,
+		UserID:         id,
+		PrevCiphertext: prev,
+		TenantID:       optionalText(tenantID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("rotate totp secret: %w", err)
+	}
+	return swapped > 0, nil
+}
+
+func (r *sqlcMFARepository) ListTOTPSecrets(ctx context.Context, afterUserID string, limit int) ([]TOTPSecretRow, error) {
+	if limit < 1 {
+		return nil, nil
+	}
+	var after pgtype.UUID // invalid (NULL) selects the first page
+	if afterUserID != "" {
+		parsed, err := parseUserID(afterUserID)
+		if err != nil {
+			return nil, err
+		}
+		after = parsed
+	}
+	rows, err := r.pg.Queries(ctx).ListUserTOTPSecrets(ctx, sqlcgen.ListUserTOTPSecretsParams{
+		AfterUserID: after,
+		RowLimit:    int32(min(limit, 1_000_000)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list totp secrets: %w", err)
+	}
+	out := make([]TOTPSecretRow, len(rows))
+	for i, row := range rows {
+		out[i] = TOTPSecretRow{UserID: uuidToString(row.UserID), Ciphertext: row.SecretCiphertext}
+	}
+	return out, nil
+}
+
 func (r *sqlcMFARepository) DisableTOTP(ctx context.Context, tenantID, userID string) error {
 	id, err := parseUserID(userID)
 	if err != nil {
@@ -162,24 +230,46 @@ func (r *sqlcMFARepository) ListUnusedBackupCodes(ctx context.Context, tenantID,
 }
 
 func (r *sqlcMFARepository) ReplaceBackupCodes(ctx context.Context, tenantID, userID string, hashes [][32]byte) error {
+	// Two statements (delete, then insert) are only atomic in one transaction,
+	// and a half-done replacement would leave the user without backup codes.
+	// The repository does not own transaction boundaries, so it refuses to run
+	// outside the caller's.
+	if !r.pg.InTx(ctx) {
+		return fmt.Errorf("replace backup codes: %w", ErrTransactionRequired)
+	}
 	id, err := parseUserID(userID)
 	if err != nil {
 		return err
 	}
-	raw := make([][]byte, len(hashes))
-	for i := range hashes {
-		raw[i] = append([]byte(nil), hashes[i][:]...)
+
+	// The unique (user_id, code_hash) constraint would reject a repeated hash
+	// within the new set; a code appearing twice is one code.
+	seen := make(map[[32]byte]struct{}, len(hashes))
+	raw := make([][]byte, 0, len(hashes))
+	for _, h := range hashes {
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		raw = append(raw, append([]byte(nil), h[:]...))
 	}
-	inserted, err := r.pg.Queries(ctx).ReplaceBackupCodes(ctx, sqlcgen.ReplaceBackupCodesParams{
+
+	q := r.pg.Queries(ctx)
+	scope := optionalText(tenantID)
+	if _, err := q.DeleteBackupCodes(ctx, sqlcgen.DeleteBackupCodesParams{UserID: id, TenantID: scope}); err != nil {
+		return fmt.Errorf("replace backup codes: delete: %w", err)
+	}
+	inserted, err := q.InsertBackupCodes(ctx, sqlcgen.InsertBackupCodesParams{
 		CodeHashes: raw,
 		UserID:     id,
-		TenantID:   optionalText(tenantID),
+		TenantID:   scope,
 	})
 	if err != nil {
-		return fmt.Errorf("replace backup codes: %w", err)
+		return fmt.Errorf("replace backup codes: insert: %w", err)
 	}
-	if inserted != int64(len(hashes)) {
-		// No user in scope (nothing inserted) or a partial insert.
+	if inserted != int64(len(raw)) {
+		// No user in scope (nothing inserted). The caller's transaction rolls
+		// back the delete when this error is returned.
 		return ErrAuthUserNotFound
 	}
 	return nil

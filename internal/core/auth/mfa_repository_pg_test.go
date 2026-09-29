@@ -75,11 +75,18 @@ func TestMFARepositorySQL(t *testing.T) {
 	}
 
 	// Backup codes: replace, single use under concurrency, replace again.
+	// ReplaceBackupCodes is two statements and must run in the caller's
+	// transaction.
+	replace := func(tenantID string, hashes ...[32]byte) error {
+		return pg.WithTx(ctx, func(ctx context.Context) error {
+			return mfa.ReplaceBackupCodes(ctx, tenantID, u.ID, hashes)
+		})
+	}
 	h1, h2 := sha256.Sum256([]byte("code-1")), sha256.Sum256([]byte("code-2"))
-	if err := mfa.ReplaceBackupCodes(ctx, "tenant-a", u.ID, [][32]byte{h1, h2}); err != nil {
+	if err := replace("tenant-a", h1, h2); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
-	if err := mfa.ReplaceBackupCodes(ctx, "tenant-b", u.ID, [][32]byte{h1}); !errors.Is(err, ErrAuthUserNotFound) {
+	if err := replace("tenant-b", h1); !errors.Is(err, ErrAuthUserNotFound) {
 		t.Fatalf("cross-tenant replace err=%v", err)
 	}
 	var wins atomic.Int32
@@ -108,7 +115,7 @@ func TestMFARepositorySQL(t *testing.T) {
 	if err != nil || len(codes) != 1 || codes[0] != h2 {
 		t.Fatalf("unused codes=%v err=%v", codes, err)
 	}
-	if err := mfa.ReplaceBackupCodes(ctx, "tenant-a", u.ID, [][32]byte{h1, h2}); err != nil {
+	if err := replace("tenant-a", h1, h2); err != nil {
 		t.Fatalf("replace again (reusing hashes): %v", err)
 	}
 	if codes, _ := mfa.ListUnusedBackupCodes(ctx, "tenant-a", u.ID); len(codes) != 2 {

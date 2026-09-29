@@ -230,6 +230,29 @@ type totpSetupResponse struct {
 	OTPAuthURI   string `json:"otpauth_uri"`
 }
 
+// stepUpRequest carries the current password for sensitive actions. A stolen
+// access token alone must not be enough to add or remove a second factor.
+type stepUpRequest struct {
+	Password string `json:"password"`
+}
+
+// Validate ensures the password is present and bounded.
+func (r stepUpRequest) Validate() error {
+	return requirePassword(r.Password)
+}
+
+// requirePassword checks the step-up password field. The value is never
+// trimmed: whitespace is a legal part of a password.
+func requirePassword(password string) error {
+	if password == "" {
+		return badRequest("password is required")
+	}
+	if len(password) > maxPasswordLength {
+		return badRequest("password is too long")
+	}
+	return nil
+}
+
 type totpCodeRequest struct {
 	Code string `json:"code"`
 }

@@ -1,9 +1,11 @@
 module github.com/MrEthical07/superapi
 
-go 1.26.8
+go 1.27.0
+
+toolchain go1.27.1
 
 require (
-	github.com/MrEthical07/goAuth v0.5.0
+	github.com/MrEthical07/goAuth v0.6.0
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -24,12 +26,12 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
-	github.com/go-webauthn/webauthn v0.17.4 // indirect
-	github.com/go-webauthn/x v0.2.6 // indirect
+	github.com/go-webauthn/webauthn v0.18.2 // indirect
+	github.com/go-webauthn/x v0.3.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect

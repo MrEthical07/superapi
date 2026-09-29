@@ -90,7 +90,7 @@ func newFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
-		"go.mod":                   "module github.com/MrEthical07/superapi\n\ngo 1.26\n",
+		"go.mod":                   "module github.com/MrEthical07/superapi\n\ngo 1.27\n",
 		"main.go":                  "package main\n\nimport _ \"github.com/MrEthical07/superapi/internal/x\"\n\nfunc main() {}\n",
 		"internal/x/x.go":          "package x\n\n// template:begin perf\nconst Perf = 1\n\n// template:end perf\nconst Keep = 2\n",
 		"performance/README.md":    "perf docs\n",

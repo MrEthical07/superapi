@@ -4,7 +4,7 @@ From "Use this template" to a running, authenticated API.
 
 ## Prerequisites
 
-- Go (the version in `go.mod`)
+- Go 1.27 or newer (the version in `go.mod`; `make doctor` checks it)
 - Docker with Compose v2 (for the local Postgres + Redis)
 - Optional: `sqlc` v1.31.1 if you will change SQL
   (`go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1`)
@@ -34,7 +34,9 @@ Preview first with `make init module=... flags=--dry-run`. Optional pruning:
 | `--no-tenancy` | tenant resolution, tenants table, `TENANCY_*` config |
 | `--no-webauthn` | WebAuthn credential store, ceremonies, `WEBAUTHN_*` |
 | `--no-document-store` | the optional NoSQL store package |
+| `--no-smtp` | the built-in SMTP notifier and `SMTP_*` config |
 | `--no-devx` | `make module` scaffolder and module SQL sync |
+| `--no-rotate-tool` | `cmd/rotatetotpkey` and `make rotate-totp-key` |
 | `--no-perf` | `performance/`, `cmd/perftoken`, `make load-*` |
 | `--no-demo` | bundled example code |
 | `--no-all` | all of the above |

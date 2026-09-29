@@ -35,8 +35,12 @@ func (r Record) Active() bool { return r.Status == StatusActive }
 // Directory looks up tenants. The tenant middleware uses it to validate the
 // resolved request tenant (TENANCY_VALIDATE).
 type Directory interface {
-	// Get returns the tenant or ErrTenantNotFound.
+	// Get returns the tenant with this id, or ErrTenantNotFound.
 	Get(ctx context.Context, tenantID string) (Record, error)
+	// GetBySlug returns the tenant with this slug, or ErrTenantNotFound. The
+	// subdomain resolver uses it: subdomains are slugs, and the request must
+	// carry the tenant's id (Record.ID), not its slug.
+	GetBySlug(ctx context.Context, slug string) (Record, error)
 }
 
 // Repository persists tenants over the relational boundary. It satisfies
@@ -69,6 +73,17 @@ func (r *sqlcRepository) Get(ctx context.Context, tenantID string) (Record, erro
 	return Record{ID: row.ID, Slug: row.Slug, Name: row.Name, Status: row.Status}, nil
 }
 
+func (r *sqlcRepository) GetBySlug(ctx context.Context, slug string) (Record, error) {
+	row, err := r.pg.Queries(ctx).GetTenantBySlug(ctx, NormalizeSlug(slug))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Record{}, ErrTenantNotFound
+		}
+		return Record{}, fmt.Errorf("get tenant by slug: %w", err)
+	}
+	return Record{ID: row.ID, Slug: row.Slug, Name: row.Name, Status: row.Status}, nil
+}
+
 func (r *sqlcRepository) Create(ctx context.Context, record Record) (Record, error) {
 	status := strings.TrimSpace(record.Status)
 	if status == "" {
@@ -76,7 +91,7 @@ func (r *sqlcRepository) Create(ctx context.Context, record Record) (Record, err
 	}
 	row, err := r.pg.Queries(ctx).CreateTenant(ctx, sqlcgen.CreateTenantParams{
 		ID:     strings.TrimSpace(record.ID),
-		Slug:   strings.TrimSpace(record.Slug),
+		Slug:   NormalizeSlug(record.Slug),
 		Name:   strings.TrimSpace(record.Name),
 		Status: status,
 	})

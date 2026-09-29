@@ -21,7 +21,7 @@ func TestAuthFeatureLint(t *testing.T) {
 		{name: "totp needs key", env: merge(base, map[string]string{"AUTH_TOTP_ENABLED": "true"}), wantErr: "AUTH_TOTP_ENCRYPTION_KEY"},
 		{name: "totp bad key", env: merge(base, map[string]string{"AUTH_TOTP_ENABLED": "true", "AUTH_TOTP_ENCRYPTION_KEY": "c2hvcnQ="}), wantErr: "32 bytes"},
 		{name: "totp ok", env: merge(base, map[string]string{"AUTH_TOTP_ENABLED": "true", "AUTH_TOTP_ENCRYPTION_KEY": validKey})},
-		{name: "notify bad driver", env: map[string]string{"NOTIFY_DRIVER": "smtp"}, wantErr: "notify driver"},
+		{name: "notify bad driver", env: map[string]string{"NOTIFY_DRIVER": "carrier-pigeon"}, wantErr: "notify driver"},
 		{name: "notify secrets outside dev", env: map[string]string{"APP_ENV": "staging", "NOTIFY_DRIVER": "log", "NOTIFY_LOG_SECRETS": "true"}, wantErr: "NOTIFY_LOG_SECRETS"},
 		{name: "notify secrets in dev", env: map[string]string{"APP_ENV": "dev", "NOTIFY_DRIVER": "log", "NOTIFY_LOG_SECRETS": "true"}},
 		{name: "auth test override in dev", env: map[string]string{"APP_ENV": "dev", "AUTH_TEST_SHARED_SECRET": "x"}},

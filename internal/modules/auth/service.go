@@ -8,6 +8,7 @@ import (
 
 	goauth "github.com/MrEthical07/goAuth"
 
+	coreauth "github.com/MrEthical07/superapi/internal/core/auth"
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 )
 
@@ -79,7 +80,7 @@ func (s *service) login(ctx context.Context, identifier, password string, rememb
 	if err != nil {
 		return loginOutcome{}, err
 	}
-	result, err := engine.LoginWithOptions(ctx, strings.TrimSpace(identifier), password, goauth.LoginOptions{RememberMe: rememberMe})
+	result, err := engine.LoginWithOptions(ctx, coreauth.NormalizeIdentifier(identifier), password, goauth.LoginOptions{RememberMe: rememberMe})
 	if err != nil {
 		return loginOutcome{}, mapAuthEndpointError(err, "invalid credentials")
 	}
@@ -146,6 +147,22 @@ func (s *service) listSessions(ctx context.Context, userID string) ([]goauth.Ses
 	return sessions, nil
 }
 
+// verifyPassword is the step-up check for sensitive actions (adding a TOTP or
+// WebAuthn factor, removing a security key). It confirms the caller knows the
+// account password through goAuth's VerifyPassword, which shares the
+// change-password limiter and never touches account state. A wrong password
+// answers like a failed login (401); an exhausted limiter answers 429.
+func (s *service) verifyPassword(ctx context.Context, userID, password string) error {
+	engine, err := s.requireEngine()
+	if err != nil {
+		return err
+	}
+	if err := engine.VerifyPassword(ctx, userID, password); err != nil {
+		return mapAuthEndpointError(err, "invalid credentials")
+	}
+	return nil
+}
+
 func (s *service) changePassword(ctx context.Context, userID, current, next string) error {
 	engine, err := s.requireEngine()
 	if err != nil {
@@ -179,7 +196,7 @@ func (s *service) register(ctx context.Context, identifier, password string, rem
 	if err != nil {
 		return registerOutcome{}, err
 	}
-	identifier = strings.TrimSpace(identifier)
+	identifier = coreauth.NormalizeIdentifier(identifier)
 
 	result, err := engine.CreateAccount(ctx, goauth.CreateAccountRequest{
 		Identifier: identifier,
@@ -214,7 +231,7 @@ func (s *service) requestPasswordReset(ctx context.Context, identifier string) e
 	if err != nil {
 		return err
 	}
-	identifier = strings.TrimSpace(identifier)
+	identifier = coreauth.NormalizeIdentifier(identifier)
 	challenge, err := engine.RequestPasswordReset(ctx, identifier)
 	if err != nil {
 		return mapFlowError(err)
@@ -251,7 +268,7 @@ func (s *service) requestEmailVerification(ctx context.Context, identifier strin
 	if _, err := s.requireEngine(); err != nil {
 		return err
 	}
-	return s.sendEmailVerification(ctx, strings.TrimSpace(identifier))
+	return s.sendEmailVerification(ctx, coreauth.NormalizeIdentifier(identifier))
 }
 
 // sendEmailVerification requests a verification challenge and delivers it only
@@ -323,7 +340,7 @@ func (s *service) setupTOTP(ctx context.Context, userID string) (totpSetup, erro
 		return totpSetup{}, mapFlowError(goauth.ErrUserNotFound)
 	}
 	if alreadyEnabled {
-		return totpSetup{}, apperr.New(apperr.CodeConflict, http.StatusConflict, "totp is already enabled; disable it before enrolling again")
+		return totpSetup{}, totpAlreadyEnabledErr()
 	}
 	setup, err := engine.GenerateTOTPSetup(ctx, userID)
 	if err != nil {

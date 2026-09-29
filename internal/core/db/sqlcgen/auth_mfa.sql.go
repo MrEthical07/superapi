@@ -64,6 +64,32 @@ func (q *Queries) ConsumeBackupCode(ctx context.Context, arg ConsumeBackupCodePa
 	return result.RowsAffected(), nil
 }
 
+const deleteBackupCodes = `-- name: DeleteBackupCodes :execrows
+DELETE FROM user_backup_codes
+WHERE user_id IN (
+    SELECT users.id FROM users
+    WHERE users.id = $1
+      AND ($2::text IS NULL OR users.tenant_id = $2::text)
+)
+`
+
+type DeleteBackupCodesParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	TenantID pgtype.Text `json:"tenant_id"`
+}
+
+// First half of replacing a user's backup codes. Run it and InsertBackupCodes
+// in one transaction: a single statement cannot do both because the unique
+// (user_id, code_hash) constraint rejects re-inserting a hash the same
+// statement deletes.
+func (q *Queries) DeleteBackupCodes(ctx context.Context, arg DeleteBackupCodesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteBackupCodes, arg.UserID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const disableUserTOTP = `-- name: DisableUserTOTP :one
 WITH target AS (
     SELECT users.id AS target_id FROM users
@@ -123,7 +149,10 @@ type GetUserTOTPRow struct {
 // Every query takes an optional tenant_id. NULL (tenancy disabled) scopes by
 // user id only; a value restricts the operation to users in that tenant, so a
 // user id from another tenant matches nothing. Each operation is a single
-// statement, so it is atomic without an explicit transaction.
+// statement, so it is atomic without an explicit transaction, except
+// ReplaceBackupCodes, which is a DeleteBackupCodes + InsertBackupCodes pair
+// that the caller must run inside one transaction (the repository refuses to
+// run outside one).
 func (q *Queries) GetUserTOTP(ctx context.Context, arg GetUserTOTPParams) (GetUserTOTPRow, error) {
 	row := q.db.QueryRow(ctx, getUserTOTP, arg.UserID, arg.TenantID)
 	var i GetUserTOTPRow
@@ -134,6 +163,30 @@ func (q *Queries) GetUserTOTP(ctx context.Context, arg GetUserTOTPParams) (GetUs
 		&i.TotpEnabled,
 	)
 	return i, err
+}
+
+const insertBackupCodes = `-- name: InsertBackupCodes :execrows
+INSERT INTO user_backup_codes (user_id, code_hash)
+SELECT users.id, code_hash
+FROM users, unnest($1::bytea[]) AS code_hash
+WHERE users.id = $2
+  AND ($3::text IS NULL OR users.tenant_id = $3::text)
+`
+
+type InsertBackupCodesParams struct {
+	CodeHashes [][]byte    `json:"code_hashes"`
+	UserID     pgtype.UUID `json:"user_id"`
+	TenantID   pgtype.Text `json:"tenant_id"`
+}
+
+// Second half of replacing a user's backup codes. Inserts nothing when the user
+// is not in scope (unknown id, or another tenant).
+func (q *Queries) InsertBackupCodes(ctx context.Context, arg InsertBackupCodesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertBackupCodes, arg.CodeHashes, arg.UserID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listUnusedBackupCodes = `-- name: ListUnusedBackupCodes :many
@@ -171,6 +224,46 @@ func (q *Queries) ListUnusedBackupCodes(ctx context.Context, arg ListUnusedBacku
 	return items, nil
 }
 
+const listUserTOTPSecrets = `-- name: ListUserTOTPSecrets :many
+SELECT t.user_id, t.secret_ciphertext
+FROM user_totp t
+WHERE $1::uuid IS NULL OR t.user_id > $1::uuid
+ORDER BY t.user_id
+LIMIT $2
+`
+
+type ListUserTOTPSecretsParams struct {
+	AfterUserID pgtype.UUID `json:"after_user_id"`
+	RowLimit    int32       `json:"row_limit"`
+}
+
+type ListUserTOTPSecretsRow struct {
+	UserID           pgtype.UUID `json:"user_id"`
+	SecretCiphertext []byte      `json:"secret_ciphertext"`
+}
+
+// Keyset-paginated scan of every stored ciphertext, across tenants, for the
+// rotatetotpkey command. Pass a NULL after_user_id for the first page.
+func (q *Queries) ListUserTOTPSecrets(ctx context.Context, arg ListUserTOTPSecretsParams) ([]ListUserTOTPSecretsRow, error) {
+	rows, err := q.db.Query(ctx, listUserTOTPSecrets, arg.AfterUserID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserTOTPSecretsRow{}
+	for rows.Next() {
+		var i ListUserTOTPSecretsRow
+		if err := rows.Scan(&i.UserID, &i.SecretCiphertext); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markUserTOTPVerified = `-- name: MarkUserTOTPVerified :one
 UPDATE user_totp t
 SET verified = TRUE, updated_at = NOW()
@@ -193,28 +286,34 @@ func (q *Queries) MarkUserTOTPVerified(ctx context.Context, arg MarkUserTOTPVeri
 	return user_id, err
 }
 
-const replaceBackupCodes = `-- name: ReplaceBackupCodes :execrows
-WITH target AS (
-    SELECT users.id AS target_id FROM users
-    WHERE users.id = $2
-      AND ($3::text IS NULL OR users.tenant_id = $3::text)
-), deleted AS (
-    DELETE FROM user_backup_codes WHERE user_id IN (SELECT target_id FROM target)
-)
-INSERT INTO user_backup_codes (user_id, code_hash)
-SELECT target.target_id, code_hash
-FROM target, unnest($1::bytea[]) AS code_hash
+const rotateUserTOTPSecret = `-- name: RotateUserTOTPSecret :execrows
+UPDATE user_totp t
+SET secret_ciphertext = $1::bytea, updated_at = NOW()
+FROM users u
+WHERE u.id = t.user_id
+  AND t.user_id = $2
+  AND t.secret_ciphertext = $3::bytea
+  AND ($4::text IS NULL OR u.tenant_id = $4::text)
 `
 
-type ReplaceBackupCodesParams struct {
-	CodeHashes [][]byte    `json:"code_hashes"`
-	UserID     pgtype.UUID `json:"user_id"`
-	TenantID   pgtype.Text `json:"tenant_id"`
+type RotateUserTOTPSecretParams struct {
+	NextCiphertext []byte      `json:"next_ciphertext"`
+	UserID         pgtype.UUID `json:"user_id"`
+	PrevCiphertext []byte      `json:"prev_ciphertext"`
+	TenantID       pgtype.Text `json:"tenant_id"`
 }
 
-// Deletes every existing code and inserts the new set in one statement.
-func (q *Queries) ReplaceBackupCodes(ctx context.Context, arg ReplaceBackupCodesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, replaceBackupCodes, arg.CodeHashes, arg.UserID, arg.TenantID)
+// Compare-and-swap for key rotation: replaces the stored ciphertext only if it
+// still equals prev_ciphertext, so a concurrent enable/disable/re-enroll is
+// never overwritten with a stale re-encryption. Touches no other state (the
+// verified flag, users.totp_enabled and account_version are unchanged).
+func (q *Queries) RotateUserTOTPSecret(ctx context.Context, arg RotateUserTOTPSecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateUserTOTPSecret,
+		arg.NextCiphertext,
+		arg.UserID,
+		arg.PrevCiphertext,
+		arg.TenantID,
+	)
 	if err != nil {
 		return 0, err
 	}

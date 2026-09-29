@@ -3,7 +3,10 @@
 -- Every query takes an optional tenant_id. NULL (tenancy disabled) scopes by
 -- user id only; a value restricts the operation to users in that tenant, so a
 -- user id from another tenant matches nothing. Each operation is a single
--- statement, so it is atomic without an explicit transaction.
+-- statement, so it is atomic without an explicit transaction, except
+-- ReplaceBackupCodes, which is a DeleteBackupCodes + InsertBackupCodes pair
+-- that the caller must run inside one transaction (the repository refuses to
+-- run outside one).
 
 -- name: GetUserTOTP :one
 SELECT t.secret_ciphertext, t.verified, t.last_used_counter, u.totp_enabled
@@ -86,18 +89,26 @@ WHERE b.user_id = sqlc.arg(user_id)
   AND (sqlc.narg(tenant_id)::text IS NULL OR u.tenant_id = sqlc.narg(tenant_id)::text)
 ORDER BY b.id;
 
--- name: ReplaceBackupCodes :execrows
--- Deletes every existing code and inserts the new set in one statement.
-WITH target AS (
-    SELECT users.id AS target_id FROM users
+-- name: DeleteBackupCodes :execrows
+-- First half of replacing a user's backup codes. Run it and InsertBackupCodes
+-- in one transaction: a single statement cannot do both because the unique
+-- (user_id, code_hash) constraint rejects re-inserting a hash the same
+-- statement deletes.
+DELETE FROM user_backup_codes
+WHERE user_id IN (
+    SELECT users.id FROM users
     WHERE users.id = sqlc.arg(user_id)
       AND (sqlc.narg(tenant_id)::text IS NULL OR users.tenant_id = sqlc.narg(tenant_id)::text)
-), deleted AS (
-    DELETE FROM user_backup_codes WHERE user_id IN (SELECT target_id FROM target)
-)
+);
+
+-- name: InsertBackupCodes :execrows
+-- Second half of replacing a user's backup codes. Inserts nothing when the user
+-- is not in scope (unknown id, or another tenant).
 INSERT INTO user_backup_codes (user_id, code_hash)
-SELECT target.target_id, code_hash
-FROM target, unnest(sqlc.arg(code_hashes)::bytea[]) AS code_hash;
+SELECT users.id, code_hash
+FROM users, unnest(sqlc.arg(code_hashes)::bytea[]) AS code_hash
+WHERE users.id = sqlc.arg(user_id)
+  AND (sqlc.narg(tenant_id)::text IS NULL OR users.tenant_id = sqlc.narg(tenant_id)::text);
 
 -- name: ConsumeBackupCode :execrows
 -- Atomic single use: the row lock plus the used_at IS NULL predicate mean two
@@ -110,3 +121,25 @@ WHERE u.id = b.user_id
   AND b.code_hash = sqlc.arg(code_hash)
   AND b.used_at IS NULL
   AND (sqlc.narg(tenant_id)::text IS NULL OR u.tenant_id = sqlc.narg(tenant_id)::text);
+
+-- name: RotateUserTOTPSecret :execrows
+-- Compare-and-swap for key rotation: replaces the stored ciphertext only if it
+-- still equals prev_ciphertext, so a concurrent enable/disable/re-enroll is
+-- never overwritten with a stale re-encryption. Touches no other state (the
+-- verified flag, users.totp_enabled and account_version are unchanged).
+UPDATE user_totp t
+SET secret_ciphertext = sqlc.arg(next_ciphertext)::bytea, updated_at = NOW()
+FROM users u
+WHERE u.id = t.user_id
+  AND t.user_id = sqlc.arg(user_id)
+  AND t.secret_ciphertext = sqlc.arg(prev_ciphertext)::bytea
+  AND (sqlc.narg(tenant_id)::text IS NULL OR u.tenant_id = sqlc.narg(tenant_id)::text);
+
+-- name: ListUserTOTPSecrets :many
+-- Keyset-paginated scan of every stored ciphertext, across tenants, for the
+-- rotatetotpkey command. Pass a NULL after_user_id for the first page.
+SELECT t.user_id, t.secret_ciphertext
+FROM user_totp t
+WHERE sqlc.narg(after_user_id)::uuid IS NULL OR t.user_id > sqlc.narg(after_user_id)::uuid
+ORDER BY t.user_id
+LIMIT sqlc.arg(row_limit);

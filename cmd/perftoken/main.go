@@ -67,7 +67,7 @@ func main() {
 	defer deps.Close()
 	engine := deps.AuthEngine
 
-	email := strings.TrimSpace(*identifier)
+	email := coreauth.NormalizeIdentifier(*identifier)
 	accessToken, refreshToken, err := engine.Login(ctx, email, *password)
 	if err != nil {
 		if !*createIfMissing {
