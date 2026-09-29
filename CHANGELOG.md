@@ -2,26 +2,181 @@
 
 All notable changes to this template are documented in this file.
 
-## Unreleased (v0.10.0)
+## v0.10.0 (2026-09-29)
 
-goAuth v0.6.0 on Go 1.27.
+Go 1.27, goAuth v0.6.0, and every open issue from the v0.9.0 review. The auth
+module gains a step-up password check, case-insensitive identifiers, an SMTP
+notifier and a rotatable TOTP encryption key; the tenant resolver and the
+request decoder stop depending on details that were fragile.
 
-- **Go 1.27 is now required** (`go.mod` is `go 1.27.0`, toolchain `go1.27.1`).
+**Behavior changes to note when upgrading:**
+
+- **Go 1.27 is required.** `go.mod` is `go 1.27.0` with `toolchain go1.27.1`;
   CI, the Dockerfile, the README badge and the issue template follow, and
   `make doctor` fails when the installed Go is older than `go.mod`.
-- **goAuth v0.5.0 -> v0.6.0** (also moves `go-webauthn/webauthn` to v0.18.2,
-  `go-webauthn/x` to v0.3.1 and `fxamacker/cbor` to v2.9.4).
-- **`WEBAUTHN_RP_ID` is validated at config load.** goAuth v0.6.0 rejects an
-  RP ID that is not a bare domain (an IP address, a URL, a host with a port, a
-  single-label name other than `localhost`) at `Build()`. Lint now reports the
-  same cases with the variable name. Use `WEBAUTHN_RP_ID=localhost` for local
-  development instead of `127.0.0.1`. A test keeps the lint in step with goAuth.
-- **Auth error mapping:** goAuth's `ErrTOTPAlreadyEnabled` maps to the same 409
-  the service's own pre-check returns, and `ErrPasswordVerifyRateLimited` maps
-  to 429 instead of falling through to a generic 401.
-- **Fixed:** `make migrate-*` and the migration runner failed on Windows with a
-  syntax error because the migration source URL was `file:///D:/...`; it is now
-  `file://D:/...` there (other platforms unchanged).
+- **goAuth v0.5.0 -> v0.6.0**, which also moves go-webauthn to v0.18.2 (see
+  Dependencies). goAuth's password-verify limiter now also guards
+  `password/change`: repeated wrong current passwords return 429.
+- **`WEBAUTHN_RP_ID` is validated at startup** when `WEBAUTHN_ENABLED=true`. It
+  must be a bare domain (`localhost` or `example.com`): an IP address such as
+  `127.0.0.1`, a URL, a host with a port, or another single-label name now fails
+  config lint naming the variable. goAuth v0.6.0 rejects the same values at
+  `Build()`.
+- **`password` is now required** on `POST /api/v1/auth/mfa/totp/setup`,
+  `POST /api/v1/auth/webauthn/register/begin` and
+  `POST /api/v1/auth/webauthn/credentials/remove` (step-up). Clients that call
+  them with only an access token get 400 `password is required`. A wrong
+  password is 401, exactly like a failed login; the limiter is 429.
+- **Emails are lower-cased.** The auth module trims and lower-cases every
+  identifier (register, login, reset and verification requests, `make user`)
+  before it reaches goAuth, and login/reset limiters are shared across case
+  variants. **Migration `000007_users_email_ci` lower-cases stored emails and
+  adds a unique index on `lower(email)`. It refuses to run, changing nothing,
+  if two existing accounts differ only by case**: the error lists them, and you
+  delete or rename one in each group, run
+  `POSTGRES_ENABLED=true go run ./cmd/migrate force --version=6`, and run
+  `make migrate-up` again. The original casing is not restored by the down
+  migration.
+- **Startup fails when password reset or email verification is enabled with
+  `NOTIFY_DRIVER=noop`** unless `APP_ENV` is `dev`, `development`, `local` or
+  `test`, where it logs a warning instead. With `noop`, new accounts stayed in
+  `pending_verification` forever and reset messages were never sent. Set
+  `NOTIFY_DRIVER=smtp` (new) or register your own driver.
+- **`TENANCY_RESOLVER=subdomain` now looks the tenant up by slug**
+  (`tenants.slug`) and attaches the tenant's **id**; the label used to be
+  treated as the id. Tenants created with `slug = id` (`make user
+  create_tenant=1`) are unaffected. The resolver requires
+  `TENANCY_VALIDATE=true` (lint refuses otherwise), slugs are lower-case, and
+  **`tenant.Directory` gains `GetBySlug`**: a project's own `Directory`
+  implementation must add it.
+- **JSON error messages are stable SuperAPI strings.** `encoding/json` is backed
+  by the v2 implementation in Go 1.27, so its error text can change; nothing
+  from it reaches a client any more. A request `Validate()` that returns a plain
+  (non-`AppError`) error now yields `request validation failed` instead of that
+  error's text: return an `AppError` to control the message. An unknown field
+  names itself in `error.details.field`.
+- **TOTP secrets are stored in ciphertext format v2** (key id in the header).
+  v0.10.0 reads every v0.9.0 secret, and re-encrypts one the first time a login
+  touches it, so **rolling back to v0.9.0 after upgrading can leave users whose
+  secrets were re-encrypted unable to pass TOTP**: they would have to re-enroll
+  (or you restore a database backup).
+- **Windows migration URL fix**: `make migrate-*`, the test database helper and
+  the migration runner failed on Windows with a `file:///D:/...` source URL
+  (`syntax error`); they now use `file://D:/...`. Other platforms are unchanged.
+- Smaller interface changes for projects that extend the template:
+  `MFARepository` gains `RotateTOTPSecret` and `ListTOTPSecrets`;
+  `auth.NewAESGCMCipher` keeps its signature but writes format v2;
+  `notify.New` looks drivers up in a registry;
+  `MFARepository.ReplaceBackupCodes` now requires a transaction (the goAuth
+  provider supplies it).
+
+### Security
+
+- **Identifiers can no longer be multiplied by case** (Alice@ / alice@ were two
+  accounts and two limiter budgets): one normalization helper is used at every
+  entry point, the SQL compares `lower(email)`, and a unique index enforces it.
+- **Step-up for sensitive second-factor actions**: adding a TOTP secret or a
+  WebAuthn credential and removing a WebAuthn credential need the account
+  password (goAuth `VerifyPassword`, rate limited), so a stolen access token
+  alone cannot add or strip security keys.
+- **The tenant validation cache cannot be flushed by a flood of made-up tenant
+  ids**: a bounded LRU replaced "drop everything at 10,000 entries", with a
+  separate, smaller, shorter-lived segment for unknown or inactive tenants.
+- goAuth v0.6.0 adds an attempt limit to `ChangePassword`'s old-password check
+  (guessing with a stolen token was previously unbounded).
+- Backup codes are unique per user again (migration `000008`), and a rotated
+  TOTP key no longer strands every enrolled user.
+- SMTP: recipient and subject are rejected on a line break, STARTTLS is never
+  downgraded, credentials are only sent over an encrypted connection (or
+  localhost in dev), and neither the challenge nor the link is ever logged or
+  placed in an error.
+
+### Added
+
+- **SMTP notifier** (`NOTIFY_DRIVER=smtp`, standard library only): plain-text
+  mail with `Date`, `Message-ID` and `From` headers over STARTTLS (default),
+  implicit TLS, or no TLS in dev. New variables: `SMTP_HOST`, `SMTP_PORT`,
+  `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TLS`, `NOTIFY_RESET_URL`,
+  `NOTIFY_VERIFY_URL` (`{token}` is percent-encoded). Every field is linted.
+- **`notify.RegisterDriver(name, factory)`**: add SendGrid, SES and the like from
+  your own package; config lint accepts registered names. Example in
+  `docs/auth-flows.md`.
+- **TOTP key rotation**: `AUTH_TOTP_ENCRYPTION_KEYS` (`kid:base64key,...`) and
+  `AUTH_TOTP_ENCRYPTION_ACTIVE_KID`; `AUTH_TOTP_ENCRYPTION_KEY` keeps working.
+  Secrets are re-encrypted lazily at login and in bulk by the new
+  `cmd/rotatetotpkey` (`make rotate-totp-key`, also in the container image),
+  which reports progress per batch and supports `--dry-run`. Procedure in
+  `docs/security-env-recommendations.md`.
+- `Config.Warnings()` (startup warnings that never fail startup),
+  `storage.Postgres.InTx`, `dbtest.NewDatabase`/`OpenPostgres` for migration
+  tests, and `make init` flags `--no-smtp` and `--no-rotate-tool`.
+- Tests for every item above, including a fake in-process SMTP server (plain,
+  STARTTLS and implicit TLS), migrations 000007 and 000008 against Postgres, and
+  the shutdown ordering.
+
+### Fixed
+
+- **JSON request decoding no longer parses `encoding/json` error text** to find
+  unknown fields (Go 1.27's JSON v2 backing may change it): typed and sentinel
+  errors are matched with `errors.Is/As` and the body is scanned against the
+  destination's field names. Unknown field, malformed JSON, wrong type, trailing
+  data, empty body and oversized body each have a test asserting the code and
+  message.
+- **Reset and verification enabled with the no-op notifier** now fails startup
+  outside dev/test (see Behavior changes).
+- **Notifications in flight are no longer dropped on shutdown**: after the HTTP
+  server stops and before Redis and Postgres close, the dispatcher stops
+  accepting messages and waits for deliveries within the remaining
+  `HTTP_SHUTDOWN_TIMEOUT`, then abandons and counts what is left (a notifier
+  that ignores its context cannot block exit).
+- **Backup codes lost their unique index** in migration 000006 because
+  `ReplaceBackupCodes` was a single delete-and-insert statement. Migration
+  `000008` collapses duplicates (keeping an unused row) and restores
+  `UNIQUE (user_id, code_hash)`; replacement is two statements in one
+  transaction run by the goAuth provider (recorded as an exception in
+  `AGENTS.md`).
+- The subdomain resolver treated the host label as a tenant id (see Behavior
+  changes).
+- Windows: migration source URL (see Behavior changes).
+- Line endings: `.gitattributes` (`* text=auto eol=lf`) keeps working trees LF,
+  so `gofmt -l` and `make sqlc-generate` are clean on Windows without
+  workarounds.
+
+### Dependencies
+
+- Go 1.26.8 -> **1.27.0** (toolchain 1.27.1): `go.mod`, CI, Dockerfile. The
+  "staying on Go 1.26 for v0.9.0" note in v0.9.0 promised this move.
+- goAuth v0.5.0 -> **v0.6.0**. Its WebAuthn dependencies follow goAuth's pins
+  and are not overridden: `go-webauthn/webauthn` v0.17.4 -> v0.18.2,
+  `go-webauthn/x` v0.2.6 -> v0.3.1, `fxamacker/cbor` v2.9.2 -> v2.9.4.
+- No new dependencies: SMTP uses `net/smtp` and `crypto/tls`, the tenant cache
+  uses `container/list`.
+- golangci-lint stays v2.14.0 (runs clean under Go 1.27).
+
+### Documentation
+
+- Updated: `README.md` (v0.10.0 baseline), `docs/getting-started.md`,
+  `docs/auth-flows.md` (step-up, case-insensitive identifiers, stable JSON
+  errors, SMTP, adding a driver), `docs/environment-variables.md` and
+  `.env.example` (every new variable; `superapi-verify` checks them),
+  `docs/multi-tenancy.md` (id vs slug, cache, per-tenant email uniqueness),
+  `docs/enabling-webauthn.md` (RP ID, step-up), `docs/security-env-recommendations.md`
+  (TOTP key rotation), `docs/architecture.md` (shutdown sequence),
+  `docs/transactions.md` and `AGENTS.md` (the goAuth provider exception),
+  `docs/auth-bootstrap.md`, `docs/trim-to-what-you-need.md` (`--no-smtp`,
+  `--no-rotate-tool`), `docs/auth-goauth.md` (links pinned to v0.6.0).
+
+### Verification
+
+- One uninterrupted final gate on the release commit: `docker compose ps`
+  healthy; `go mod tidy`, `make sqlc-generate` (twice), and `gofmt -l .` leave
+  no diff; `go build`, `go vet`, `golangci-lint run`,
+  `go run ./cmd/superapi-verify ./...`, `govulncheck ./...`.
+- `make test-integration` (`go test ./... -race` against Postgres 18 and Redis)
+  with tenancy off and with `TENANCY_ENABLED=true`.
+- Migrations 000001-000008 apply, roll back fully, and re-apply.
+- `make init` default and `--no-all` projects pass build, vet, verify, tests and
+  sqlc drift; `docker build` and `docker compose config` pass.
 
 ## v0.9.0 (2026-09-25)
 
@@ -167,7 +322,7 @@ changes listed first.
   Go 1.26 line for v0.9.0 is deliberate: Go 1.27 was released on
   2026-08-19 (1.27.1 on 2026-09-01), and 1.26 remains supported until Go 1.28
   ships. Keeping the toolchain unchanged limits v0.9.0 to the auth/tenancy
-  work; the move to Go 1.27 is scheduled for a v0.9.x release.
+  work; the move to Go 1.27 is planned for v0.10.0.
 - goAuth v0.4.0 -> v0.5.0 (latest). goAuth's own WebAuthn dependencies stay
   at the versions goAuth pins and tests against (`go-webauthn/webauthn`
   v0.17.4, `go-webauthn/x` v0.2.6, `fxamacker/cbor` v2.9.2); SuperAPI does not
