@@ -37,10 +37,8 @@ var features = []feature{
 	{
 		Flag:   "no-webauthn",
 		Marker: "webauthn",
-		Help:   "remove the WebAuthn credential store, ceremonies and WEBAUTHN_* config",
+		Help:   "remove the WebAuthn credential store, ceremonies and WEBAUTHN_* config (also strips the WebAuthn blocks from the baseline migration)",
 		Paths: []string{
-			"db/migrations/000004_webauthn_credentials.up.sql",
-			"db/migrations/000004_webauthn_credentials.down.sql",
 			"db/schema/webauthn_credentials.sql",
 			"db/queries/webauthn_credentials.sql",
 			"internal/core/db/sqlcgen/webauthn_credentials.sql.go",

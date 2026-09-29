@@ -192,8 +192,8 @@ See docs/performance-testing.md.
 WebAuthn is scaffolded but disabled by default. When `WEBAUTHN_ENABLED=false`
 the ceremony endpoints return a "webauthn disabled" error and goAuth does not
 require the WebAuthn capability at Build. The `webauthn_credentials` table
-(migration 000004) is always applied by `make migrate-up` and stays inert until
-enabled — see docs/enabling-webauthn.md.
+(part of the baseline migration `000001_init`) is always applied by
+`make migrate-up` and stays inert until enabled — see docs/enabling-webauthn.md.
 
 | Env var | Default | Notes |
 |---|---|---|
