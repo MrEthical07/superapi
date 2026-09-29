@@ -194,7 +194,8 @@ undecryptable.
    (a best-effort write that never fails the login).
 2. **Move the rest.** Run `make rotate-totp-key` (or
    `go run ./cmd/rotatetotpkey`) with the same environment. It re-encrypts every
-   remaining secret in batches, prints progress per batch, never prints a
+   remaining secret in batches (in the container image:
+   `docker run --rm --env-file .env <image> /app/rotatetotpkey`), prints progress per batch, never prints a
    secret, and exits non-zero if any row could not be moved. `--dry-run` shows
    what would change; `--batch-size` tunes the batch. It is safe to re-run and
    to run while the API is serving traffic: each write is a compare-and-swap, so

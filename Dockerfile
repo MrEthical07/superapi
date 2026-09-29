@@ -20,10 +20,16 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go build -ldflags="-s -w" -o /out/api ./cmd/api && \
     go build -ldflags="-s -w" -o /out/migrate ./cmd/migrate && \
     go build -ldflags="-s -w" -o /out/createuser ./cmd/createuser
+# template:begin rotate-tool
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build     go build -ldflags="-s -w" -o /out/rotatetotpkey ./cmd/rotatetotpkey
+# template:end rotate-tool
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/api /out/migrate /out/createuser /app/
+# template:begin rotate-tool
+COPY --from=build /out/rotatetotpkey /app/
+# template:end rotate-tool
 COPY db/migrations /app/db/migrations
 USER nonroot:nonroot
 EXPOSE 8080
