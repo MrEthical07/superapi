@@ -209,6 +209,60 @@ func TestRunKeepInit(t *testing.T) {
 	}
 }
 
+// --no-tenancy deletes internal/tenancy and every file or directory named after
+// tenancy, wherever it lives, plus the marked blocks; everything else stays.
+func TestNoTenancyPrunesByName(t *testing.T) {
+	dir := newFixture(t)
+	extra := map[string]string{
+		"internal/tenancy/feature.go":               "package tenancy\n",
+		"internal/features/tenancy.go":              "package features\n",
+		"internal/features/features.go":             "package features\n\nvar all = []int{\n\t// template:begin tenancy\n\t1,\n\t// template:end tenancy\n}\n",
+		"db/migrations/000001_init.up.sql":          "CREATE TABLE users (id INT);\n",
+		"db/migrations/000002_tenancy.up.sql":       "ALTER TABLE users ADD COLUMN t INT;\n",
+		"db/migrations/000002_tenancy.down.sql":     "ALTER TABLE users DROP COLUMN t;\n",
+		"db/queries/tenancy.sql":                    "-- name: X :one\n",
+		"docs/multi-tenancy.md":                     "docs\n",
+		"docs/removing-tenancy.md":                  "docs\n",
+		".github/workflows/tenancy.yml":             "name: x\n",
+		"internal/tools/validator/tenancy_rules.go": "package validator\n",
+		"internal/other/keep.go":                    "package other\n",
+	}
+	for rel, body := range extra {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := Run(Options{Root: dir, Module: "github.com/acme/foo", Prune: map[string]bool{"tenancy": true}, SkipPostSteps: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := snapshot(t, dir)
+	for _, gone := range []string{
+		"internal/tenancy/feature.go", "internal/features/tenancy.go", "000002_tenancy", "db/queries/tenancy.sql",
+		"multi-tenancy.md", "removing-tenancy.md", "tenancy.yml", "tenancy_rules.go",
+	} {
+		if strings.Contains(snap, gone) {
+			t.Errorf("%s survived --no-tenancy", gone)
+		}
+	}
+	for _, kept := range []string{"db/migrations/000001_init.up.sql", "internal/other/keep.go", "internal/features/features.go"} {
+		if !strings.Contains(snap, kept) {
+			t.Errorf("%s must be kept", kept)
+		}
+	}
+	if !strings.Contains(snap, "var all = []int{}\n") {
+		t.Errorf("the registration block must be removed:\n%s", snap)
+	}
+	if len(res.Deleted) < 8 {
+		t.Errorf("deleted only %v", res.Deleted)
+	}
+}
+
 func TestRunRejectsBadModule(t *testing.T) {
 	if _, err := Run(Options{Root: newFixture(t), Module: "not a module", SkipPostSteps: true}); err == nil {
 		t.Fatal("expected invalid module error")
@@ -243,8 +297,9 @@ func TestTemplateInitEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	combos := map[string]map[string]bool{
-		"default": {},
-		"all":     {"tenancy": true, "webauthn": true, "document-store": true, "devx": true, "perf": true, "demo": true},
+		"default":    {},
+		"no-tenancy": {"tenancy": true},
+		"all":        {"tenancy": true, "webauthn": true, "document-store": true, "devx": true, "perf": true, "demo": true},
 	}
 	for name, prune := range combos {
 		t.Run(name, func(t *testing.T) {
@@ -263,6 +318,15 @@ func TestTemplateInitEndToEnd(t *testing.T) {
 				cmd.Dir = dir
 				if out, err := cmd.CombinedOutput(); err != nil {
 					t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
+				}
+			}
+			if prune["tenancy"] {
+				// A project without tenancy mentions it nowhere but the CHANGELOG
+				// (CI proves the same with git grep).
+				mention := exec.Command("grep", "-rli", "--exclude=CHANGELOG.md", "--exclude-dir=.git", "tenan", ".")
+				mention.Dir = dir
+				if out, _ := mention.Output(); len(bytes.TrimSpace(out)) > 0 {
+					t.Fatalf("tenancy still referenced in:\n%s", out)
 				}
 			}
 			grep := exec.Command("grep", "-rl", "MrEthical07/superapi", ".")
