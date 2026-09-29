@@ -109,9 +109,12 @@ func MigrationSourceURL(path string) (string, error) {
 		return "", fmt.Errorf("resolve migration path: %w", err)
 	}
 	abs = filepath.ToSlash(abs)
-	if runtime.GOOS == "windows" && !strings.HasPrefix(abs, "/") {
-		abs = "/" + abs
-	}
 	u := url.URL{Scheme: "file", Path: abs}
+	if runtime.GOOS == "windows" && len(abs) >= 2 && abs[1] == ':' {
+		// golang-migrate's file source joins host and path and only accepts
+		// a drive path that does not start with "/", so file:///D:/x fails
+		// while file://D:/x resolves.
+		u.Host, u.Path = abs[:2], abs[2:]
+	}
 	return u.String(), nil
 }
