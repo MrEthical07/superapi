@@ -39,7 +39,7 @@ body:
       label: Environment
       description: Go version, OS, profile/mode, and dependency versions.
       placeholder: |
-        Go 1.26.8
+        Go 1.27.1
         OS: linux/amd64
         APP_PROFILE=dev
         Redis 8.x

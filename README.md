@@ -1,4 +1,4 @@
-[![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](go.mod)
+[![Go Version](https://img.shields.io/badge/go-1.27+-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 <!-- template:begin maintainer -->
 [![Release](https://img.shields.io/badge/release-v0.9.0-brightgreen)](CHANGELOG.md)

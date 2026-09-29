@@ -73,8 +73,11 @@ user:
 # Checks the local toolchain and configuration.
 doctor:
 	@ok=1; \
-	printf '%-10s' "go:";      if command -v $(GO) >/dev/null 2>&1; then $(GO) version; else echo "MISSING (https://go.dev/dl/)"; ok=0; fi; \
-	want=$$(sed -n 's/^go //p' go.mod); printf '%-10s%s\n' "go.mod:" "requires go $$want"; \
+	want=$$(sed -n 's/^go //p' go.mod); \
+	printf '%-10s' "go:";      if command -v $(GO) >/dev/null 2>&1; then GOTOOLCHAIN=local $(GO) version; have=$$(GOTOOLCHAIN=local $(GO) env GOVERSION | sed 's/^go//'); \
+	  if [ "$$(printf '%s\n%s\n' "$$want" "$$have" | sort -V | head -n1)" != "$$want" ]; then echo "          go.mod requires Go $$want or newer (https://go.dev/dl/)"; ok=0; fi; \
+	else echo "MISSING (https://go.dev/dl/)"; ok=0; fi; \
+	printf '%-10s%s\n' "go.mod:" "requires go $$want"; \
 	printf '%-10s' "sqlc:";    if command -v $(SQLC) >/dev/null 2>&1; then $(SQLC) version; else echo "missing (needed for make sqlc-generate: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1)"; fi; \
 	printf '%-10s' "docker:";  if $(DOCKER_COMPOSE) version >/dev/null 2>&1; then $(DOCKER_COMPOSE) version --short; else echo "missing (needed for make dev-up)"; fi; \
 	printf '%-10s' "migrate:"; echo "built in (go run ./cmd/migrate)"; \

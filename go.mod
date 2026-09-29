@@ -1,6 +1,8 @@
 module github.com/MrEthical07/superapi
 
-go 1.26.8
+go 1.27.0
+
+toolchain go1.27.1
 
 require (
 	github.com/MrEthical07/goAuth v0.5.0
