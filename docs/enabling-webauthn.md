@@ -51,12 +51,15 @@ Optional tuning: `WEBAUTHN_ATTESTATION_PREFERENCE`, `WEBAUTHN_USER_VERIFICATION`
 
 ## Ceremony flow (browser)
 
-1. `POST /api/v1/auth/webauthn/register/begin` → returns `ceremony_id`
-   and `options_json`. Pass `options_json` to `navigator.credentials.create`.
+1. `POST /api/v1/auth/webauthn/register/begin` with `{"password": "…"}` (step-up:
+   the account password is required, see
+   [auth-flows.md](auth-flows.md#step-up-sensitive-actions-need-the-password))
+   → returns `ceremony_id` and `options_json`. Pass `options_json` to `navigator.credentials.create`.
 2. `POST /api/v1/auth/webauthn/register/finish` with the `ceremony_id`
    and the authenticator's `response_json` → persists the credential.
 3. `GET /api/v1/auth/webauthn/credentials` lists a user's credentials;
-   `POST .../credentials/remove` removes one by base64url credential id.
+   `POST .../credentials/remove` with `{"credential_id": "…", "password": "…"}`
+   removes one by base64url credential id (password required).
 
 Login assertions are completed through the MFA confirm endpoint with
 `type: "webauthn"` once `WEBAUTHN_REQUIRE_FOR_LOGIN` (or per-user credentials)

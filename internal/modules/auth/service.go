@@ -147,6 +147,22 @@ func (s *service) listSessions(ctx context.Context, userID string) ([]goauth.Ses
 	return sessions, nil
 }
 
+// verifyPassword is the step-up check for sensitive actions (adding a TOTP or
+// WebAuthn factor, removing a security key). It confirms the caller knows the
+// account password through goAuth's VerifyPassword, which shares the
+// change-password limiter and never touches account state. A wrong password
+// answers like a failed login (401); an exhausted limiter answers 429.
+func (s *service) verifyPassword(ctx context.Context, userID, password string) error {
+	engine, err := s.requireEngine()
+	if err != nil {
+		return err
+	}
+	if err := engine.VerifyPassword(ctx, userID, password); err != nil {
+		return mapAuthEndpointError(err, "invalid credentials")
+	}
+	return nil
+}
+
 func (s *service) changePassword(ctx context.Context, userID, current, next string) error {
 	engine, err := s.requireEngine()
 	if err != nil {

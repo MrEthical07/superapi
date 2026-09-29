@@ -66,6 +66,14 @@ type webAuthnRegisterBeginResponse struct {
 	OptionsJSON string `json:"options_json"`
 }
 
+type webAuthnRegisterBeginRequest struct {
+	// Password is the current account password (step-up).
+	Password string `json:"password"`
+}
+
+// Validate ensures the step-up password is present.
+func (r webAuthnRegisterBeginRequest) Validate() error { return requirePassword(r.Password) }
+
 type webAuthnRegisterFinishRequest struct {
 	CeremonyID   string `json:"ceremony_id"`
 	ResponseJSON string `json:"response_json"`
@@ -95,14 +103,16 @@ type webAuthnCredentialsResponse struct {
 
 type webAuthnRemoveCredentialRequest struct {
 	CredentialID string `json:"credential_id"`
+	// Password is the current account password (step-up).
+	Password string `json:"password"`
 }
 
-// Validate ensures the credential id is present.
+// Validate ensures the credential id and the step-up password are present.
 func (r webAuthnRemoveCredentialRequest) Validate() error {
 	if r.CredentialID == "" {
 		return badRequest("credential_id is required")
 	}
-	return nil
+	return requirePassword(r.Password)
 }
 
 type webAuthnRemoveCredentialResponse struct {
@@ -123,9 +133,12 @@ func webAuthnCredentialToView(c goauth.WebAuthnCredential) webAuthnCredentialVie
 	return view
 }
 
-func (m *Module) webAuthnRegisterBegin(ctx *httpx.Context, _ httpx.NoBody) (webAuthnRegisterBeginResponse, error) {
+func (m *Module) webAuthnRegisterBegin(ctx *httpx.Context, req webAuthnRegisterBeginRequest) (webAuthnRegisterBeginResponse, error) {
 	userID, err := principalID(ctx)
 	if err != nil {
+		return webAuthnRegisterBeginResponse{}, err
+	}
+	if err := m.svc.verifyPassword(requestContext(ctx), userID, req.Password); err != nil {
 		return webAuthnRegisterBeginResponse{}, err
 	}
 	challenge, err := m.svc.beginWebAuthnRegistration(requestContext(ctx), userID)
@@ -171,6 +184,9 @@ func (m *Module) webAuthnRemoveCredential(ctx *httpx.Context, req webAuthnRemove
 	credentialID, err := base64.RawURLEncoding.DecodeString(req.CredentialID)
 	if err != nil {
 		return webAuthnRemoveCredentialResponse{}, badRequest("credential_id must be base64url-encoded")
+	}
+	if err := m.svc.verifyPassword(requestContext(ctx), userID, req.Password); err != nil {
+		return webAuthnRemoveCredentialResponse{}, err
 	}
 	if err := m.svc.removeWebAuthnCredential(requestContext(ctx), userID, credentialID); err != nil {
 		return webAuthnRemoveCredentialResponse{}, err

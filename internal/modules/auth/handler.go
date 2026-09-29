@@ -191,9 +191,12 @@ func (m *Module) emailVerifyConfirm(ctx *httpx.Context, req emailVerifyConfirmRe
 
 // --- TOTP / backup codes ---
 
-func (m *Module) totpSetup(ctx *httpx.Context, _ httpx.NoBody) (totpSetupResponse, error) {
+func (m *Module) totpSetup(ctx *httpx.Context, req stepUpRequest) (totpSetupResponse, error) {
 	userID, err := principalID(ctx)
 	if err != nil {
+		return totpSetupResponse{}, err
+	}
+	if err := m.svc.verifyPassword(requestContext(ctx), userID, req.Password); err != nil {
 		return totpSetupResponse{}, err
 	}
 	setup, err := m.svc.setupTOTP(requestContext(ctx), userID)

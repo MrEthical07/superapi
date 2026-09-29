@@ -195,7 +195,7 @@ enroll are challenged at every login; users who do not are unaffected.
 
 | Endpoint | Body | Response / notes |
 |---|---|---|
-| `POST /api/v1/auth/mfa/totp/setup` | — | `{"secret_base32","otpauth_uri"}`. Render the URI as a QR code. 409 if TOTP is already enabled (disable first; replacing an active secret would break the user's authenticator) |
+| `POST /api/v1/auth/mfa/totp/setup` | `{"password"}` | step-up: the account password is required. `{"secret_base32","otpauth_uri"}`. Render the URI as a QR code. 409 if TOTP is already enabled (disable first; replacing an active secret would break the user's authenticator) |
 | `POST /api/v1/auth/mfa/totp/confirm` | `{"code"}` | `{"enabled": true, "backup_codes": [...]}`. Backup codes are shown once; only hashes are stored. goAuth revokes the user's sessions, so log in again |
 | `POST /api/v1/auth/mfa/totp/disable` | `{"code"}` | requires a current TOTP code; removes the secret and all backup codes. 409 if not enabled |
 | `POST /api/v1/auth/mfa/backup-codes/regenerate` | `{"code"}` | requires a current TOTP code; returns a fresh set and invalidates the old one |
@@ -205,6 +205,28 @@ enroll are challenged at every login; users who do not are unaffected.
 `POST /api/v1/auth/webauthn/register/begin`, `…/register/finish`,
 `GET /api/v1/auth/webauthn/credentials`, `POST /api/v1/auth/webauthn/credentials/remove`.
 All authenticated; see [enabling-webauthn.md](enabling-webauthn.md).
+
+## Step-up: sensitive actions need the password
+
+Adding or removing a second factor must not be possible with a stolen access
+token alone, so these endpoints also require the current account password:
+
+| Endpoint | Body |
+|---|---|
+| `POST /api/v1/auth/mfa/totp/setup` | `{"password": "…"}` |
+| `POST /api/v1/auth/webauthn/register/begin` | `{"password": "…"}` |
+| `POST /api/v1/auth/webauthn/credentials/remove` | `{"credential_id": "…", "password": "…"}` |
+
+The service checks the password with goAuth's `VerifyPassword` (never a local
+hash comparison) before doing anything else, including the "TOTP already
+enabled" check. Responses: **400** when `password` is missing, empty or over
+1024 bytes; **401** with the same body as a failed login when it is wrong; **429**
+when goAuth's password-verify limiter (shared with `password/change`) is
+exhausted; that limit holds even for the correct password until it resets.
+`totp/disable` and `backup-codes/regenerate` already require a current TOTP
+code and are unchanged. `webauthn/register/finish`, `GET credentials` and
+`totp/confirm` continue the flow that a password-checked call started and take
+no password.
 
 ## Delivering reset and verification messages
 

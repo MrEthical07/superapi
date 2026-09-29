@@ -55,6 +55,7 @@ var features = []feature{
 			"internal/core/config/webauthn_test.go",
 			"internal/modules/auth/webauthn.go",
 			"internal/modules/auth/webauthn_test.go",
+			"internal/modules/auth/stepup_webauthn_test.go",
 			"docs/enabling-webauthn.md",
 		},
 		TouchesSQL: true,

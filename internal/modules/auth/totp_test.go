@@ -14,7 +14,7 @@ import (
 
 func enrollTOTP(t *testing.T, h *harness, token string) (secret string, backupCodes []string) {
 	t.Helper()
-	setup := h.do(call{method: http.MethodPost, path: "/api/v1/auth/mfa/totp/setup", token: token})
+	setup := h.do(call{method: http.MethodPost, path: "/api/v1/auth/mfa/totp/setup", token: token, body: map[string]string{"password": testPassword}})
 	if setup.status != http.StatusOK {
 		t.Fatalf("setup: status=%d body=%s", setup.status, setup.body)
 	}
@@ -79,7 +79,7 @@ func TestTOTPLifecycle(t *testing.T) {
 	}
 
 	// Enrolling again while enabled is refused (would replace the secret).
-	if again := h.do(call{method: http.MethodPost, path: "/api/v1/auth/mfa/totp/setup", token: token}); again.status != http.StatusConflict {
+	if again := h.do(call{method: http.MethodPost, path: "/api/v1/auth/mfa/totp/setup", token: token, body: map[string]string{"password": testPassword}}); again.status != http.StatusConflict {
 		t.Fatalf("re-setup while enabled: status=%d want 409", again.status)
 	}
 
