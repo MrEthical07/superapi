@@ -16,7 +16,8 @@ import (
 //  3. Recoverer (if enabled)
 //  4. CORS (if enabled)
 //  5. SecurityHeaders (if enabled)
-//  6. MaxBodyBytes (if enabled)
+//  6. MaxBodyBytes (if enabled; JSON bodies are capped at httpx.DefaultJSONBodyLimit
+//     even when it is disabled)
 //  7. RequestTimeout (if enabled)
 //  8. Tracing (if enabled)
 //  9. AccessLog (if enabled)

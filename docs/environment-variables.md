@@ -61,7 +61,7 @@ Explicit env vars override profile values.
 |---|---|---|
 | HTTP_MIDDLEWARE_REQUEST_ID_ENABLED | true | request-id middleware |
 | HTTP_MIDDLEWARE_RECOVERER_ENABLED | true | panic recover middleware |
-| HTTP_MIDDLEWARE_MAX_BODY_BYTES | 1048576 | must be >= 0 |
+| HTTP_MIDDLEWARE_MAX_BODY_BYTES | 1048576 | must be >= 0; `0` disables the middleware, JSON request bodies are still capped at 1 MiB |
 | HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED | true in prod, else false | security headers toggle |
 | HTTP_MIDDLEWARE_REQUEST_TIMEOUT | 0 | disabled when 0; if set must be >= 0 and <= HTTP_WRITE_TIMEOUT |
 | HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS | /healthz,/readyz,/metrics | comma-separated path list |

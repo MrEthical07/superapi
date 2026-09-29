@@ -114,7 +114,7 @@ TRACING_INSECURE=false
 |---|---|---|
 | `HTTP_MIDDLEWARE_REQUEST_ID_ENABLED` | `true` | Correlation and forensic traceability. |
 | `HTTP_MIDDLEWARE_RECOVERER_ENABLED` | `true` | Prevents process crash on panic paths. |
-| `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | Explicit non-zero (`1048576` baseline) | Keeps request body abuse bounded. |
+| `HTTP_MIDDLEWARE_MAX_BODY_BYTES` | Explicit non-zero (`1048576` baseline) | Keeps request body abuse bounded for every body type (JSON bodies are capped at 1 MiB even when this is `0`). |
 | `HTTP_MIDDLEWARE_SECURITY_HEADERS_ENABLED` | `true` | Adds baseline browser hardening headers. |
 | `HTTP_MIDDLEWARE_REQUEST_TIMEOUT` | Enabled (`5s` to `30s`) and `<= HTTP_WRITE_TIMEOUT` | Limits long-running app work and stuck handlers. |
 | `HTTP_MIDDLEWARE_TRACING_EXCLUDE_PATHS` | Keep `/healthz,/readyz,/metrics` unless tracing these paths is required | Reduces span noise and low-value telemetry overhead. |
