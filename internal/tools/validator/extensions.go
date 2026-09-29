@@ -8,8 +8,8 @@ import (
 )
 
 // An optional feature teaches the static verifier about its policies with an
-// Extension registered from a file of its own in this package (the feature's
-// tenancy_*-style file, which is deleted when the feature is removed). The
+// Extension registered from a file of its own in this package (named after the
+// feature, so removing the feature removes the file). The
 // verifier is a build-time tool, so registration happens in init, before any
 // analysis runs; nothing here is used by the running server.
 
@@ -19,7 +19,7 @@ type PolicyParser func(call *ast.CallExpr) corepolicy.Metadata
 
 // Extension is what a feature contributes to static verification.
 type Extension struct {
-	// Policies maps a constructor name (for example "TenantRequired") to its
+	// Policies maps a constructor name (for example "OrgRequired") to its
 	// parser.
 	Policies map[string]PolicyParser
 	// IdentityParts names the cache key part constructors that are
@@ -68,15 +68,17 @@ func extensionRules() []corepolicy.RouteRule {
 	return rules
 }
 
-// ExtensionHint returns feature advice for a diagnostic message, or "".
+// ExtensionHint returns feature advice for a diagnostic message, or "". When
+// several fragments match, the longest (most specific) wins.
 func ExtensionHint(message string) string {
 	normalized := strings.ToLower(message)
+	best, hint := 0, ""
 	for _, ext := range extensions {
-		for fragment, hint := range ext.Hints {
-			if strings.Contains(normalized, fragment) {
-				return hint
+		for fragment, advice := range ext.Hints {
+			if len(fragment) > best && strings.Contains(normalized, fragment) {
+				best, hint = len(fragment), advice
 			}
 		}
 	}
-	return ""
+	return hint
 }

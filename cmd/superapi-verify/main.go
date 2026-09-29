@@ -98,13 +98,9 @@ func hintForDiagnostic(message string) string {
 
 	switch {
 	case strings.Contains(normalized, "cannot appear after"):
-		return "reorder route policies as auth -> tenant -> rbac -> rate limit -> cache. See docs/policies.md"
-	case strings.Contains(normalized, "authrequired is required when rbac or tenant policies are configured"):
-		return "add policy.AuthRequired(...) before RBAC/tenant policies. See docs/policies.md"
-	case strings.Contains(normalized, "tenantmatchfrompath requires tenantrequired"):
-		return "add policy.TenantRequired() before policy.TenantMatchFromPath(...). See docs/policies.md"
-	case strings.Contains(normalized, "requires tenantrequired"):
-		return "route path includes {tenant_id}; add policy.TenantRequired() and policy.TenantMatchFromPath(\"tenant_id\"). See docs/policies.md"
+		return "reorder route policies as auth -> isolation -> rbac -> rate limit -> cache. See docs/policies.md"
+	case strings.Contains(normalized, "authrequired is required when rbac"):
+		return "add policy.AuthRequired(...) before RBAC policies. See docs/policies.md"
 	case strings.Contains(normalized, "requires varyby.userid or an identity-bearing varyby.parts entry"):
 		return "CacheRead on authenticated routes must vary by identity. Add VaryBy.UserID or an identity-bearing VaryBy.Parts entry. See docs/cache-guide.md"
 	case strings.Contains(normalized, "read by the code but missing"):

@@ -67,8 +67,8 @@ run:
 # prompted for without echo (or piped with password_stdin=1); never pass it as
 # a variable. Example: make user email=admin@example.com role=admin
 user:
-	@if [ -z "$(email)" ]; then echo "email is required: make user email=you@example.com [role=admin] [tenant=acme] [create_tenant=1]"; exit 1; fi
-	@$(WITH_ENV) $(GO) run ./cmd/createuser --email "$(email)" $(if $(role),--role "$(role)",) $(if $(tenant),--tenant "$(tenant)",) $(if $(create_tenant),--create-tenant,) $(if $(password_stdin),--password-stdin,)
+	@if [ -z "$(email)" ]; then echo "email is required: make user email=you@example.com [role=admin] [flags=\"...\"]"; exit 1; fi
+	@$(WITH_ENV) $(GO) run ./cmd/createuser --email "$(email)" $(if $(role),--role "$(role)",) $(if $(password_stdin),--password-stdin,) $(flags)
 
 # template:begin rotate-tool
 # Re-encrypt every stored TOTP secret under the active AUTH_TOTP_ENCRYPTION_*
@@ -135,13 +135,13 @@ db-sync:
 	$(GO) run ./cmd/modulesync
 
 module:
-	$(GO) run ./cmd/modulegen $(if $(name),--name "$(name)",) $(if $(force),--force "$(force)",) $(if $(db),--db=$(db),) $(if $(auth),--auth=$(auth),) $(if $(tenant),--tenant=$(tenant),) $(if $(ratelimit),--ratelimit=$(ratelimit),) $(if $(cache),--cache=$(cache),) $(if $(migration),--migration=$(migration),)
+	$(GO) run ./cmd/modulegen $(if $(name),--name "$(name)",) $(if $(force),--force "$(force)",) $(if $(db),--db=$(db),) $(if $(auth),--auth=$(auth),) $(if $(ratelimit),--ratelimit=$(ratelimit),) $(if $(cache),--cache=$(cache),) $(if $(migration),--migration=$(migration),) $(flags)
 # template:end devx
 
 # template:begin init
 # ---------------------------------------------------------------------------
 # One-time project initialization (removes itself afterwards)
-# make init module=github.com/acme/foo name="Foo API" [flags="--no-tenancy --dry-run"]
+# make init module=github.com/acme/foo name="Foo API" [flags="--no-webauthn --dry-run"]
 # ---------------------------------------------------------------------------
 
 init:

@@ -12,8 +12,8 @@ import (
 )
 
 const createAuthUser = `-- name: CreateAuthUser :one
-INSERT INTO users (email, password_hash, role, permissions, status, tenant_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO users (email, password_hash, role, permissions, status)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
 `
 
@@ -23,7 +23,6 @@ type CreateAuthUserParams struct {
 	Role         pgtype.Text `json:"role"`
 	Permissions  int64       `json:"permissions"`
 	Status       string      `json:"status"`
-	TenantID     string      `json:"tenant_id"`
 }
 
 func (q *Queries) CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) (User, error) {
@@ -33,7 +32,6 @@ func (q *Queries) CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) 
 		arg.Role,
 		arg.Permissions,
 		arg.Status,
-		arg.TenantID,
 	)
 	var i User
 	err := row.Scan(
@@ -53,8 +51,7 @@ func (q *Queries) CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) 
 }
 
 const getAuthUserByID = `-- name: GetAuthUserByID :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
-FROM users
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id FROM users
 WHERE id = $1
 `
 
@@ -77,41 +74,8 @@ func (q *Queries) GetAuthUserByID(ctx context.Context, id pgtype.UUID) (User, er
 	return i, err
 }
 
-const getAuthUserByIDInTenant = `-- name: GetAuthUserByIDInTenant :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
-FROM users
-WHERE tenant_id = $1 AND id = $2
-`
-
-type GetAuthUserByIDInTenantParams struct {
-	TenantID string      `json:"tenant_id"`
-	ID       pgtype.UUID `json:"id"`
-}
-
-// Tenant-scoped lookup for goauth.TenantAwareUserProvider. The tenant
-// predicate is enforced in SQL; a user in another tenant is not found.
-func (q *Queries) GetAuthUserByIDInTenant(ctx context.Context, arg GetAuthUserByIDInTenantParams) (User, error) {
-	row := q.db.QueryRow(ctx, getAuthUserByIDInTenant, arg.TenantID, arg.ID)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.PasswordHash,
-		&i.Role,
-		&i.Permissions,
-		&i.Status,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.AccountVersion,
-		&i.TotpEnabled,
-		&i.TenantID,
-	)
-	return i, err
-}
-
 const getAuthUserByLogin = `-- name: GetAuthUserByLogin :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
-FROM users
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id FROM users
 WHERE lower(email) = lower($1)
 `
 
@@ -120,38 +84,6 @@ WHERE lower(email) = lower($1)
 // lower($1) keeps the match correct for any caller.
 func (q *Queries) GetAuthUserByLogin(ctx context.Context, email string) (User, error) {
 	row := q.db.QueryRow(ctx, getAuthUserByLogin, email)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.PasswordHash,
-		&i.Role,
-		&i.Permissions,
-		&i.Status,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.AccountVersion,
-		&i.TotpEnabled,
-		&i.TenantID,
-	)
-	return i, err
-}
-
-const getAuthUserByLoginInTenant = `-- name: GetAuthUserByLoginInTenant :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
-FROM users
-WHERE tenant_id = $1 AND lower(email) = lower($2)
-`
-
-type GetAuthUserByLoginInTenantParams struct {
-	TenantID string `json:"tenant_id"`
-	Email    string `json:"email"`
-}
-
-// Tenant-scoped lookup for goauth.TenantAwareUserProvider. The tenant
-// predicate is enforced in SQL; an identifier in another tenant is not found.
-func (q *Queries) GetAuthUserByLoginInTenant(ctx context.Context, arg GetAuthUserByLoginInTenantParams) (User, error) {
-	row := q.db.QueryRow(ctx, getAuthUserByLoginInTenant, arg.TenantID, arg.Email)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -196,11 +128,8 @@ type UpdateAuthUserStatusParams struct {
 	Status string      `json:"status"`
 }
 
-// Keyed by the globally unique user id. goAuth resolves the user through the
-// tenant-scoped lookup before any status transition, and email-verification
-// confirm deliberately runs under the challenge's tenant rather than the
-// request's, so this update must not re-scope by the request tenant.
-// goAuth requires account_version to advance on every status transition.
+// Keyed by the globally unique user id. goAuth requires account_version to
+// advance on every status transition.
 func (q *Queries) UpdateAuthUserStatus(ctx context.Context, arg UpdateAuthUserStatusParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateAuthUserStatus, arg.ID, arg.Status)
 	var i User

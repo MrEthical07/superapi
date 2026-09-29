@@ -1,4 +1,4 @@
-package tenant
+package tenancy
 
 import (
 	"net/http"
@@ -8,7 +8,7 @@ import (
 )
 
 func TestTenantIDFromContext(t *testing.T) {
-	ctx := auth.WithContext(t.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"})
+	ctx := auth.WithContext(t.Context(), auth.AuthContext{UserID: "u1", Attributes: []auth.Attribute{{Key: AttrTenantID, Value: "t1"}}})
 	tenantID, ok := TenantIDFromContext(ctx)
 	if !ok {
 		t.Fatalf("expected tenant id from context")
@@ -30,7 +30,7 @@ func TestRequireTenantMissing(t *testing.T) {
 }
 
 func TestRequireTenantPresent(t *testing.T) {
-	ctx := auth.WithContext(t.Context(), auth.AuthContext{TenantID: "t1"})
+	ctx := auth.WithContext(t.Context(), auth.AuthContext{Attributes: []auth.Attribute{{Key: AttrTenantID, Value: "t1"}}})
 	if err := RequireTenant(ctx); err != nil {
 		t.Fatalf("RequireTenant() error = %v", err)
 	}

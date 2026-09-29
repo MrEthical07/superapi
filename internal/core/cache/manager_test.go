@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -28,8 +29,8 @@ func newTestManager(tb testing.TB) (*Manager, *miniredis.Miniredis) {
 func TestBuildReadKeyDeterministicWithOrderedQuery(t *testing.T) {
 	mgr, _ := newTestManager(t)
 
-	r1 := httptest.NewRequest("GET", "/api/v1/tenants/123?limit=10&sort=desc", nil)
-	r2 := httptest.NewRequest("GET", "/api/v1/tenants/123?sort=desc&limit=10", nil)
+	r1 := httptest.NewRequest("GET", "/api/v1/things/123?limit=10&sort=desc", nil)
+	r2 := httptest.NewRequest("GET", "/api/v1/things/123?sort=desc&limit=10", nil)
 
 	rctx1 := chi.NewRouteContext()
 	rctx1.URLParams.Add("id", "123")
@@ -47,11 +48,11 @@ func TestBuildReadKeyDeterministicWithOrderedQuery(t *testing.T) {
 		},
 	}
 
-	k1, err := mgr.BuildReadKey(context.Background(), r1, "/api/v1/tenants/{id}", cfg)
+	k1, err := mgr.BuildReadKey(context.Background(), r1, "/api/v1/things/{id}", cfg)
 	if err != nil {
 		t.Fatalf("BuildReadKey(r1) error = %v", err)
 	}
-	k2, err := mgr.BuildReadKey(context.Background(), r2, "/api/v1/tenants/{id}", cfg)
+	k2, err := mgr.BuildReadKey(context.Background(), r2, "/api/v1/things/{id}", cfg)
 	if err != nil {
 		t.Fatalf("BuildReadKey(r2) error = %v", err)
 	}
@@ -64,8 +65,8 @@ func TestBuildReadKeyDeterministicWithOrderedQuery(t *testing.T) {
 func TestBuildReadKeyIgnoresUnselectedQueryParams(t *testing.T) {
 	mgr, _ := newTestManager(t)
 
-	r1 := httptest.NewRequest("GET", "/api/v1/tenants/123?limit=10&debug=1", nil)
-	r2 := httptest.NewRequest("GET", "/api/v1/tenants/123?limit=10&debug=2", nil)
+	r1 := httptest.NewRequest("GET", "/api/v1/things/123?limit=10&debug=1", nil)
+	r2 := httptest.NewRequest("GET", "/api/v1/things/123?limit=10&debug=2", nil)
 
 	rctx1 := chi.NewRouteContext()
 	rctx1.URLParams.Add("id", "123")
@@ -83,11 +84,11 @@ func TestBuildReadKeyIgnoresUnselectedQueryParams(t *testing.T) {
 		},
 	}
 
-	k1, err := mgr.BuildReadKey(context.Background(), r1, "/api/v1/tenants/{id}", cfg)
+	k1, err := mgr.BuildReadKey(context.Background(), r1, "/api/v1/things/{id}", cfg)
 	if err != nil {
 		t.Fatalf("BuildReadKey(r1) error = %v", err)
 	}
-	k2, err := mgr.BuildReadKey(context.Background(), r2, "/api/v1/tenants/{id}", cfg)
+	k2, err := mgr.BuildReadKey(context.Background(), r2, "/api/v1/things/{id}", cfg)
 	if err != nil {
 		t.Fatalf("BuildReadKey(r2) error = %v", err)
 	}
@@ -97,13 +98,13 @@ func TestBuildReadKeyIgnoresUnselectedQueryParams(t *testing.T) {
 	}
 }
 
-func TestBuildReadKeyAuthVaryByUserAndTenant(t *testing.T) {
+func TestBuildReadKeyAuthVaryByUserAndAttributePart(t *testing.T) {
 	mgr, _ := newTestManager(t)
 
-	r1 := httptest.NewRequest("GET", "/api/v1/tenants/123", nil)
-	r1 = r1.WithContext(auth.WithContext(r1.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"}))
-	r2 := httptest.NewRequest("GET", "/api/v1/tenants/123", nil)
-	r2 = r2.WithContext(auth.WithContext(r2.Context(), auth.AuthContext{UserID: "u2", TenantID: "t2"}))
+	r1 := httptest.NewRequest("GET", "/api/v1/things/123", nil)
+	r1 = r1.WithContext(auth.WithContext(r1.Context(), auth.AuthContext{UserID: "u1", Attributes: []auth.Attribute{{Key: "org", Value: "o1"}}}))
+	r2 := httptest.NewRequest("GET", "/api/v1/things/123", nil)
+	r2 = r2.WithContext(auth.WithContext(r2.Context(), auth.AuthContext{UserID: "u2", Attributes: []auth.Attribute{{Key: "org", Value: "o2"}}}))
 
 	rctx1 := chi.NewRouteContext()
 	rctx1.URLParams.Add("id", "123")
@@ -118,38 +119,40 @@ func TestBuildReadKeyAuthVaryByUserAndTenant(t *testing.T) {
 		VaryBy: CacheVaryBy{
 			PathParams: []string{"id"},
 			UserID:     true,
-			TenantID:   true,
+			Parts: []KeyPart{{Name: "org", Identity: true, Extract: func(_ *http.Request, p auth.AuthContext) string {
+				return p.Attribute("org")
+			}}},
 		},
 		AllowAuthenticated: true,
 	}
 
-	k1, err := mgr.BuildReadKey(context.Background(), r1, "/api/v1/tenants/{id}", cfg)
+	k1, err := mgr.BuildReadKey(context.Background(), r1, "/api/v1/things/{id}", cfg)
 	if err != nil {
 		t.Fatalf("BuildReadKey(r1) error = %v", err)
 	}
-	k2, err := mgr.BuildReadKey(context.Background(), r2, "/api/v1/tenants/{id}", cfg)
+	k2, err := mgr.BuildReadKey(context.Background(), r2, "/api/v1/things/{id}", cfg)
 	if err != nil {
 		t.Fatalf("BuildReadKey(r2) error = %v", err)
 	}
 
 	if k1 == k2 {
-		t.Fatalf("expected different keys for different user/tenant dimensions")
+		t.Fatalf("expected different keys for different user/attribute-part dimensions")
 	}
 }
 
 func TestTagVersionTokenChangesAfterBump(t *testing.T) {
 	mgr, _ := newTestManager(t)
 
-	before, err := mgr.TagVersionToken(context.Background(), []string{"tenant"})
+	before, err := mgr.TagVersionToken(context.Background(), []string{"org"})
 	if err != nil {
 		t.Fatalf("TagVersionToken(before) error = %v", err)
 	}
 
-	if err := mgr.BumpTags(context.Background(), []string{"tenant"}); err != nil {
+	if err := mgr.BumpTags(context.Background(), []string{"org"}); err != nil {
 		t.Fatalf("BumpTags() error = %v", err)
 	}
 
-	after, err := mgr.TagVersionToken(context.Background(), []string{"tenant"})
+	after, err := mgr.TagVersionToken(context.Background(), []string{"org"})
 	if err != nil {
 		t.Fatalf("TagVersionToken(after) error = %v", err)
 	}
@@ -207,17 +210,19 @@ func TestBuildReadKeyFailsWhenDynamicTagPathParamMissing(t *testing.T) {
 	}
 }
 
-func TestBuildReadKeyFailsWhenDynamicTagTenantMissing(t *testing.T) {
+func TestBuildReadKeyFailsWhenDynamicTagPartMissing(t *testing.T) {
 	mgr, _ := newTestManager(t)
 
 	r := httptest.NewRequest("GET", "/api/v1/projects", nil)
 	cfg := CacheReadConfig{
-		TTL:      30 * time.Second,
-		TagSpecs: []CacheTagSpec{{Name: "project-list", TenantID: true}},
+		TTL: 30 * time.Second,
+		TagSpecs: []CacheTagSpec{{Name: "project-list", Parts: []KeyPart{{Name: "org", Extract: func(_ *http.Request, p auth.AuthContext) string {
+			return p.Attribute("org")
+		}}}}},
 	}
 
 	_, err := mgr.BuildReadKey(context.Background(), r, "/api/v1/projects", cfg)
 	if err == nil {
-		t.Fatalf("expected error when dynamic tag tenant id is missing")
+		t.Fatalf("expected error when dynamic tag part value is missing")
 	}
 }

@@ -15,7 +15,7 @@ import (
 )
 
 // Feature is an optional capability compiled into the binary and switched on
-// by its own settings, for example multi-tenancy. Core never imports a feature:
+// by its own settings. Core never imports a feature:
 // the project lists its features in one place (internal/features) and passes
 // them to New and NewDependencies, and each feature plugs into core through
 // the Hooks below. This is the pattern future optional features follow; see
@@ -67,9 +67,9 @@ type UserCLI interface {
 
 // UserStep is a feature's part of creating an account from the command line.
 type UserStep interface {
-	// Validate rejects flag combinations that do not fit the loaded config. The
-	// feature has been loaded by then.
-	Validate() error
+	// Validate rejects flag combinations that do not fit the loaded, linted core
+	// config.
+	Validate(core *config.Config) error
 	// Prepare runs once dependencies exist and before the account is created.
 	// It returns the context the account is created with.
 	Prepare(ctx context.Context, deps *Dependencies) (context.Context, error)

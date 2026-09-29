@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -15,9 +16,6 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/notify"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
-	// template:begin tenancy
-	"github.com/MrEthical07/superapi/internal/core/tenant"
-	// template:end tenancy
 )
 
 // START HERE:
@@ -101,9 +99,6 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module, features ...Fea
 	}
 	handler := httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing,
 		httpx.WithFeatureMiddleware(featureMiddleware...),
-		// template:begin tenancy
-		httpx.WithTenantResolver(tenantResolver(cfg, deps)),
-		// template:end tenancy
 	)
 	if deps.Metrics != nil {
 		handler = deps.Metrics.InstrumentHTTP(handler)
@@ -143,34 +138,6 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module, features ...Fea
 
 	return a, nil
 }
-
-// template:begin tenancy
-// tenantResolver builds the tenant resolution middleware when tenancy is
-// enabled, or returns nil (no middleware) when it is off.
-func tenantResolver(cfg *config.Config, deps *Dependencies) func(http.Handler) http.Handler {
-	if cfg == nil || !cfg.Tenancy.Enabled {
-		return nil
-	}
-
-	exempt := append([]string(nil), cfg.Tenancy.ExemptPaths...)
-	if deps != nil && deps.Metrics != nil && deps.Metrics.Enabled() {
-		exempt = append(exempt, deps.Metrics.Path())
-	}
-
-	resolverCfg := tenant.ResolverConfig{
-		Resolver:    cfg.Tenancy.Resolver,
-		Header:      cfg.Tenancy.Header,
-		BaseDomain:  cfg.Tenancy.BaseDomain,
-		ExemptPaths: exempt,
-		CacheTTL:    cfg.Tenancy.ValidateCacheTTL,
-	}
-	if cfg.Tenancy.Validate && deps != nil && deps.DB != nil {
-		resolverCfg.Directory = tenant.NewRepository(deps.DB)
-	}
-	return tenant.Middleware(resolverCfg)
-}
-
-// template:end tenancy
 
 func requireBearerToken(next http.Handler, token string) http.Handler {
 	token = strings.TrimSpace(token)
@@ -216,7 +183,10 @@ func (a *App) Run(ctx context.Context) error {
 			Str("service", a.cfg.ServiceName).
 			Str("env", a.cfg.Env).
 			Msg("starting http server")
-		err := a.server.ListenAndServe()
+		ln, err := net.Listen("tcp", a.server.Addr)
+		if err == nil {
+			err = a.server.Serve(ln)
+		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return

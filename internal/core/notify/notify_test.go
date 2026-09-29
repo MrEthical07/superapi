@@ -28,7 +28,7 @@ func TestLogNotifierRedactsByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	const secret = "tenant:verification-id:super-secret-code"
+	const secret = "acme:verification-id:super-secret-code"
 	_ = n.SendPasswordReset(context.Background(), "alice@example.com", secret)
 	out := buf.String()
 	if strings.Contains(out, "super-secret-code") || strings.Contains(out, "alice@") {

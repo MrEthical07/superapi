@@ -40,17 +40,6 @@ import (
 	goauth "github.com/MrEthical07/goAuth"
 )
 
-// TenancySettings controls goAuth multi-tenant behavior. It is populated from
-// application config (TENANCY_ENABLED) and passed into ProjectGoAuthConfig so
-// the goAuth engine matches the app-wide tenancy decision. The zero value
-// leaves multi-tenant behavior off.
-type TenancySettings struct {
-	// Enabled turns on goAuth multi-tenant handling. goAuth v0.5.0 then scopes
-	// every user lookup to the tenant attached with goauth.WithTenantID and
-	// requires the user provider to implement TenantAwareUserProvider.
-	Enabled bool
-}
-
 // Features carries the opt-in auth feature flags (AUTH_*_ENABLED). Each flag
 // enables one goAuth config section below and the matching endpoint group in
 // internal/modules/auth. The zero value keeps every optional feature off.
@@ -81,7 +70,7 @@ type Features struct {
 type ConfigMutator func(*goauth.Config)
 
 // ProjectGoAuthConfig builds the goAuth configuration for this project.
-func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features, mutators ...ConfigMutator) (goauth.Config, error) {
+func ProjectGoAuthConfig(mode Mode, features Features, mutators ...ConfigMutator) (goauth.Config, error) {
 	cfg := goauth.DefaultConfig()
 
 	// ------------------------------------------------------------
@@ -89,26 +78,6 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features, 
 	// ------------------------------------------------------------
 
 	cfg.ValidationMode = toGoAuthValidationMode(mode)
-
-	// ------------------------------------------------------------
-	// Multi-Tenant
-	// ------------------------------------------------------------
-	//
-	// Follows the application-wide tenancy decision (TENANCY_ENABLED). With
-	// tenancy off goAuth stays tenant-blind and uses its default tenant "0".
-	// With it on (goAuth v0.5.0) every user lookup is scoped to the tenant the
-	// tenant middleware attaches to the request context, and Build fails unless
-	// the provider implements goauth.TenantAwareUserProvider.
-	//
-	// MultiTenant.EnforceIsolation and MultiTenant.TenantHeader are deprecated
-	// no-ops in goAuth v0.5.0 and are intentionally left unset. Identifier
-	// uniqueness is owned by the users schema (see docs/multi-tenancy.md), so
-	// Account.AllowDuplicateIdentifierAcrossTenants is left at its default.
-	cfg.MultiTenant.Enabled = tenancy.Enabled
-	// goAuth's DefaultConfig still pre-fills this no-op field, which would
-	// trigger the tenant_header_noop lint once tenancy is on. The header is
-	// owned by SuperAPI's tenant middleware (TENANCY_HEADER) instead.
-	cfg.MultiTenant.TenantHeader = "" //nolint:staticcheck // clearing the deprecated no-op field is the point
 
 	// ------------------------------------------------------------
 	// JWT Behavior

@@ -58,12 +58,12 @@ func TestTracingMiddlewareRoutePatternAndAttributes(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(CaptureRoutePattern)
-	r.Get("/api/v1/tenants/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get("/api/v1/things/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 
 	h := RequestID(Tracing(svc)(r))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/abc", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/abc", nil))
 
 	spans := rec.Ended()
 	if len(spans) != 1 {
@@ -71,13 +71,13 @@ func TestTracingMiddlewareRoutePatternAndAttributes(t *testing.T) {
 	}
 	span := spans[0]
 
-	if got := span.Name(); got != "GET /api/v1/tenants/{id}" {
-		t.Fatalf("span name = %q, want %q", got, "GET /api/v1/tenants/{id}")
+	if got := span.Name(); got != "GET /api/v1/things/{id}" {
+		t.Fatalf("span name = %q, want %q", got, "GET /api/v1/things/{id}")
 	}
 
 	attr := span.Attributes()
 	assertHasAttr(t, attr, "http.method", "GET")
-	assertHasAttr(t, attr, "http.route", "/api/v1/tenants/{id}")
+	assertHasAttr(t, attr, "http.route", "/api/v1/things/{id}")
 	assertHasAttrInt(t, attr, "http.status_code", http.StatusServiceUnavailable)
 	assertAttrPresent(t, attr, "request.id")
 }

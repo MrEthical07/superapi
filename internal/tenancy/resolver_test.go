@@ -1,4 +1,4 @@
-package tenant
+package tenancy
 
 import (
 	"context"
@@ -9,8 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/MrEthical07/superapi/internal/core/auth"
 )
 
 type fakeDirectory struct {
@@ -59,7 +57,7 @@ func newDirectory() *fakeDirectory {
 
 // echoTenant writes the tenant the downstream handler observed.
 var echoTenant = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	id, _ := auth.RequestTenantFromContext(r.Context())
+	id, _ := RequestTenantFromContext(r.Context())
 	_, _ = w.Write([]byte(id))
 })
 

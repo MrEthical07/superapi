@@ -26,7 +26,6 @@ const pgUniqueViolation = "23505"
 // StoredUser is the storage-layer projection used by the auth repository.
 type StoredUser struct {
 	ID             string
-	TenantID       string
 	Email          string
 	PasswordHash   string
 	Role           string
@@ -37,8 +36,6 @@ type StoredUser struct {
 
 // CreateStoredUserInput is the repository input model for creating auth users.
 type CreateStoredUserInput struct {
-	// TenantID is the owning tenant. Empty falls back to DefaultTenantID.
-	TenantID     string
 	Identifier   string
 	PasswordHash string
 	Role         string
@@ -46,16 +43,9 @@ type CreateStoredUserInput struct {
 }
 
 // UserRepository defines domain-level auth user persistence operations.
-//
-// The plain lookups are tenant-blind (goAuth's contract when multi-tenancy is
-// off). The *InTenant lookups constrain the query to one tenant in SQL and
-// return ErrAuthUserNotFound for a record that exists only in another tenant;
-// an empty tenant is never treated as "any tenant".
 type UserRepository interface {
 	GetByIdentifier(ctx context.Context, identifier string) (StoredUser, error)
 	GetByID(ctx context.Context, userID string) (StoredUser, error)
-	GetByIdentifierInTenant(ctx context.Context, tenantID, identifier string) (StoredUser, error)
-	GetByIDInTenant(ctx context.Context, tenantID, userID string) (StoredUser, error)
 	UpdatePasswordHash(ctx context.Context, userID, newHash string) error
 	Create(ctx context.Context, input CreateStoredUserInput) (StoredUser, error)
 	UpdateStatus(ctx context.Context, userID string, status string) (StoredUser, error)
@@ -101,48 +91,6 @@ func (r *sqlcUserRepository) GetByID(ctx context.Context, userID string) (Stored
 	return mapUserRow(row), nil
 }
 
-func (r *sqlcUserRepository) GetByIdentifierInTenant(ctx context.Context, tenantID, identifier string) (StoredUser, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
-		return StoredUser{}, ErrAuthUserNotFound
-	}
-
-	row, err := r.pg.Queries(ctx).GetAuthUserByLoginInTenant(ctx, sqlcgen.GetAuthUserByLoginInTenantParams{
-		TenantID: tenantID,
-		Email:    NormalizeIdentifier(identifier),
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return StoredUser{}, ErrAuthUserNotFound
-		}
-		return StoredUser{}, fmt.Errorf("get user by identifier in tenant: %w", err)
-	}
-	return mapUserRow(row), nil
-}
-
-func (r *sqlcUserRepository) GetByIDInTenant(ctx context.Context, tenantID, userID string) (StoredUser, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
-		return StoredUser{}, ErrAuthUserNotFound
-	}
-	id, err := parseUserID(userID)
-	if err != nil {
-		return StoredUser{}, fmt.Errorf("get user by id in tenant: %w", err)
-	}
-
-	row, err := r.pg.Queries(ctx).GetAuthUserByIDInTenant(ctx, sqlcgen.GetAuthUserByIDInTenantParams{
-		TenantID: tenantID,
-		ID:       id,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return StoredUser{}, ErrAuthUserNotFound
-		}
-		return StoredUser{}, fmt.Errorf("get user by id in tenant: %w", err)
-	}
-	return mapUserRow(row), nil
-}
-
 func (r *sqlcUserRepository) UpdatePasswordHash(ctx context.Context, userID, newHash string) error {
 	id, err := parseUserID(userID)
 	if err != nil {
@@ -171,7 +119,6 @@ func (r *sqlcUserRepository) Create(ctx context.Context, input CreateStoredUserI
 		Role:         roleToText(input.Role),
 		Permissions:  0,
 		Status:       strings.TrimSpace(input.Status),
-		TenantID:     tenantOrDefault(input.TenantID),
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -209,7 +156,6 @@ func (r *sqlcUserRepository) UpdateStatus(ctx context.Context, userID string, st
 func mapUserRow(row sqlcgen.User) StoredUser {
 	return StoredUser{
 		ID:             uuidToString(row.ID),
-		TenantID:       row.TenantID,
 		Email:          row.Email,
 		PasswordHash:   row.PasswordHash,
 		Role:           textToRole(row.Role),
@@ -251,23 +197,6 @@ func uuidToString(id pgtype.UUID) string {
 // NULLIF on an empty string insert) and a non-empty role to a valid text value.
 func roleToText(role string) pgtype.Text {
 	trimmed := strings.TrimSpace(role)
-	if trimmed == "" {
-		return pgtype.Text{Valid: false}
-	}
-	return pgtype.Text{String: trimmed, Valid: true}
-}
-
-// tenantOrDefault maps an empty tenant to goAuth's default tenant.
-func tenantOrDefault(tenantID string) string {
-	if trimmed := strings.TrimSpace(tenantID); trimmed != "" {
-		return trimmed
-	}
-	return DefaultTenantID
-}
-
-// optionalText maps an empty string to SQL NULL.
-func optionalText(value string) pgtype.Text {
-	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return pgtype.Text{Valid: false}
 	}

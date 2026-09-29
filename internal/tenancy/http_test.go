@@ -1,4 +1,4 @@
-package auth
+package tenancy_test
 
 import (
 	"bytes"
@@ -15,30 +15,29 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/auth/authtest"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/policy"
-	"github.com/MrEthical07/superapi/internal/core/tenant"
+	authmodule "github.com/MrEthical07/superapi/internal/modules/auth"
+	"github.com/MrEthical07/superapi/internal/tenancy"
+	"github.com/MrEthical07/superapi/internal/tenancy/tenancytest"
 )
 
-// TestTenancyEndToEnd drives the real tenant middleware, login route and
-// whoami route with goAuth multi-tenancy enabled.
-func TestTenancyEndToEnd(t *testing.T) {
-	prev := policy.TenancyEnabled()
-	policy.SetTenancyEnabled(true)
-	t.Cleanup(func() { policy.SetTenancyEnabled(prev) })
-
-	engine, _ := authtest.NewEngine(t, true, authtest.NewUserRepository())
-	const password = "correct-horse-battery-staple"
-	if _, err := engine.CreateAccount(auth.WithRequestTenant(context.Background(), "tenant-a"),
+// TestEndToEnd drives the real tenant middleware, login route and whoami route
+// with goAuth multi-tenancy enabled.
+func TestEndToEnd(t *testing.T) {
+	e := tenancytest.NewEngine(t, auth.Features{})
+	if _, err := e.CreateAccount(tenancy.WithRequestTenant(context.Background(), "tenant-a"),
 		goauth.CreateAccountRequest{Identifier: "erin@example.com", Password: password}); err != nil {
 		t.Fatalf("create account: %v", err)
 	}
+	policy.UseAuthExtensions(e.Engine, *tenancy.AuthExtension(true))
+	t.Cleanup(func() { policy.UseAuthExtensions(e.Engine) })
 
-	m := New()
-	m.BindDependencies(&app.Dependencies{AuthEngine: engine, AuthMode: auth.ModeStrict})
+	m := authmodule.New()
+	m.BindDependencies(&app.Dependencies{AuthEngine: e.Engine, AuthMode: auth.ModeStrict})
 	mux := httpx.NewMux()
 	if err := m.Register(mux); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	handler := tenant.Middleware(tenant.ResolverConfig{Header: "X-Tenant-ID"})(mux)
+	handler := tenancy.Middleware(tenancy.ResolverConfig{Header: "X-Tenant-ID"})(mux)
 
 	do := func(method, path, tenantID, bearer string, body any) *httptest.ResponseRecorder {
 		var buf bytes.Buffer
@@ -99,5 +98,50 @@ func TestTenancyEndToEnd(t *testing.T) {
 	}
 	if rr := do(http.MethodGet, "/api/v1/auth/whoami", "tenant-b", tokens.Data.AccessToken, nil); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("whoami with tenant-a token under tenant-b status=%d want 401", rr.Code)
+	}
+}
+
+// With tenancy registered but switched off, whoami reports goAuth's default
+// tenant "0", exactly as before tenancy became a removable feature.
+func TestWhoamiWithTenancyRegisteredButOff(t *testing.T) {
+	engine, _ := authtest.NewEngine(t, authtest.NewUserRepository())
+	ctx := context.Background()
+	if _, err := engine.CreateAccount(ctx, goauth.CreateAccountRequest{Identifier: "dana@example.com", Password: password}); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	access, _, err := engine.Login(ctx, "dana@example.com", password)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	policy.UseAuthExtensions(engine, *tenancy.AuthExtension(false))
+	t.Cleanup(func() { policy.UseAuthExtensions(engine) })
+
+	m := authmodule.New()
+	m.BindDependencies(&app.Dependencies{AuthEngine: engine, AuthMode: auth.ModeHybrid})
+	r := httpx.NewMux()
+	if err := m.Register(r); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/whoami", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var env struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data) != 4 {
+		t.Fatalf("data keys=%v want user_id, tenant_id, role, permissions", env.Data)
+	}
+	for k, want := range map[string]string{"tenant_id": `"0"`, "role": `"user"`, "permissions": `["system.whoami"]`} {
+		if got := string(env.Data[k]); got != want {
+			t.Fatalf("%s=%s want %s", k, got, want)
+		}
 	}
 }

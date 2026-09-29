@@ -1,4 +1,4 @@
-package auth
+package tenancy
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 )
 
 // DefaultTenantID is goAuth's default tenant. goAuth uses it whenever no tenant
-// is attached to the request context, and migration 000005 backfills existing
+// is attached to the request context, and migration 000002_tenancy backfills
 // users into it.
 const DefaultTenantID = "0"
 
@@ -22,7 +22,7 @@ type requestTenantKey struct{}
 //   - a SuperAPI-owned key, readable via RequestTenantFromContext, so policies
 //     and the user provider can see the same tenant goAuth sees.
 //
-// Only the tenant middleware (internal/core/tenant) and trusted tooling such as
+// Only the tenant middleware (Middleware) and trusted tooling such as
 // cmd/createuser should call this. Handlers must never derive a tenant from
 // untrusted input themselves.
 func WithRequestTenant(ctx context.Context, tenantID string) context.Context {
@@ -46,4 +46,14 @@ func RequestTenantFromContext(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return tenantID, true
+}
+
+// scopeTenant is the tenant a bare-user-id provider call is restricted to: the
+// request tenant, or goAuth's default tenant when none is attached. goAuth
+// resolves the same tenant from the context before it calls the provider.
+func scopeTenant(ctx context.Context) string {
+	if tenantID, ok := RequestTenantFromContext(ctx); ok {
+		return tenantID
+	}
+	return DefaultTenantID
 }

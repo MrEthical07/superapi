@@ -61,7 +61,7 @@ func (f *fixture) addUser(t *testing.T, name string, seal func(userID string) []
 	if err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
-	if err := f.mfa.UpsertTOTPSecret(ctx, "", u.ID, seal(u.ID)); err != nil {
+	if err := f.mfa.UpsertTOTPSecret(ctx, u.ID, seal(u.ID)); err != nil {
 		t.Fatalf("store secret for %s: %v", name, err)
 	}
 	f.ids = append(f.ids, u.ID)
@@ -70,7 +70,7 @@ func (f *fixture) addUser(t *testing.T, name string, seal func(userID string) []
 
 func (f *fixture) ciphertext(t *testing.T, userID string) []byte {
 	t.Helper()
-	state, found, err := f.mfa.GetTOTP(context.Background(), "", userID)
+	state, found, err := f.mfa.GetTOTP(context.Background(), userID)
 	if err != nil || !found {
 		t.Fatalf("GetTOTP: found=%v err=%v", found, err)
 	}
@@ -235,12 +235,12 @@ type racingRepo struct {
 	auth.MFARepository
 }
 
-func (r *racingRepo) RotateTOTPSecret(ctx context.Context, tenantID, userID string, prev, next []byte) (bool, error) {
+func (r *racingRepo) RotateTOTPSecret(ctx context.Context, userID string, prev, next []byte) (bool, error) {
 	// A user re-enrolls (or a login rotates the row) right before our write.
-	if err := r.UpsertTOTPSecret(ctx, tenantID, userID, []byte("changed-under-us")); err != nil {
+	if err := r.UpsertTOTPSecret(ctx, userID, []byte("changed-under-us")); err != nil {
 		return false, err
 	}
-	return r.MFARepository.RotateTOTPSecret(ctx, tenantID, userID, prev, next)
+	return r.MFARepository.RotateTOTPSecret(ctx, userID, prev, next)
 }
 
 func TestRotateDoesNotOverwriteAConcurrentChange(t *testing.T) {

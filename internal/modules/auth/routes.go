@@ -16,7 +16,7 @@ import (
 //
 // Public credential endpoints rely on goAuth's built-in abuse limiters (login,
 // MFA, reset, verification, and account creation are each rate limited per
-// tenant and identifier). Policies are passed directly to r.Handle (no
+// identifier). Policies are passed directly to r.Handle (no
 // variadic spread) so `superapi-verify` can check them statically. See
 // docs/auth-flows.md.
 func (m *Module) Register(r httpx.Router) error {
@@ -42,11 +42,11 @@ func (m *Module) Register(r httpx.Router) error {
 	if limiter := m.runtime.Limiter(); limiter != nil {
 		r.Handle(http.MethodGet, "/api/v1/auth/whoami", httpx.Adapter(m.whoami),
 			policy.AuthRequired(engine, mode),
-			policy.RateLimitWithKeyer(limiter, "auth.whoami", m.rateRule, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
+			policy.RateLimitWithKeyer(limiter, "auth.whoami", m.rateRule, ratelimit.KeyByUserOrTokenHash(16)),
 		)
 		r.Handle(http.MethodPost, "/api/v1/auth/password/change", httpx.Adapter(m.changePassword),
 			policy.AuthRequired(engine, mode),
-			policy.RateLimitWithKeyer(limiter, "auth.password.change", m.rateRule, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
+			policy.RateLimitWithKeyer(limiter, "auth.password.change", m.rateRule, ratelimit.KeyByUserOrTokenHash(16)),
 		)
 	} else {
 		r.Handle(http.MethodGet, "/api/v1/auth/whoami", httpx.Adapter(m.whoami),

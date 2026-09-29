@@ -23,11 +23,11 @@ import (
 // ObserveFunc records cache operation outcomes for metrics integration.
 type ObserveFunc func(route, outcome string)
 
-// KeyPart is a named cache dimension contributed by an optional feature: the
-// tenant id, for example. It rides on CacheVaryBy.Parts (a component of the
+// KeyPart is a named cache dimension contributed by an optional feature: an
+// organization id, for example. It rides on CacheVaryBy.Parts (a component of the
 // response key) and CacheTagSpec.Parts (a component of an invalidation tag).
 type KeyPart struct {
-	// Name labels the part in keys and tags ("tenant" renders "tenant=<value>").
+	// Name labels the part in keys and tags ("org" renders "org=<value>").
 	// It must be a short identifier: letters, digits, "_", "-" or ".".
 	Name string
 	// Extract returns the part's value for a request. It runs on every cached
@@ -73,13 +73,11 @@ func HasIdentityPart(parts []KeyPart) bool {
 type CacheVaryBy struct {
 	// Method includes HTTP method in cache key.
 	Method bool
-	// TenantID includes principal tenant in cache key.
-	TenantID bool
 	// UserID includes principal user in cache key.
 	UserID bool
 	// Role includes principal role in cache key.
 	Role bool
-	// Parts adds feature-contributed dimensions (for example a tenant id).
+	// Parts adds feature-contributed dimensions (for example an organization id).
 	Parts []KeyPart
 	// PathParams includes selected route params in cache key.
 	PathParams []string
@@ -101,11 +99,9 @@ type CacheTagSpec struct {
 	Name string
 	// PathParams appends selected path params (for example, "id") to scope invalidation.
 	PathParams []string
-	// TenantID appends auth tenant id to scope invalidation.
-	TenantID bool
 	// UserID appends auth user id to scope invalidation.
 	UserID bool
-	// Parts appends feature-contributed dimensions (for example a tenant id).
+	// Parts appends feature-contributed dimensions (for example an organization id).
 	Parts []KeyPart
 	// Literals appends constant dimensions to distinguish related scopes.
 	Literals []CacheTagLiteral
@@ -145,7 +141,6 @@ type CacheInvalidateConfig struct {
 type ReadKeyTemplate struct {
 	RoutePart          string
 	Method             bool
-	TenantID           bool
 	UserID             bool
 	Role               bool
 	Parts              []KeyPart
@@ -236,7 +231,6 @@ func PrepareReadKeyTemplate(cfg CacheReadConfig) ReadKeyTemplate {
 	return ReadKeyTemplate{
 		RoutePart:          routePart,
 		Method:             cfg.VaryBy.Method,
-		TenantID:           cfg.VaryBy.TenantID,
 		UserID:             cfg.VaryBy.UserID,
 		Role:               cfg.VaryBy.Role,
 		Parts:              append([]KeyPart(nil), cfg.VaryBy.Parts...),
@@ -328,9 +322,6 @@ func (m *Manager) BuildReadKeyWithTemplate(ctx context.Context, r *http.Request,
 	}
 
 	principal, hasPrincipal := auth.FromContext(r.Context())
-	if template.TenantID {
-		values = append(values, "tenant="+strings.TrimSpace(principal.TenantID))
-	}
 	for _, part := range template.Parts {
 		values = append(values, strings.TrimSpace(part.Name)+"="+strings.TrimSpace(part.Extract(r, principal)))
 	}
@@ -576,7 +567,6 @@ func normalizeTagSpecs(specs []CacheTagSpec) []CacheTagSpec {
 		out = append(out, CacheTagSpec{
 			Name:       name,
 			PathParams: normalizedNames(spec.PathParams),
-			TenantID:   spec.TenantID,
 			UserID:     spec.UserID,
 			Parts:      normalizeTagParts(spec.Parts),
 			Literals:   normalizeTagLiterals(spec.Literals),
@@ -680,9 +670,6 @@ func tagSpecKey(spec CacheTagSpec) string {
 	for _, pathParam := range spec.PathParams {
 		parts = append(parts, "path."+pathParam)
 	}
-	if spec.TenantID {
-		parts = append(parts, "tenant")
-	}
 	for _, part := range spec.Parts {
 		parts = append(parts, "part."+part.Name)
 	}
@@ -734,14 +721,6 @@ func resolveTagName(r *http.Request, principal auth.AuthContext, spec CacheTagSp
 			return "", fmt.Errorf("missing path param %q for cache tag %q", pathParam, spec.Name)
 		}
 		parts = append(parts, "path."+pathParam+"="+escapeTagValue(value))
-	}
-
-	if spec.TenantID {
-		tenantID := strings.TrimSpace(principal.TenantID)
-		if tenantID == "" {
-			return "", fmt.Errorf("missing tenant id for cache tag %q", spec.Name)
-		}
-		parts = append(parts, "tenant="+escapeTagValue(tenantID))
 	}
 
 	for _, part := range spec.Parts {

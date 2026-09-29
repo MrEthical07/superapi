@@ -17,8 +17,8 @@ import (
 
 // requestContext enriches the request context with the client IP and
 // User-Agent so goAuth's abuse limiters, device binding, and audit trail see
-// them. The tenant (when tenancy is on) is already attached by the tenant
-// middleware.
+// them. Anything an optional feature attaches (its middleware runs before the
+// router) is already on the context.
 func requestContext(ctx *httpx.Context) context.Context {
 	c := ctx.Context()
 	if ip, ok := ctx.ClientIP(); ok && ip != "" {
@@ -100,9 +100,9 @@ func (m *Module) whoami(ctx *httpx.Context, _ httpx.NoBody) (whoamiResponse, err
 	}
 	return whoamiResponse{
 		UserID:      principal.UserID,
-		TenantID:    principal.TenantID,
 		Role:        principal.Role,
 		Permissions: append([]string(nil), principal.Permissions...),
+		Attributes:  principal.Attributes,
 	}, nil
 }
 

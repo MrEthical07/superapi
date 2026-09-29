@@ -176,7 +176,7 @@ func rotate(ctx context.Context, repo auth.MFARepository, cipher auth.RotatableC
 				res.fail(row.UserID, err)
 				continue
 			}
-			swapped, err := repo.RotateTOTPSecret(ctx, "", row.UserID, row.Ciphertext, next)
+			swapped, err := repo.RotateTOTPSecret(ctx, row.UserID, row.Ciphertext, next)
 			switch {
 			case err != nil:
 				res.fail(row.UserID, err)

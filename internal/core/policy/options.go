@@ -10,7 +10,8 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
 
-// PresetOption mutates preset behavior used by TenantRead/TenantWrite/PublicRead.
+// PresetOption mutates preset behavior used by PublicRead and by presets
+// defined outside this package (see ResolvePreset).
 type PresetOption func(*presetConfig)
 
 type presetConfig struct {
@@ -31,23 +32,9 @@ type presetConfig struct {
 	cacheVarySet     bool
 	invalidateTagCfg []cache.CacheTagSpec
 	invalidateTagSet bool
-	tenantMatchParam string
 }
 
 func defaultPresetConfig() presetConfig {
-	// Tenant-aware defaults only apply when tenancy is enabled. With tenancy off,
-	// authenticated cache reads vary by user id instead of tenant id (which
-	// satisfies the "authenticated cache routes vary by user or tenant" rule),
-	// and the tenant path param default is empty.
-	varyBy := cache.CacheVaryBy{}
-	tenantMatchParam := ""
-	if TenancyEnabled() {
-		varyBy.TenantID = true
-		tenantMatchParam = "tenant_id"
-	} else {
-		varyBy.UserID = true
-	}
-
 	return presetConfig{
 		authMode: auth.ModeHybrid,
 		rateLimitRule: ratelimit.Rule{
@@ -57,9 +44,8 @@ func defaultPresetConfig() presetConfig {
 		cacheTTL:         30 * time.Second,
 		cacheTagSpecs:    []cache.CacheTagSpec{{Name: "resource"}},
 		cacheAllowAuth:   true,
-		cacheVaryBy:      varyBy,
+		cacheVaryBy:      cache.CacheVaryBy{UserID: true},
 		invalidateTagCfg: []cache.CacheTagSpec{{Name: "resource"}},
-		tenantMatchParam: tenantMatchParam,
 	}
 }
 
@@ -142,16 +128,6 @@ func WithInvalidateTags(tagSpecs ...cache.CacheTagSpec) PresetOption {
 		}
 		cfg.invalidateTagSet = true
 		cfg.invalidateTagCfg = append([]cache.CacheTagSpec(nil), tagSpecs...)
-	}
-}
-
-// WithTenantMatchParam overrides tenant path parameter name used by presets.
-func WithTenantMatchParam(param string) PresetOption {
-	return func(cfg *presetConfig) {
-		trimmed := strings.TrimSpace(param)
-		if trimmed != "" {
-			cfg.tenantMatchParam = trimmed
-		}
 	}
 }
 

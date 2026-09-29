@@ -10,6 +10,10 @@ type feature struct {
 	Help string
 	// Paths are files or directories deleted when the feature is pruned.
 	Paths []string
+	// NameContains, when set, also deletes every file or directory in the
+	// repository whose base name contains it (case-insensitive). A feature
+	// names its own files after itself so pruning needs no per-file list.
+	NameContains string
 	// TouchesSQL means pruning changes db/ and sqlc output must be regenerated.
 	TouchesSQL bool
 }
@@ -20,26 +24,15 @@ var features = []feature{
 	{
 		Flag:   "no-tenancy",
 		Marker: "tenancy",
-		Help:   "remove tenant resolution, the tenants table and TENANCY_* config (tenancy stays off)",
+		Help:   "remove multi-tenancy: internal/tenancy, its migration, schema, queries, docs and TENANCY_* config",
 		Paths: []string{
-			"internal/core/tenant/resolver.go",
-			"internal/core/tenant/resolver_test.go",
-			"internal/core/tenant/directory.go",
-			"internal/core/tenant/cache.go",
-			"internal/core/tenant/cache_test.go",
-			"internal/core/tenant/subdomain_test.go",
-			"internal/core/tenant/directory_pg_test.go",
-			"internal/core/config/tenancy_test.go",
-			"internal/modules/auth/tenancy_http_test.go",
-			"cmd/createuser/tenant.go",
-			"db/migrations/000002_tenants.up.sql",
-			"db/migrations/000002_tenants.down.sql",
-			"db/schema/tenants.sql",
-			"db/queries/tenants.sql",
-			"internal/core/db/sqlcgen/tenants.sql.go",
-			"docs/multi-tenancy.md",
+			"internal/tenancy",
 		},
-		TouchesSQL: true,
+		// Every file or directory whose name contains this is deleted too: the
+		// migration, sqlc schema, queries and generated code, the analyzer and
+		// scaffolder extensions, the registration file, docs and workflows.
+		NameContains: "tenancy",
+		TouchesSQL:   true,
 	},
 	{
 		Flag:   "no-webauthn",
@@ -57,6 +50,8 @@ var features = []feature{
 			"internal/core/auth/config_webauthn_test.go",
 			"internal/core/config/webauthn.go",
 			"internal/core/config/webauthn_test.go",
+			"internal/tenancy/provider_webauthn.go",
+			"internal/tenancy/provider_webauthn_test.go",
 			"internal/modules/auth/webauthn.go",
 			"internal/modules/auth/webauthn_test.go",
 			"internal/modules/auth/stepup_webauthn_test.go",

@@ -29,8 +29,6 @@ type Config struct {
 	Log LogConfig
 	// Auth toggles authentication integration and route auth mode.
 	Auth AuthConfig
-	// Tenancy toggles multi-tenant behavior across policy, cache, and rate-limit seams.
-	Tenancy TenancyConfig
 	// RateLimit configures default route-level throttling behavior.
 	RateLimit RateLimitConfig
 	// Cache configures default route-level response caching behavior.
@@ -114,48 +112,6 @@ const (
 	NotifyDriverNoop = "noop"
 	NotifyDriverLog  = "log"
 )
-
-// TenancyConfig configures multi-tenant behavior.
-//
-// When Enabled is false (the default), tenancy is inert: preset policies do not
-// default to tenant scoping/keying, and the route validator treats a
-// {tenant_id} path parameter as an ordinary parameter rather than forcing
-// tenant policies. When Enabled is true, tenant scoping/keying defaults return
-// and {tenant_id} routes must carry tenant policies.
-type TenancyConfig struct {
-	// Enabled turns on multi-tenant policy, cache, and rate-limit behavior, the
-	// tenant resolution middleware, and goAuth's tenant-scoped user lookup.
-	Enabled bool
-	// template:begin tenancy
-	// Resolver selects how the request tenant is resolved: "header" (default)
-	// or "subdomain". Only used when Enabled is true.
-	Resolver string
-	// Header is the request header carrying the tenant id for the header
-	// resolver (default X-Tenant-ID).
-	Header string
-	// BaseDomain is the parent domain for the subdomain resolver; a request to
-	// acme.example.com with BaseDomain example.com resolves tenant "acme".
-	BaseDomain string
-	// Validate requires the resolved tenant to exist in the tenants table and
-	// be active (default true). Requires Postgres.
-	Validate bool
-	// ValidateCacheTTL bounds how long a tenant lookup result is cached
-	// in-process (default 30s). 0 disables the cache.
-	ValidateCacheTTL time.Duration
-	// ExemptPaths are exact request paths that skip tenant resolution
-	// (default /healthz, /readyz, /metrics). The metrics path is always exempt.
-	ExemptPaths []string
-	// template:end tenancy
-}
-
-// template:begin tenancy
-// Tenancy resolver names accepted by TENANCY_RESOLVER.
-const (
-	TenancyResolverHeader    = "header"
-	TenancyResolverSubdomain = "subdomain"
-)
-
-// template:end tenancy
 
 // RateLimitConfig defines default policy values for route rate limiting.
 type RateLimitConfig struct {
@@ -440,17 +396,6 @@ func Load() (*Config, error) {
 			TOTPEncryptionActiveKID:   strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_ACTIVE_KID", "")),
 			TestOverridesAllowed:      isDevOrTestEnv(env),
 		},
-		// template:begin tenancy
-		Tenancy: TenancyConfig{
-			Enabled:          getBool("TENANCY_ENABLED", false),
-			Resolver:         strings.ToLower(strings.TrimSpace(getenv("TENANCY_RESOLVER", TenancyResolverHeader))),
-			Header:           strings.TrimSpace(getenv("TENANCY_HEADER", "X-Tenant-ID")),
-			BaseDomain:       strings.ToLower(strings.Trim(strings.TrimSpace(getenv("TENANCY_BASE_DOMAIN", "")), ".")),
-			Validate:         getBool("TENANCY_VALIDATE", true),
-			ValidateCacheTTL: getDuration("TENANCY_VALIDATE_CACHE_TTL", 30*time.Second),
-			ExemptPaths:      getCSV("TENANCY_EXEMPT_PATHS", []string{"/healthz", "/readyz", "/metrics"}),
-		},
-		// template:end tenancy
 		RateLimit: RateLimitConfig{
 			Enabled:       getBool("RATELIMIT_ENABLED", false),
 			FailOpen:      getBool("RATELIMIT_FAIL_OPEN", rateLimitFailOpenDefault),
@@ -643,38 +588,6 @@ func (c *Config) Lint() error {
 	if c.Notify.Timeout <= 0 {
 		return fmt.Errorf("notify timeout must be > 0")
 	}
-	// template:begin tenancy
-	if c.Tenancy.Enabled {
-		switch c.Tenancy.Resolver {
-		case TenancyResolverHeader:
-			if err := validateTokens("tenancy header", []string{c.Tenancy.Header}); err != nil || c.Tenancy.Header == "" {
-				return fmt.Errorf("tenancy header must be a single non-empty header name")
-			}
-		case TenancyResolverSubdomain:
-			if c.Tenancy.BaseDomain == "" {
-				return fmt.Errorf("tenancy resolver %q requires TENANCY_BASE_DOMAIN", TenancyResolverSubdomain)
-			}
-			// The subdomain is a slug; only the tenants table can turn it into
-			// the tenant id that goAuth and modules use.
-			if !c.Tenancy.Validate {
-				return fmt.Errorf("tenancy resolver %q looks tenants up by slug in the tenants table, so it requires TENANCY_VALIDATE=true (and Postgres)", TenancyResolverSubdomain)
-			}
-		default:
-			return fmt.Errorf("invalid tenancy resolver: %q (valid: header, subdomain)", c.Tenancy.Resolver)
-		}
-		if c.Tenancy.Validate && !c.Postgres.Enabled {
-			return fmt.Errorf("tenancy validate requires postgres enabled (set TENANCY_VALIDATE=false to skip tenant existence checks)")
-		}
-		if c.Tenancy.ValidateCacheTTL < 0 {
-			return fmt.Errorf("tenancy validate cache ttl must be >= 0")
-		}
-		for _, p := range c.Tenancy.ExemptPaths {
-			if p == "" || p[0] != '/' {
-				return fmt.Errorf("tenancy exempt path must start with '/': %q", p)
-			}
-		}
-	}
-	// template:end tenancy
 	if c.RateLimit.Enabled && !c.Redis.Enabled {
 		return fmt.Errorf("ratelimit enabled requires redis enabled")
 	}
@@ -1076,19 +989,6 @@ func isDevOrTestEnv(env string) bool {
 	default:
 		return false
 	}
-}
-
-// Deprecations returns human-readable warnings for deprecated settings present
-// in the loaded configuration. Callers log these at startup; they never fail
-// startup on their own.
-func (c *Config) Deprecations() []string {
-	var out []string
-	// template:begin tenancy
-	if EnvDeprecated("TENANCY_ENFORCE_ISOLATION") {
-		out = append(out, "TENANCY_ENFORCE_ISOLATION is deprecated and ignored: goAuth v0.5.0 made MultiTenant.EnforceIsolation a no-op; tenant enforcement is governed by TENANCY_ENABLED alone. Remove it from your environment; it will be rejected in a future release.")
-	}
-	// template:end tenancy
-	return out
 }
 
 func getenv(key, fallback string) string {

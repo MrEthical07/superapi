@@ -83,6 +83,13 @@ func Run(opts Options) (Result, error) {
 	for _, f := range features {
 		if opts.Prune[f.Marker] {
 			toDelete = append(toDelete, f.Paths...)
+			if f.NameContains != "" {
+				named, err := findNamed(root, f.NameContains)
+				if err != nil {
+					return res, err
+				}
+				toDelete = append(toDelete, named...)
+			}
 			sqlTouched = sqlTouched || f.TouchesSQL
 		}
 	}
@@ -392,6 +399,39 @@ func textFiles(root string) ([]string, error) {
 			return nil // binary
 		}
 		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
+
+// findNamed lists (relative, slash separated) every file or directory under
+// root whose base name contains sub, ignoring case. A matched directory is
+// listed once and not descended into.
+func findNamed(root, sub string) ([]string, error) {
+	sub = strings.ToLower(sub)
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+		}
+		if strings.Contains(strings.ToLower(d.Name()), sub) {
+			out = append(out, rel)
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+		}
 		return nil
 	})
 	sort.Strings(out)

@@ -274,16 +274,6 @@ func parsePolicyMetadata(expr ast.Expr) (corepolicy.Metadata, error) {
 		meta.Type = corepolicy.PolicyTypeRequirePerm
 	case "RequireAnyPerm":
 		meta.Type = corepolicy.PolicyTypeRequireAnyPerm
-	case "TenantRequired":
-		meta.Type = corepolicy.PolicyTypeTenantRequired
-	case "TenantMatchFromPath":
-		meta.Type = corepolicy.PolicyTypeTenantMatchFromPath
-		if len(call.Args) > 0 {
-			param, err := extractStringLiteral(call.Args[0])
-			if err == nil {
-				meta.TenantPathParam = param
-			}
-		}
 	case "RateLimit", "RateLimitWithKeyer":
 		meta.Type = corepolicy.PolicyTypeRateLimit
 	case "CacheRead":
@@ -359,8 +349,6 @@ func parseCacheReadMetadata(call *ast.CallExpr) corepolicy.CacheReadMetadata {
 				switch varyKey {
 				case "UserID":
 					meta.VaryByUserID = flag
-				case "TenantID":
-					meta.VaryByTenantID = flag
 				}
 			}
 		}
@@ -421,7 +409,7 @@ func boolLiteral(expr ast.Expr) (bool, bool) {
 }
 
 // partsIdentity reports whether a VaryBy.Parts literal lists a call to a
-// registered identity-bearing part constructor (for example tenancy.CacheVary()).
+// registered identity-bearing part constructor (see Extension.IdentityParts).
 // Anything else, including a part built elsewhere, is not counted: the
 // verifier cannot see its Identity flag, so it errs toward reporting.
 func partsIdentity(expr ast.Expr) bool {

@@ -14,7 +14,6 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
-	"github.com/MrEthical07/superapi/internal/core/tenant"
 )
 
 // AuthRequired enforces authentication on a route.
@@ -33,7 +32,7 @@ import (
 //	)
 //
 // Notes:
-// - Place before RBAC and tenant policies
+// - Place before RBAC and feature isolation policies
 // - Requires a non-nil engine when route is expected to be protected
 func AuthRequired(engine *goauth.Engine, mode auth.Mode) Policy {
 	p := authRequiredWithEngine(engine, mode)
@@ -211,20 +210,8 @@ func authRequiredWithEngine(engine *goauth.Engine, mode auth.Mode) Policy {
 
 				principal := auth.AuthContext{
 					UserID:      result.UserID,
-					TenantID:    result.TenantID,
 					Role:        result.Role,
 					Permissions: append([]string(nil), result.Permissions...),
-				}
-
-				// With tenancy enabled the tenant middleware attaches the
-				// resolved request tenant. A token minted for another tenant
-				// must not authenticate here, whatever the validation mode:
-				// jwt_only/hybrid routes never load the tenant-keyed session,
-				// so this is the only check that binds token to tenant.
-				if requestTenant, ok := auth.RequestTenantFromContext(innerR.Context()); ok && !tenant.IsSameTenant(principal.TenantID, requestTenant) {
-					rid := requestid.FromContext(innerR.Context())
-					response.Error(innerW, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
-					return
 				}
 
 				if exts := authExtensionsFor(engine); len(exts) > 0 {

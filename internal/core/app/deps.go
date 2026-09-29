@@ -130,11 +130,6 @@ func initDependencies(ctx context.Context, cfg *config.Config, features []Featur
 		features:  loaded,
 	}
 
-	// Apply the tenancy decision to the policy engine before any module
-	// registers routes or constructs presets, so preset defaults and route
-	// validation reflect TENANCY_ENABLED.
-	policy.SetTenancyEnabled(cfg.Tenancy.Enabled)
-
 	if cfg.Postgres.Enabled {
 		pool, err := db.NewPool(ctx, cfg.Postgres)
 		if err != nil {
@@ -219,7 +214,7 @@ func initDependencies(ctx context.Context, cfg *config.Config, features []Featur
 			return nil, fmt.Errorf("init auth provider: user repository unavailable")
 		}
 
-		userProvider := auth.NewStoreUserProvider(userRepo).WithTenancy(cfg.Tenancy.Enabled)
+		userProvider := auth.NewStoreUserProvider(userRepo)
 
 		// template:begin webauthn
 		// The provider always carries the WebAuthn credential capability so
@@ -262,9 +257,7 @@ func initDependencies(ctx context.Context, cfg *config.Config, features []Featur
 			}
 		}
 
-		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{
-			Enabled: cfg.Tenancy.Enabled,
-		}, AuthFeatures(cfg), provider, mutators...)
+		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, AuthFeatures(cfg), provider, mutators...)
 		if err != nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()

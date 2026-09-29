@@ -24,10 +24,6 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/httpx"
 	"github.com/MrEthical07/superapi/internal/core/notify"
-	"github.com/MrEthical07/superapi/internal/core/policy"
-	// template:begin tenancy
-	"github.com/MrEthical07/superapi/internal/core/tenant"
-	// template:end tenancy
 )
 
 const testPassword = "correct-horse-battery-staple"
@@ -72,8 +68,7 @@ func (c *captureNotifier) verification(to string) (string, bool) {
 }
 
 type harnessOptions struct {
-	tenancy bool
-	auth    config.AuthConfig
+	auth config.AuthConfig
 }
 
 type harness struct {
@@ -85,19 +80,13 @@ type harness struct {
 	users      *authtest.UserRepository
 }
 
-// newHarness wires the real auth module, goAuth engine, provider and (when
-// tenancy is on) tenant middleware over in-memory repositories.
+// newHarness wires the real auth module, goAuth engine and provider over
+// in-memory repositories.
 func newHarness(t *testing.T, opts harnessOptions) *harness {
 	t.Helper()
-	if opts.tenancy {
-		prev := policy.TenancyEnabled()
-		policy.SetTenancyEnabled(true)
-		t.Cleanup(func() { policy.SetTenancyEnabled(prev) })
-	}
-
 	opts.auth.Enabled = true
 	users := authtest.NewUserRepository()
-	engine, _ := authtest.NewEngineWithFeatures(t, opts.tenancy, users, coreauth.Features{
+	engine, _ := authtest.NewEngineWithFeatures(t, users, coreauth.Features{
 		RegistrationAutoLogin:     opts.auth.RegistrationEnabled && opts.auth.RegistrationAutoLogin,
 		PasswordReset:             opts.auth.PasswordResetEnabled,
 		EmailVerification:         opts.auth.EmailVerificationEnabled,
@@ -122,11 +111,6 @@ func newHarness(t *testing.T, opts harnessOptions) *harness {
 		t.Fatalf("register: %v", err)
 	}
 	var handler http.Handler = mux
-	// template:begin tenancy
-	if opts.tenancy {
-		handler = tenant.Middleware(tenant.ResolverConfig{Header: "X-Tenant-ID"})(mux)
-	}
-	// template:end tenancy
 	return &harness{t: t, engine: engine, handler: handler, notifier: capture, dispatcher: dispatcher, users: users}
 }
 
@@ -135,7 +119,6 @@ type call struct {
 	path   string
 	body   any
 	token  string
-	tenant string
 }
 
 type result struct {
@@ -181,9 +164,6 @@ func (h *harness) do(c call) result {
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if c.tenant != "" {
-		req.Header.Set("X-Tenant-ID", c.tenant)
 	}
 	rr := httptest.NewRecorder()
 	h.handler.ServeHTTP(rr, req)

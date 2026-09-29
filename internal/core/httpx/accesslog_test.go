@@ -77,7 +77,7 @@ func TestAccessLogSamplingAndAlwaysLog5xx(t *testing.T) {
 	h := RequestID(AccessLog(cfg, l)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things", nil))
 	if strings.TrimSpace(buf.String()) != "" {
 		t.Fatalf("expected sampled-out request to produce no log, got: %s", buf.String())
 	}
@@ -85,7 +85,7 @@ func TestAccessLogSamplingAndAlwaysLog5xx(t *testing.T) {
 	h = RequestID(AccessLog(cfg, l)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things", nil))
 
 	entry := parseSingleLog(t, buf)
 	if got, _ := entry["status"].(float64); int(got) != http.StatusServiceUnavailable {
@@ -121,20 +121,20 @@ func TestAccessLogRoutePatternAndSensitiveDefaults(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(CaptureRoutePattern)
-	r.Get("/api/v1/tenants/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get("/api/v1/things/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 
 	h := RequestID(AccessLog(cfg, l)(r))
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/abc123?token=secret", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/things/abc123?token=secret", nil)
 	req.Header.Set("Authorization", "Bearer top-secret")
 	req.Header.Set("Cookie", "session=secret")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
 	entry := parseSingleLog(t, buf)
-	if got, _ := entry["route"].(string); got != "/api/v1/tenants/{id}" {
-		t.Fatalf("route = %q, want %q", got, "/api/v1/tenants/{id}")
+	if got, _ := entry["route"].(string); got != "/api/v1/things/{id}" {
+		t.Fatalf("route = %q, want %q", got, "/api/v1/things/{id}")
 	}
 	if got, _ := entry["method"].(string); got != http.MethodGet {
 		t.Fatalf("method = %q, want %q", got, http.MethodGet)
@@ -153,7 +153,7 @@ func TestAccessLogRoutePatternAndSensitiveDefaults(t *testing.T) {
 	if strings.Contains(logLine, "token=secret") {
 		t.Fatalf("log line contains query string unexpectedly: %s", logLine)
 	}
-	if strings.Contains(logLine, "/api/v1/tenants/abc123") {
+	if strings.Contains(logLine, "/api/v1/things/abc123") {
 		t.Fatalf("log line contains raw path unexpectedly: %s", logLine)
 	}
 }

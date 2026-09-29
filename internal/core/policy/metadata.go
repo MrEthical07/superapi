@@ -27,10 +27,6 @@ const (
 	PolicyTypeRequirePerm PolicyType = "require_perm"
 	// PolicyTypeRequireAnyPerm marks any-of permission enforcement policy.
 	PolicyTypeRequireAnyPerm PolicyType = "require_any_perm"
-	// PolicyTypeTenantRequired marks tenant scope enforcement policy.
-	PolicyTypeTenantRequired PolicyType = "tenant_required"
-	// PolicyTypeTenantMatchFromPath marks path-tenant isolation policy.
-	PolicyTypeTenantMatchFromPath PolicyType = "tenant_match_from_path"
 	// PolicyTypeRateLimit marks route throttling policy.
 	PolicyTypeRateLimit PolicyType = "rate_limit"
 	// PolicyTypeCacheRead marks cache read/write policy.
@@ -47,8 +43,6 @@ type CacheReadMetadata struct {
 	AllowAuthenticated bool
 	// VaryByUserID indicates cache key varies by user ID.
 	VaryByUserID bool
-	// VaryByTenantID indicates cache key varies by tenant ID.
-	VaryByTenantID bool
 	// VaryByIdentityPart indicates the cache key varies by an identity-bearing
 	// feature part (cache.KeyPart with Identity set).
 	VaryByIdentityPart bool
@@ -66,8 +60,6 @@ type Metadata struct {
 	Type PolicyType
 	// Name is human-readable policy name for diagnostics.
 	Name string
-	// TenantPathParam is the tenant route parameter for tenant-match policy.
-	TenantPathParam string
 	// CacheRead holds cache-read safety metadata.
 	CacheRead CacheReadMetadata
 	// CacheInvalidate holds cache invalidation metadata.

@@ -48,7 +48,7 @@ func newCacheReadRuntime(manager *cache.Manager, cfg cache.CacheReadConfig) cach
 		allowedMethods:    buildMethodSet(cfg.Methods),
 		cacheStatuses:     buildCacheStatusSet(cfg.CacheStatuses),
 		maxBytes:          maxBytes,
-		requireAuthSafety: !template.UserID && !template.TenantID && !cache.HasIdentityPart(template.Parts),
+		requireAuthSafety: !template.UserID && !cache.HasIdentityPart(template.Parts),
 	}
 }
 
@@ -140,7 +140,7 @@ func (c *cacheReadRuntime) routeLabel(route string) string {
 //	    policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 //	        TTL: 30 * time.Second,
 //	        TagSpecs: []cache.CacheTagSpec{{Name: "project", PathParams: []string{"id"}}},
-//	        VaryBy: cache.CacheVaryBy{TenantID: true, UserID: true},
+//	        VaryBy: cache.CacheVaryBy{UserID: true},
 //	    }),
 //	)
 //
@@ -240,7 +240,6 @@ func CacheRead(manager *cache.Manager, cfg cache.CacheReadConfig) Policy {
 		CacheRead: CacheReadMetadata{
 			AllowAuthenticated: cfg.AllowAuthenticated,
 			VaryByUserID:       cfg.VaryBy.UserID,
-			VaryByTenantID:     cfg.VaryBy.TenantID,
 			VaryByIdentityPart: cache.HasIdentityPart(cfg.VaryBy.Parts),
 		},
 	})
@@ -406,7 +405,7 @@ func hasAuthPrincipal(r *http.Request) bool {
 	if !ok {
 		return false
 	}
-	return strings.TrimSpace(principal.UserID) != "" || strings.TrimSpace(principal.TenantID) != "" || strings.TrimSpace(principal.Role) != "" || len(principal.Attributes) > 0
+	return strings.TrimSpace(principal.UserID) != "" || strings.TrimSpace(principal.Role) != "" || len(principal.Attributes) > 0
 }
 
 func ensureAuthCacheSafety(r *http.Request) {

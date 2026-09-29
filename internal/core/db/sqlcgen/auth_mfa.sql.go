@@ -18,20 +18,18 @@ FROM users u
 WHERE u.id = t.user_id
   AND t.user_id = $2
   AND t.last_used_counter < $1
-  AND ($3::text IS NULL OR u.tenant_id = $3::text)
 RETURNING t.user_id
 `
 
 type AdvanceUserTOTPCounterParams struct {
-	Counter  int64       `json:"counter"`
-	UserID   pgtype.UUID `json:"user_id"`
-	TenantID pgtype.Text `json:"tenant_id"`
+	Counter int64       `json:"counter"`
+	UserID  pgtype.UUID `json:"user_id"`
 }
 
 // Only moves the counter forward, so two concurrent verifications of the same
 // code cannot both succeed (replay protection holds under races).
 func (q *Queries) AdvanceUserTOTPCounter(ctx context.Context, arg AdvanceUserTOTPCounterParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, advanceUserTOTPCounter, arg.Counter, arg.UserID, arg.TenantID)
+	row := q.db.QueryRow(ctx, advanceUserTOTPCounter, arg.Counter, arg.UserID)
 	var user_id pgtype.UUID
 	err := row.Scan(&user_id)
 	return user_id, err
@@ -45,19 +43,17 @@ WHERE u.id = b.user_id
   AND b.user_id = $1
   AND b.code_hash = $2
   AND b.used_at IS NULL
-  AND ($3::text IS NULL OR u.tenant_id = $3::text)
 `
 
 type ConsumeBackupCodeParams struct {
 	UserID   pgtype.UUID `json:"user_id"`
 	CodeHash []byte      `json:"code_hash"`
-	TenantID pgtype.Text `json:"tenant_id"`
 }
 
 // Atomic single use: the row lock plus the used_at IS NULL predicate mean two
 // concurrent consumes of the same code cannot both report success.
 func (q *Queries) ConsumeBackupCode(ctx context.Context, arg ConsumeBackupCodeParams) (int64, error) {
-	result, err := q.db.Exec(ctx, consumeBackupCode, arg.UserID, arg.CodeHash, arg.TenantID)
+	result, err := q.db.Exec(ctx, consumeBackupCode, arg.UserID, arg.CodeHash)
 	if err != nil {
 		return 0, err
 	}
@@ -69,21 +65,15 @@ DELETE FROM user_backup_codes
 WHERE user_id IN (
     SELECT users.id FROM users
     WHERE users.id = $1
-      AND ($2::text IS NULL OR users.tenant_id = $2::text)
 )
 `
-
-type DeleteBackupCodesParams struct {
-	UserID   pgtype.UUID `json:"user_id"`
-	TenantID pgtype.Text `json:"tenant_id"`
-}
 
 // First half of replacing a user's backup codes. Run it and InsertBackupCodes
 // in one transaction: a single statement cannot do both because the unique
 // (user_id, code_hash) constraint rejects re-inserting a hash the same
 // statement deletes.
-func (q *Queries) DeleteBackupCodes(ctx context.Context, arg DeleteBackupCodesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteBackupCodes, arg.UserID, arg.TenantID)
+func (q *Queries) DeleteBackupCodes(ctx context.Context, userID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteBackupCodes, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -94,7 +84,6 @@ const disableUserTOTP = `-- name: DisableUserTOTP :one
 WITH target AS (
     SELECT users.id AS target_id FROM users
     WHERE users.id = $1
-      AND ($2::text IS NULL OR users.tenant_id = $2::text)
 ), deleted_totp AS (
     DELETE FROM user_totp WHERE user_id IN (SELECT target_id FROM target)
 ), deleted_codes AS (
@@ -109,15 +98,10 @@ WHERE u.id = target.target_id
 RETURNING u.id
 `
 
-type DisableUserTOTPParams struct {
-	UserID   pgtype.UUID `json:"user_id"`
-	TenantID pgtype.Text `json:"tenant_id"`
-}
-
 // Removes the TOTP secret and all backup codes, clears users.totp_enabled and
 // advances account_version when TOTP was enabled.
-func (q *Queries) DisableUserTOTP(ctx context.Context, arg DisableUserTOTPParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, disableUserTOTP, arg.UserID, arg.TenantID)
+func (q *Queries) DisableUserTOTP(ctx context.Context, userID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, disableUserTOTP, userID)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
@@ -129,13 +113,7 @@ SELECT t.secret_ciphertext, t.verified, t.last_used_counter, u.totp_enabled
 FROM user_totp t
 JOIN users u ON u.id = t.user_id
 WHERE t.user_id = $1
-  AND ($2::text IS NULL OR u.tenant_id = $2::text)
 `
-
-type GetUserTOTPParams struct {
-	UserID   pgtype.UUID `json:"user_id"`
-	TenantID pgtype.Text `json:"tenant_id"`
-}
 
 type GetUserTOTPRow struct {
 	SecretCiphertext []byte `json:"secret_ciphertext"`
@@ -146,15 +124,15 @@ type GetUserTOTPRow struct {
 
 // TOTP and backup-code persistence for goAuth's UserProvider MFA methods.
 //
-// Every query takes an optional tenant_id. NULL (tenancy disabled) scopes by
-// user id only; a value restricts the operation to users in that tenant, so a
-// user id from another tenant matches nothing. Each operation is a single
-// statement, so it is atomic without an explicit transaction, except
-// ReplaceBackupCodes, which is a DeleteBackupCodes + InsertBackupCodes pair
-// that the caller must run inside one transaction (the repository refuses to
-// run outside one).
-func (q *Queries) GetUserTOTP(ctx context.Context, arg GetUserTOTPParams) (GetUserTOTPRow, error) {
-	row := q.db.QueryRow(ctx, getUserTOTP, arg.UserID, arg.TenantID)
+// Every query is keyed by the globally unique user id. goAuth resolves the
+// user through its own lookup before it calls the provider with that id, and
+// the endpoints only ever pass the authenticated principal's id, so no query
+// needs a further scope. Each operation is a single statement, so it is atomic
+// without an explicit transaction, except ReplaceBackupCodes, which is a
+// DeleteBackupCodes + InsertBackupCodes pair that the caller must run inside
+// one transaction (the repository refuses to run outside one).
+func (q *Queries) GetUserTOTP(ctx context.Context, userID pgtype.UUID) (GetUserTOTPRow, error) {
+	row := q.db.QueryRow(ctx, getUserTOTP, userID)
 	var i GetUserTOTPRow
 	err := row.Scan(
 		&i.SecretCiphertext,
@@ -170,19 +148,17 @@ INSERT INTO user_backup_codes (user_id, code_hash)
 SELECT users.id, code_hash
 FROM users, unnest($1::bytea[]) AS code_hash
 WHERE users.id = $2
-  AND ($3::text IS NULL OR users.tenant_id = $3::text)
 `
 
 type InsertBackupCodesParams struct {
 	CodeHashes [][]byte    `json:"code_hashes"`
 	UserID     pgtype.UUID `json:"user_id"`
-	TenantID   pgtype.Text `json:"tenant_id"`
 }
 
 // Second half of replacing a user's backup codes. Inserts nothing when the user
-// is not in scope (unknown id, or another tenant).
+// does not exist.
 func (q *Queries) InsertBackupCodes(ctx context.Context, arg InsertBackupCodesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertBackupCodes, arg.CodeHashes, arg.UserID, arg.TenantID)
+	result, err := q.db.Exec(ctx, insertBackupCodes, arg.CodeHashes, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
@@ -195,17 +171,11 @@ FROM user_backup_codes b
 JOIN users u ON u.id = b.user_id
 WHERE b.user_id = $1
   AND b.used_at IS NULL
-  AND ($2::text IS NULL OR u.tenant_id = $2::text)
 ORDER BY b.id
 `
 
-type ListUnusedBackupCodesParams struct {
-	UserID   pgtype.UUID `json:"user_id"`
-	TenantID pgtype.Text `json:"tenant_id"`
-}
-
-func (q *Queries) ListUnusedBackupCodes(ctx context.Context, arg ListUnusedBackupCodesParams) ([][]byte, error) {
-	rows, err := q.db.Query(ctx, listUnusedBackupCodes, arg.UserID, arg.TenantID)
+func (q *Queries) ListUnusedBackupCodes(ctx context.Context, userID pgtype.UUID) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, listUnusedBackupCodes, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +212,7 @@ type ListUserTOTPSecretsRow struct {
 	SecretCiphertext []byte      `json:"secret_ciphertext"`
 }
 
-// Keyset-paginated scan of every stored ciphertext, across tenants, for the
+// Keyset-paginated scan of every stored ciphertext for the
 // rotatetotpkey command. Pass a NULL after_user_id for the first page.
 func (q *Queries) ListUserTOTPSecrets(ctx context.Context, arg ListUserTOTPSecretsParams) ([]ListUserTOTPSecretsRow, error) {
 	rows, err := q.db.Query(ctx, listUserTOTPSecrets, arg.AfterUserID, arg.RowLimit)
@@ -270,17 +240,11 @@ SET verified = TRUE, updated_at = NOW()
 FROM users u
 WHERE u.id = t.user_id
   AND t.user_id = $1
-  AND ($2::text IS NULL OR u.tenant_id = $2::text)
 RETURNING t.user_id
 `
 
-type MarkUserTOTPVerifiedParams struct {
-	UserID   pgtype.UUID `json:"user_id"`
-	TenantID pgtype.Text `json:"tenant_id"`
-}
-
-func (q *Queries) MarkUserTOTPVerified(ctx context.Context, arg MarkUserTOTPVerifiedParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, markUserTOTPVerified, arg.UserID, arg.TenantID)
+func (q *Queries) MarkUserTOTPVerified(ctx context.Context, userID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, markUserTOTPVerified, userID)
 	var user_id pgtype.UUID
 	err := row.Scan(&user_id)
 	return user_id, err
@@ -293,14 +257,12 @@ FROM users u
 WHERE u.id = t.user_id
   AND t.user_id = $2
   AND t.secret_ciphertext = $3::bytea
-  AND ($4::text IS NULL OR u.tenant_id = $4::text)
 `
 
 type RotateUserTOTPSecretParams struct {
 	NextCiphertext []byte      `json:"next_ciphertext"`
 	UserID         pgtype.UUID `json:"user_id"`
 	PrevCiphertext []byte      `json:"prev_ciphertext"`
-	TenantID       pgtype.Text `json:"tenant_id"`
 }
 
 // Compare-and-swap for key rotation: replaces the stored ciphertext only if it
@@ -308,12 +270,7 @@ type RotateUserTOTPSecretParams struct {
 // never overwritten with a stale re-encryption. Touches no other state (the
 // verified flag, users.totp_enabled and account_version are unchanged).
 func (q *Queries) RotateUserTOTPSecret(ctx context.Context, arg RotateUserTOTPSecretParams) (int64, error) {
-	result, err := q.db.Exec(ctx, rotateUserTOTPSecret,
-		arg.NextCiphertext,
-		arg.UserID,
-		arg.PrevCiphertext,
-		arg.TenantID,
-	)
+	result, err := q.db.Exec(ctx, rotateUserTOTPSecret, arg.NextCiphertext, arg.UserID, arg.PrevCiphertext)
 	if err != nil {
 		return 0, err
 	}
@@ -324,10 +281,9 @@ const upsertUserTOTPSecret = `-- name: UpsertUserTOTPSecret :one
 WITH target AS (
     SELECT users.id AS target_id FROM users
     WHERE users.id = $1
-      AND ($2::text IS NULL OR users.tenant_id = $2::text)
 ), upsert AS (
     INSERT INTO user_totp (user_id, secret_ciphertext)
-    SELECT target_id, $3::bytea FROM target
+    SELECT target_id, $2::bytea FROM target
     ON CONFLICT (user_id) DO UPDATE
         SET secret_ciphertext = EXCLUDED.secret_ciphertext, updated_at = NOW()
     RETURNING user_id, verified
@@ -343,7 +299,6 @@ RETURNING u.id
 
 type UpsertUserTOTPSecretParams struct {
 	UserID           pgtype.UUID `json:"user_id"`
-	TenantID         pgtype.Text `json:"tenant_id"`
 	SecretCiphertext []byte      `json:"secret_ciphertext"`
 }
 
@@ -352,7 +307,7 @@ type UpsertUserTOTPSecretParams struct {
 // goAuth's EnableTOTP contract: setup stores an unverified secret (TOTP stays
 // off); after MarkUserTOTPVerified the same call turns TOTP on.
 func (q *Queries) UpsertUserTOTPSecret(ctx context.Context, arg UpsertUserTOTPSecretParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, upsertUserTOTPSecret, arg.UserID, arg.TenantID, arg.SecretCiphertext)
+	row := q.db.QueryRow(ctx, upsertUserTOTPSecret, arg.UserID, arg.SecretCiphertext)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err

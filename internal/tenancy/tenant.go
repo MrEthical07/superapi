@@ -1,4 +1,4 @@
-package tenant
+package tenancy
 
 import (
 	"context"
@@ -9,13 +9,23 @@ import (
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 )
 
-// TenantIDFromContext extracts normalized tenant id from auth context.
+// AttrTenantID is the principal attribute (auth.AuthContext.Attribute) that
+// carries the tenant id. It is also the JSON key under which the whoami
+// response reports it.
+const AttrTenantID = "tenant_id"
+
+// PrincipalTenant returns the tenant of an authenticated principal, or "".
+func PrincipalTenant(principal auth.AuthContext) string {
+	return strings.TrimSpace(principal.Attribute(AttrTenantID))
+}
+
+// TenantIDFromContext extracts the normalized tenant id from the auth context.
 func TenantIDFromContext(ctx context.Context) (string, bool) {
 	principal, ok := auth.FromContext(ctx)
 	if !ok {
 		return "", false
 	}
-	tenantID := strings.TrimSpace(principal.TenantID)
+	tenantID := PrincipalTenant(principal)
 	if tenantID == "" {
 		return "", false
 	}

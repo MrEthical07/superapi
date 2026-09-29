@@ -22,7 +22,7 @@ import (
 type Scope string
 
 const (
-	// ScopeAuto resolves to user, tenant, token, then anon fallback.
+	// ScopeAuto resolves to user, token, then anon fallback.
 	ScopeAuto Scope = "auto"
 	// ScopeAnon keys all anonymous traffic together.
 	ScopeAnon Scope = "anon"
@@ -30,8 +30,6 @@ const (
 	ScopeIP Scope = "ip"
 	// ScopeUser keys by authenticated user ID.
 	ScopeUser Scope = "user"
-	// ScopeTenant keys by authenticated tenant ID.
-	ScopeTenant Scope = "tenant"
 	// ScopeToken keys by hashed bearer token fingerprint.
 	ScopeToken Scope = "token"
 )
@@ -283,18 +281,13 @@ func ResolveScopeAndIdentifier(r *http.Request, rule Rule) (Scope, string) {
 			return scope, id
 		}
 		return ScopeAnon, "anonymous"
-	case ScopeTenant:
-		if scope, id := normalizeKey(KeyByTenant()(r)); scope != ScopeAnon {
-			return scope, id
-		}
-		return ScopeAnon, "anonymous"
 	case ScopeToken:
 		if scope, id := normalizeKey(KeyByTokenHash(16)(r)); scope != ScopeAnon {
 			return scope, id
 		}
 		return ScopeAnon, "anonymous"
 	case ScopeAuto, "":
-		if scope, id := normalizeKey(KeyByUserOrTenantOrTokenHash(16)(r)); scope != ScopeAnon {
+		if scope, id := normalizeKey(KeyByUserOrTokenHash(16)(r)); scope != ScopeAnon {
 			return scope, id
 		}
 		return ScopeAnon, "anonymous"
@@ -347,20 +340,6 @@ func KeyByUser() Keyer {
 	}
 }
 
-// KeyByTenant resolves identity from authenticated tenant ID.
-func KeyByTenant() Keyer {
-	return func(r *http.Request) (Scope, string) {
-		if r == nil {
-			return ScopeAnon, "anonymous"
-		}
-		principal, ok := auth.FromContext(r.Context())
-		if !ok || strings.TrimSpace(principal.TenantID) == "" {
-			return ScopeAnon, "anonymous"
-		}
-		return ScopeTenant, principal.TenantID
-	}
-}
-
 // KeyByTokenHash resolves identity from bearer token hash prefix.
 func KeyByTokenHash(prefixLen int) Keyer {
 	if prefixLen <= 0 {
@@ -378,25 +357,6 @@ func KeyByTokenHash(prefixLen int) Keyer {
 			effectivePrefix = len(hexHash)
 		}
 		return ScopeToken, hexHash[:effectivePrefix]
-	}
-}
-
-// KeyByUserOrTenantOrTokenHash resolves user, then tenant, then token-hash identity.
-func KeyByUserOrTenantOrTokenHash(prefixLen int) Keyer {
-	user := KeyByUser()
-	tenant := KeyByTenant()
-	token := KeyByTokenHash(prefixLen)
-	return func(r *http.Request) (Scope, string) {
-		if scope, id := user(r); scope != ScopeAnon {
-			return scope, id
-		}
-		if scope, id := tenant(r); scope != ScopeAnon {
-			return scope, id
-		}
-		if scope, id := token(r); scope != ScopeAnon {
-			return scope, id
-		}
-		return ScopeAnon, "anonymous"
 	}
 }
 

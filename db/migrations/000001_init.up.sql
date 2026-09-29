@@ -1,6 +1,6 @@
 -- SuperAPI baseline schema: accounts and second factors for goAuth.
 --
--- This file and the optional tenancy migration are yours to edit freely until
+-- This file and the optional second migration are yours to edit freely until
 -- your first deployment (reshape users, add columns, delete what you do not
 -- need). After the first deployment migrations are append-only: add a new
 -- numbered file with `make migrate-create NAME=...`. See docs/workflows.md.

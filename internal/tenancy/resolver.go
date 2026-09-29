@@ -1,4 +1,4 @@
-package tenant
+package tenancy
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MrEthical07/superapi/internal/core/auth"
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
@@ -64,7 +63,7 @@ func errTenantUnavailable(cause error) *apperr.AppError {
 }
 
 // Middleware resolves the request tenant, validates it, and attaches it to the
-// request context with auth.WithRequestTenant (which also calls
+// request context with WithRequestTenant (which also calls
 // goauth.WithTenantID so goAuth scopes lookups, sessions and reset/verification
 // records to it).
 //
@@ -82,7 +81,7 @@ func errTenantUnavailable(cause error) *apperr.AppError {
 //
 // Exempt paths (health/readiness/metrics) pass through untouched.
 //
-// Wire it only when TENANCY_ENABLED=true; see internal/core/app.
+// The feature installs it only when TENANCY_ENABLED=true (see Feature.Load).
 func Middleware(cfg ResolverConfig) func(http.Handler) http.Handler {
 	exempt := make(map[string]struct{}, len(cfg.ExemptPaths))
 	for _, p := range cfg.ExemptPaths {
@@ -147,7 +146,7 @@ func Middleware(cfg ResolverConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			next.ServeHTTP(w, r.WithContext(auth.WithRequestTenant(r.Context(), tenantID)))
+			next.ServeHTTP(w, r.WithContext(WithRequestTenant(r.Context(), tenantID)))
 		})
 	}
 }
