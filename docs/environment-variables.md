@@ -141,6 +141,8 @@ a disabled group's routes are not registered (404). Every flag requires
 | AUTH_EMAIL_VERIFICATION_REQUIRED | true | block login until verified (only with AUTH_EMAIL_VERIFICATION_ENABLED) |
 | AUTH_TOTP_ENABLED | false | TOTP setup/confirm/disable and backup codes; users who enrolled are challenged at login |
 | AUTH_TOTP_ISSUER | APP_SERVICE_NAME | issuer label shown in authenticator apps |
+| AUTH_TOTP_ENCRYPTION_KEYS | unset | keyring for rotating the encryption key: comma-separated `kid:base64key` (key ids are 1-32 characters of `[A-Za-z0-9._-]`, unique; every key is 32 bytes). Needs `AUTH_TOTP_ENCRYPTION_ACTIVE_KID`. May be combined with `AUTH_TOTP_ENCRYPTION_KEY` while rotating |
+| AUTH_TOTP_ENCRYPTION_ACTIVE_KID | unset | key id in the keyring that seals new secrets; required with `AUTH_TOTP_ENCRYPTION_KEYS`. With only `AUTH_TOTP_ENCRYPTION_KEY` the implicit id is `default` |
 | AUTH_TOTP_ENCRYPTION_KEY | unset | base64-encoded 32-byte key encrypting TOTP secrets at rest (AES-256-GCM). Required when AUTH_TOTP_ENABLED=true. Generate with `openssl rand -base64 32`. Changing it makes stored TOTP secrets undecryptable |
 
 ### 7.2 Notification delivery

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	goauth "github.com/MrEthical07/goAuth"
@@ -223,11 +224,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 		// TOTP persistence (and the at-rest cipher) is only wired when TOTP
 		// is enabled; config lint guarantees the key is present and valid.
 		if cfg.Auth.TOTPEnabled {
-			key, err := config.DecodeKey32(cfg.Auth.TOTPEncryptionKey)
-			var cipher auth.SecretCipher
-			if err == nil {
-				cipher, err = auth.NewAESGCMCipher(key)
-			}
+			cipher, err := newTOTPCipher(cfg.Auth)
 			if err != nil {
 				if deps.Redis != nil {
 					_ = deps.Redis.Close()
@@ -349,6 +346,30 @@ func (a *App) drainNotifier(ctx context.Context) {
 	if abandoned := a.deps.Notifier.Shutdown(ctx); abandoned > 0 {
 		a.log.Warn().Int("abandoned", abandoned).Msg("shutdown: abandoned in-flight notification deliveries at the shutdown deadline")
 	}
+}
+
+// newTOTPCipher builds the TOTP secret cipher from AUTH_TOTP_ENCRYPTION_KEY /
+// AUTH_TOTP_ENCRYPTION_KEYS. The rotatetotpkey command builds the same cipher.
+func newTOTPCipher(cfg config.AuthConfig) (auth.SecretCipher, error) {
+	ring, err := cfg.TOTPKeyring()
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewKeyRingCipher(auth.KeyRing{Keys: ring.Keys, ActiveKID: ring.ActiveKID, LegacyKey: ring.LegacyKey})
+}
+
+// NewTOTPCipher is newTOTPCipher for command-line tools that re-encrypt stored
+// secrets (cmd/rotatetotpkey).
+func NewTOTPCipher(cfg config.AuthConfig) (auth.RotatableCipher, error) {
+	c, err := newTOTPCipher(cfg)
+	if err != nil {
+		return nil, err
+	}
+	rc, ok := c.(auth.RotatableCipher)
+	if !ok {
+		return nil, errors.New("totp cipher does not support rotation")
+	}
+	return rc, nil
 }
 
 func (a *App) closeDependencies() {

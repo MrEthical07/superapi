@@ -96,6 +96,14 @@ var features = []feature{
 		},
 	},
 	{
+		Flag:   "no-rotate-tool",
+		Marker: "rotate-tool",
+		Help:   "remove the TOTP key rotation command (cmd/rotatetotpkey, make rotate-totp-key)",
+		Paths: []string{
+			"cmd/rotatetotpkey",
+		},
+	},
+	{
 		Flag:   "no-perf",
 		Marker: "perf",
 		Help:   "remove load-testing tooling (performance/, cmd/perftoken, make load-*)",

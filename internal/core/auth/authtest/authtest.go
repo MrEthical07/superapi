@@ -5,9 +5,11 @@
 package authtest
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -219,6 +221,41 @@ func (m *MFARepository) AdvanceTOTPCounter(_ context.Context, tenantID, userID s
 	st.LastUsedCounter = counter
 	m.totp[userID] = st
 	return nil
+}
+
+func (m *MFARepository) RotateTOTPSecret(_ context.Context, tenantID, userID string, prev, next []byte) (bool, error) {
+	m.users.mu.Lock()
+	defer m.users.mu.Unlock()
+	if _, ok := m.inScope(tenantID, userID); !ok {
+		return false, auth.ErrAuthUserNotFound
+	}
+	st, ok := m.totp[userID]
+	if !ok || !bytes.Equal(st.SecretCiphertext, prev) {
+		return false, nil
+	}
+	st.SecretCiphertext = append([]byte(nil), next...)
+	m.totp[userID] = st
+	return true, nil
+}
+
+func (m *MFARepository) ListTOTPSecrets(_ context.Context, afterUserID string, limit int) ([]auth.TOTPSecretRow, error) {
+	m.users.mu.Lock()
+	defer m.users.mu.Unlock()
+	ids := make([]string, 0, len(m.totp))
+	for id := range m.totp {
+		if id > afterUserID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	if limit >= 0 && len(ids) > limit {
+		ids = ids[:limit]
+	}
+	out := make([]auth.TOTPSecretRow, len(ids))
+	for i, id := range ids {
+		out[i] = auth.TOTPSecretRow{UserID: id, Ciphertext: append([]byte(nil), m.totp[id].SecretCiphertext...)}
+	}
+	return out, nil
 }
 
 func (m *MFARepository) DisableTOTP(_ context.Context, tenantID, userID string) error {

@@ -224,6 +224,46 @@ func (q *Queries) ListUnusedBackupCodes(ctx context.Context, arg ListUnusedBacku
 	return items, nil
 }
 
+const listUserTOTPSecrets = `-- name: ListUserTOTPSecrets :many
+SELECT t.user_id, t.secret_ciphertext
+FROM user_totp t
+WHERE $1::uuid IS NULL OR t.user_id > $1::uuid
+ORDER BY t.user_id
+LIMIT $2
+`
+
+type ListUserTOTPSecretsParams struct {
+	AfterUserID pgtype.UUID `json:"after_user_id"`
+	RowLimit    int32       `json:"row_limit"`
+}
+
+type ListUserTOTPSecretsRow struct {
+	UserID           pgtype.UUID `json:"user_id"`
+	SecretCiphertext []byte      `json:"secret_ciphertext"`
+}
+
+// Keyset-paginated scan of every stored ciphertext, across tenants, for the
+// rotatetotpkey command. Pass a NULL after_user_id for the first page.
+func (q *Queries) ListUserTOTPSecrets(ctx context.Context, arg ListUserTOTPSecretsParams) ([]ListUserTOTPSecretsRow, error) {
+	rows, err := q.db.Query(ctx, listUserTOTPSecrets, arg.AfterUserID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserTOTPSecretsRow{}
+	for rows.Next() {
+		var i ListUserTOTPSecretsRow
+		if err := rows.Scan(&i.UserID, &i.SecretCiphertext); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markUserTOTPVerified = `-- name: MarkUserTOTPVerified :one
 UPDATE user_totp t
 SET verified = TRUE, updated_at = NOW()
@@ -244,6 +284,40 @@ func (q *Queries) MarkUserTOTPVerified(ctx context.Context, arg MarkUserTOTPVeri
 	var user_id pgtype.UUID
 	err := row.Scan(&user_id)
 	return user_id, err
+}
+
+const rotateUserTOTPSecret = `-- name: RotateUserTOTPSecret :execrows
+UPDATE user_totp t
+SET secret_ciphertext = $1::bytea, updated_at = NOW()
+FROM users u
+WHERE u.id = t.user_id
+  AND t.user_id = $2
+  AND t.secret_ciphertext = $3::bytea
+  AND ($4::text IS NULL OR u.tenant_id = $4::text)
+`
+
+type RotateUserTOTPSecretParams struct {
+	NextCiphertext []byte      `json:"next_ciphertext"`
+	UserID         pgtype.UUID `json:"user_id"`
+	PrevCiphertext []byte      `json:"prev_ciphertext"`
+	TenantID       pgtype.Text `json:"tenant_id"`
+}
+
+// Compare-and-swap for key rotation: replaces the stored ciphertext only if it
+// still equals prev_ciphertext, so a concurrent enable/disable/re-enroll is
+// never overwritten with a stale re-encryption. Touches no other state (the
+// verified flag, users.totp_enabled and account_version are unchanged).
+func (q *Queries) RotateUserTOTPSecret(ctx context.Context, arg RotateUserTOTPSecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateUserTOTPSecret,
+		arg.NextCiphertext,
+		arg.UserID,
+		arg.PrevCiphertext,
+		arg.TenantID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertUserTOTPSecret = `-- name: UpsertUserTOTPSecret :one

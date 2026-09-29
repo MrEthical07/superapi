@@ -36,6 +36,7 @@ Preview first with `make init module=... flags=--dry-run`. Optional pruning:
 | `--no-document-store` | the optional NoSQL store package |
 | `--no-smtp` | the built-in SMTP notifier and `SMTP_*` config |
 | `--no-devx` | `make module` scaffolder and module SQL sync |
+| `--no-rotate-tool` | `cmd/rotatetotpkey` and `make rotate-totp-key` |
 | `--no-perf` | `performance/`, `cmd/perftoken`, `make load-*` |
 | `--no-demo` | bundled example code |
 | `--no-all` | all of the above |

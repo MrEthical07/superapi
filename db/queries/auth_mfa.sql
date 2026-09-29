@@ -121,3 +121,25 @@ WHERE u.id = b.user_id
   AND b.code_hash = sqlc.arg(code_hash)
   AND b.used_at IS NULL
   AND (sqlc.narg(tenant_id)::text IS NULL OR u.tenant_id = sqlc.narg(tenant_id)::text);
+
+-- name: RotateUserTOTPSecret :execrows
+-- Compare-and-swap for key rotation: replaces the stored ciphertext only if it
+-- still equals prev_ciphertext, so a concurrent enable/disable/re-enroll is
+-- never overwritten with a stale re-encryption. Touches no other state (the
+-- verified flag, users.totp_enabled and account_version are unchanged).
+UPDATE user_totp t
+SET secret_ciphertext = sqlc.arg(next_ciphertext)::bytea, updated_at = NOW()
+FROM users u
+WHERE u.id = t.user_id
+  AND t.user_id = sqlc.arg(user_id)
+  AND t.secret_ciphertext = sqlc.arg(prev_ciphertext)::bytea
+  AND (sqlc.narg(tenant_id)::text IS NULL OR u.tenant_id = sqlc.narg(tenant_id)::text);
+
+-- name: ListUserTOTPSecrets :many
+-- Keyset-paginated scan of every stored ciphertext, across tenants, for the
+-- rotatetotpkey command. Pass a NULL after_user_id for the first page.
+SELECT t.user_id, t.secret_ciphertext
+FROM user_totp t
+WHERE sqlc.narg(after_user_id)::uuid IS NULL OR t.user_id > sqlc.narg(after_user_id)::uuid
+ORDER BY t.user_id
+LIMIT sqlc.arg(row_limit);

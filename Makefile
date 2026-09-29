@@ -26,7 +26,7 @@ PERF_SUSTAIN_RPS_RATIO ?= 0.95
 PERF_OUTPUT_DIR ?= performance/results
 # template:end perf
 
-.PHONY: fmt vet test test-integration tidy build run verify doctor dev-up dev-down dev-reset db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module user perf-token load-k6-10k load-vegeta-10k bench-hotpath init
+.PHONY: fmt vet test test-integration tidy build run verify doctor dev-up dev-down dev-reset db-sync sqlc-generate migrate-create migrate-up migrate-down migrate-version module user rotate-totp-key perf-token load-k6-10k load-vegeta-10k bench-hotpath init
 
 # ---------------------------------------------------------------------------
 # Quality gates
@@ -69,6 +69,13 @@ run:
 user:
 	@if [ -z "$(email)" ]; then echo "email is required: make user email=you@example.com [role=admin] [tenant=acme] [create_tenant=1]"; exit 1; fi
 	@$(WITH_ENV) $(GO) run ./cmd/createuser --email "$(email)" $(if $(role),--role "$(role)",) $(if $(tenant),--tenant "$(tenant)",) $(if $(create_tenant),--create-tenant,) $(if $(password_stdin),--password-stdin,)
+
+# template:begin rotate-tool
+# Re-encrypt every stored TOTP secret under the active AUTH_TOTP_ENCRYPTION_*
+# key. Progress is printed per batch. Example: make rotate-totp-key dry_run=1
+rotate-totp-key:
+	@$(WITH_ENV) $(GO) run ./cmd/rotatetotpkey $(if $(dry_run),--dry-run,) $(if $(batch_size),--batch-size "$(batch_size)",)
+# template:end rotate-tool
 
 # Checks the local toolchain and configuration.
 doctor:

@@ -39,6 +39,7 @@ make init module=github.com/acme/foo name="Foo API" flags="--no-tenancy --no-web
 | `--no-smtp` | the SMTP notifier (`internal/core/notify/smtp.go`), its `SMTP_*` and `NOTIFY_*_URL` config and lint. Other drivers keep working; with reset/verification on you must register your own driver (see [auth-flows.md](auth-flows.md#adding-your-own-driver)) |
 | `--no-document-store` | `internal/storage/document/` and its doc |
 | `--no-devx` | `cmd/modulegen`, `cmd/modulesync`, `internal/devx/`, `make module`/`db-sync` (`make sqlc-generate` then runs sqlc directly) |
+| `--no-rotate-tool` | `cmd/rotatetotpkey` and `make rotate-totp-key` (the keyring itself stays; lazy re-encryption at login still works) |
 | `--no-perf` | `performance/`, `cmd/perftoken`, `make perf-token`/`load-*`, the perf runbook |
 | `--no-demo` | bundled example code (`internal/storage/document/example/`) |
 | `--no-all` | everything above |
@@ -164,6 +165,16 @@ If you will never use it, delete it cleanly (see docs/enabling-webauthn.md,
 Leaving it disabled costs nothing at runtime.
 
 ---
+
+<!-- template:begin rotate-tool -->
+## TOTP key rotation command
+
+Delete `cmd/rotatetotpkey/` and the `rotate-totp-key` Makefile target (or run
+`make init flags=--no-rotate-tool` on a fresh clone). The keyring
+(`AUTH_TOTP_ENCRYPTION_KEYS`) and lazy re-encryption at login remain, so keys
+can still be rotated, only without the bulk command; see
+[security-env-recommendations.md](security-env-recommendations.md#rotating-the-totp-encryption-key).
+<!-- template:end rotate-tool -->
 
 <!-- template:begin smtp -->
 ## SMTP notifier

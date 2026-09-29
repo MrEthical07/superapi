@@ -81,6 +81,13 @@ type AuthConfig struct {
 	// TOTPEncryptionKey encrypts TOTP secrets at rest (AES-256-GCM). It is a
 	// base64-encoded 32-byte key and is required when TOTPEnabled.
 	TOTPEncryptionKey string
+	// TOTPEncryptionKeys is a keyring for rotating the encryption key: a
+	// comma-separated list of kid:base64key (AUTH_TOTP_ENCRYPTION_KEYS).
+	// TOTPEncryptionActiveKID names the key that seals new secrets. Either
+	// this or TOTPEncryptionKey is required when TOTPEnabled; both may be set
+	// during a rotation (see docs/security-env-recommendations.md).
+	TOTPEncryptionKeys      string
+	TOTPEncryptionActiveKID string
 	// TestOverridesAllowed reports whether AUTH_TEST_* perf overrides may be
 	// used; derived from APP_ENV (dev/test only). Not an env var.
 	TestOverridesAllowed bool
@@ -436,6 +443,8 @@ func Load() (*Config, error) {
 			TOTPEnabled:               getBool("AUTH_TOTP_ENABLED", false),
 			TOTPIssuer:                strings.TrimSpace(getenv("AUTH_TOTP_ISSUER", "")),
 			TOTPEncryptionKey:         strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_KEY", "")),
+			TOTPEncryptionKeys:        strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_KEYS", "")),
+			TOTPEncryptionActiveKID:   strings.TrimSpace(getenv("AUTH_TOTP_ENCRYPTION_ACTIVE_KID", "")),
 			TestOverridesAllowed:      isDevOrTestEnv(env),
 		},
 		// template:begin tenancy
@@ -995,11 +1004,8 @@ func (c *Config) lintAuthFeatures() error {
 		return fmt.Errorf("AUTH_REGISTRATION_AUTO_LOGIN requires AUTH_REGISTRATION_ENABLED=true")
 	}
 	if c.Auth.TOTPEnabled {
-		if c.Auth.TOTPEncryptionKey == "" {
-			return fmt.Errorf("AUTH_TOTP_ENABLED requires AUTH_TOTP_ENCRYPTION_KEY (base64-encoded 32-byte key, e.g. `openssl rand -base64 32`)")
-		}
-		if _, err := DecodeKey32(c.Auth.TOTPEncryptionKey); err != nil {
-			return fmt.Errorf("AUTH_TOTP_ENCRYPTION_KEY: %w", err)
+		if _, err := c.Auth.TOTPKeyring(); err != nil {
+			return err
 		}
 	}
 	if !c.Auth.TestOverridesAllowed {

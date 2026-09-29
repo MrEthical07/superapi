@@ -271,12 +271,30 @@ func (p *StoreUserProvider) GetTOTPSecret(ctx context.Context, userID string) (*
 	if err != nil {
 		return nil, err
 	}
+	p.rotateSecretLazily(ctx, userID, state.SecretCiphertext, secret)
 	return &goauth.TOTPRecord{
 		Secret:          secret,
 		Enabled:         state.Enabled,
 		Verified:        state.Verified,
 		LastUsedCounter: state.LastUsedCounter,
 	}, nil
+}
+
+// rotateSecretLazily re-encrypts a secret that was opened with an old key (or
+// in the v1 format) under the active key. It is best effort: the write-back is a
+// compare-and-swap that changes nothing else, any error is ignored, and the
+// request never fails because of it. Rows this misses are moved by the
+// rotatetotpkey command.
+func (p *StoreUserProvider) rotateSecretLazily(ctx context.Context, userID string, current, secret []byte) {
+	rc, ok := p.cipher.(RotatableCipher)
+	if !ok || !rc.NeedsRotation(current) {
+		return
+	}
+	next, err := rc.Seal(userID, secret)
+	if err != nil {
+		return
+	}
+	_, _ = p.mfaRepo.RotateTOTPSecret(ctx, p.scopeTenant(ctx), userID, current, next)
 }
 
 // EnableTOTP stores the (encrypted) secret and sets TOTP enabled to the

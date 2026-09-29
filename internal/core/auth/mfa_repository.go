@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MrEthical07/superapi/internal/core/db/sqlcgen"
 	"github.com/MrEthical07/superapi/internal/core/storage"
@@ -18,6 +19,12 @@ var ErrTOTPCounterNotAdvanced = errors.New("totp counter not advanced")
 // ErrTransactionRequired is returned by an operation that is only correct as
 // several statements in one transaction when it is called outside one.
 var ErrTransactionRequired = errors.New("operation must run inside a transaction")
+
+// TOTPSecretRow is one stored TOTP ciphertext, as scanned by key rotation.
+type TOTPSecretRow struct {
+	UserID     string
+	Ciphertext []byte
+}
 
 // TOTPState is the stored TOTP state for a user. SecretCiphertext is the
 // encrypted secret exactly as persisted; the provider decrypts it.
@@ -50,6 +57,15 @@ type MFARepository interface {
 	DisableTOTP(ctx context.Context, tenantID, userID string) error
 	// ListUnusedBackupCodes returns the hashes of backup codes not yet used.
 	ListUnusedBackupCodes(ctx context.Context, tenantID, userID string) ([][32]byte, error)
+	// RotateTOTPSecret swaps the stored ciphertext for next only if it still
+	// equals prev (compare-and-swap), reporting whether it did. It is how a
+	// secret is re-encrypted under a new key without ever overwriting a
+	// concurrent change.
+	RotateTOTPSecret(ctx context.Context, tenantID, userID string, prev, next []byte) (swapped bool, err error)
+	// ListTOTPSecrets returns up to limit stored ciphertexts with a user id
+	// greater than afterUserID ("" for the first page), across all tenants, in
+	// user id order. It is for the rotatetotpkey command.
+	ListTOTPSecrets(ctx context.Context, afterUserID string, limit int) ([]TOTPSecretRow, error)
 	// ReplaceBackupCodes replaces every backup code for the user. It is a
 	// delete followed by an insert, so the caller must run it inside one
 	// transaction (storage.Postgres.WithTx); the relational implementation
@@ -136,6 +152,49 @@ func (r *sqlcMFARepository) AdvanceTOTPCounter(ctx context.Context, tenantID, us
 		return fmt.Errorf("advance totp counter: %w", err)
 	}
 	return nil
+}
+
+func (r *sqlcMFARepository) RotateTOTPSecret(ctx context.Context, tenantID, userID string, prev, next []byte) (bool, error) {
+	id, err := parseUserID(userID)
+	if err != nil {
+		return false, err
+	}
+	swapped, err := r.pg.Queries(ctx).RotateUserTOTPSecret(ctx, sqlcgen.RotateUserTOTPSecretParams{
+		NextCiphertext: next,
+		UserID:         id,
+		PrevCiphertext: prev,
+		TenantID:       optionalText(tenantID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("rotate totp secret: %w", err)
+	}
+	return swapped > 0, nil
+}
+
+func (r *sqlcMFARepository) ListTOTPSecrets(ctx context.Context, afterUserID string, limit int) ([]TOTPSecretRow, error) {
+	if limit < 1 {
+		return nil, nil
+	}
+	var after pgtype.UUID // invalid (NULL) selects the first page
+	if afterUserID != "" {
+		parsed, err := parseUserID(afterUserID)
+		if err != nil {
+			return nil, err
+		}
+		after = parsed
+	}
+	rows, err := r.pg.Queries(ctx).ListUserTOTPSecrets(ctx, sqlcgen.ListUserTOTPSecretsParams{
+		AfterUserID: after,
+		RowLimit:    int32(min(limit, 1_000_000)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list totp secrets: %w", err)
+	}
+	out := make([]TOTPSecretRow, len(rows))
+	for i, row := range rows {
+		out[i] = TOTPSecretRow{UserID: uuidToString(row.UserID), Ciphertext: row.SecretCiphertext}
+	}
+	return out, nil
 }
 
 func (r *sqlcMFARepository) DisableTOTP(ctx context.Context, tenantID, userID string) error {
