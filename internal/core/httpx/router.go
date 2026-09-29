@@ -21,7 +21,15 @@ type Router interface {
 // Mux is the chi-backed Router implementation.
 // It satisfies both Router (for module registration) and http.Handler (for the HTTP server).
 type Mux struct {
-	r chi.Router
+	r     chi.Router
+	rules []policy.RouteRule
+}
+
+// UseRouteRules adds route rules (contributed by optional features) that every
+// later Handle call validates in addition to the built-in ones. Call it at
+// startup, before modules register routes.
+func (m *Mux) UseRouteRules(rules ...policy.RouteRule) {
+	m.rules = append(m.rules, rules...)
 }
 
 // NewMux creates a production-ready router backed by chi.
@@ -53,7 +61,7 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // invalid patterns will panic immediately (fail-fast), which is acceptable
 // for route registration at startup.
 func (m *Mux) Handle(method string, pattern string, h http.Handler, policies ...policy.Policy) {
-	policy.MustValidateRoute(method, pattern, policies...)
+	policy.MustValidateRouteWith(m.rules, method, pattern, policies...)
 	final := policy.Chain(h, policies...)
 	m.r.Method(method, pattern, final)
 }

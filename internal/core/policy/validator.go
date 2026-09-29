@@ -14,13 +14,24 @@ import (
 //
 // Use this during route registration to fail fast on unsafe policy combinations.
 func MustValidateRoute(method, pattern string, policies ...Policy) {
-	if err := ValidateRoute(method, pattern, policies...); err != nil {
+	MustValidateRouteWith(nil, method, pattern, policies...)
+}
+
+// MustValidateRouteWith is MustValidateRoute plus the route rules optional
+// features contribute (see RouteRule).
+func MustValidateRouteWith(rules []RouteRule, method, pattern string, policies ...Policy) {
+	if err := ValidateRouteWith(rules, method, pattern, policies...); err != nil {
 		panicInvalidRouteConfig(err.Error())
 	}
 }
 
 // ValidateRoute validates route policy wiring and returns descriptive validation errors.
 func ValidateRoute(method, pattern string, policies ...Policy) error {
+	return ValidateRouteWith(nil, method, pattern, policies...)
+}
+
+// ValidateRouteWith is ValidateRoute plus feature route rules.
+func ValidateRouteWith(rules []RouteRule, method, pattern string, policies ...Policy) error {
 	trimmedMethod := strings.TrimSpace(method)
 	if trimmedMethod == "" {
 		return fmt.Errorf("http method is required")
@@ -35,13 +46,18 @@ func ValidateRoute(method, pattern string, policies ...Policy) error {
 		return err
 	}
 
-	return ValidateRouteMetadata(strings.ToUpper(trimmedMethod), trimmedPattern, metas)
+	return ValidateRouteMetadataWith(rules, strings.ToUpper(trimmedMethod), trimmedPattern, metas)
 }
 
 // ValidateRouteMetadata validates precomputed policy metadata.
 //
 // This entrypoint is used by both runtime route registration and static analyzers.
 func ValidateRouteMetadata(method, pattern string, metas []Metadata) error {
+	return ValidateRouteMetadataWith(nil, method, pattern, metas)
+}
+
+// ValidateRouteMetadataWith is ValidateRouteMetadata plus feature route rules.
+func ValidateRouteMetadataWith(rules []RouteRule, method, pattern string, metas []Metadata) error {
 	trimmedMethod := strings.ToUpper(strings.TrimSpace(method))
 	if trimmedMethod == "" {
 		return fmt.Errorf("http method is required")
@@ -54,7 +70,7 @@ func ValidateRouteMetadata(method, pattern string, metas []Metadata) error {
 		return nil
 	}
 
-	return validateRouteRules(trimmedMethod, trimmedPattern, metas)
+	return validateRouteRules(trimmedMethod, trimmedPattern, metas, rules)
 }
 
 func panicInvalidRouteConfig(message string) {

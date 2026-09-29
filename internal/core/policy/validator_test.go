@@ -45,7 +45,7 @@ func TestMustValidateRoutePanicsOnUnsafeAuthenticatedCache(t *testing.T) {
 	mr := miniredis.RunT(t)
 	mgr := newCacheManagerForPolicyTests(t, mr.Addr(), true)
 
-	assertRouteConfigPanic(t, "VaryBy.UserID or VaryBy.TenantID", func() {
+	assertRouteConfigPanic(t, "VaryBy.UserID or an identity-bearing VaryBy.Parts entry", func() {
 		MustValidateRoute(
 			http.MethodGet,
 			"/api/v1/system/whoami",

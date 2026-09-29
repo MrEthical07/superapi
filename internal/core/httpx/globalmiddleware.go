@@ -44,6 +44,9 @@ func AssembleGlobalMiddleware(base http.Handler, cfg config.HTTPMiddlewareConfig
 	if options.tenantResolver != nil {
 		handler = options.tenantResolver(handler)
 	}
+	for i := len(options.feature) - 1; i >= 0; i-- {
+		handler = options.feature[i](handler)
+	}
 
 	handler = AccessLog(cfg.AccessLog, log)(handler)
 	handler = TracingWithExcludes(tracingSvc, cfg.TracingExcludePaths)(handler)
@@ -74,6 +77,22 @@ type GlobalOption func(*globalOptions)
 
 type globalOptions struct {
 	tenantResolver func(http.Handler) http.Handler
+	feature        []func(http.Handler) http.Handler
+}
+
+// WithFeatureMiddleware installs middleware contributed by optional features
+// at a fixed position: innermost, after RequestID, ClientIP, recovery, CORS,
+// security headers, body limit, timeout, tracing and access logging, and just
+// before routing. The first middleware listed is the outermost of them. Nil
+// entries are skipped.
+func WithFeatureMiddleware(mws ...func(http.Handler) http.Handler) GlobalOption {
+	return func(o *globalOptions) {
+		for _, mw := range mws {
+			if mw != nil {
+				o.feature = append(o.feature, mw)
+			}
+		}
+	}
 }
 
 // WithTenantResolver installs the tenant resolution middleware as the innermost

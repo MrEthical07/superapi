@@ -5,8 +5,24 @@ import (
 	"strings"
 )
 
-func validateRouteRules(method, pattern string, metas []Metadata) error {
-	_ = method
+// Policy order stages. A policy at a lower stage may not appear after one at a
+// higher stage. Built-in policies use them implicitly; a feature policy sets
+// Metadata.Stage (StageIsolation is where per-tenant style isolation belongs).
+const (
+	StageAuth         = 1
+	StageIsolation    = 2
+	StageRBAC         = 3
+	StageRateLimit    = 4
+	StageCache        = 5
+	StageCacheControl = 6
+)
+
+// RouteRule is an extra route check contributed by an optional feature. It
+// receives the route and the metadata of its policies and returns a
+// descriptive error when the wiring is unsafe.
+type RouteRule func(method, pattern string, metas []Metadata) error
+
+func validateRouteRules(method, pattern string, metas []Metadata, rules []RouteRule) error {
 	if err := validatePolicyOrdering(metas); err != nil {
 		return err
 	}
@@ -19,6 +35,14 @@ func validateRouteRules(method, pattern string, metas []Metadata) error {
 	if err := validateCacheSafety(metas); err != nil {
 		return err
 	}
+	for _, rule := range rules {
+		if rule == nil {
+			continue
+		}
+		if err := rule(method, pattern, metas); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -29,7 +53,7 @@ func validatePolicyOrdering(metas []Metadata) error {
 	tenantMatchIndex := -1
 
 	for i, meta := range metas {
-		stage := policyOrderStage(meta.Type)
+		stage := policyOrderStage(meta)
 		if stage > 0 {
 			if stage < previousStage {
 				return fmt.Errorf("policy %s cannot appear after %s", meta.Name, previousType)
@@ -108,8 +132,8 @@ func validateCacheSafety(metas []Metadata) error {
 
 	cacheReadPolicies := findPolicies(metas, PolicyTypeCacheRead)
 	for _, cacheRead := range cacheReadPolicies {
-		if !cacheRead.CacheRead.VaryByUserID && !cacheRead.CacheRead.VaryByTenantID {
-			return fmt.Errorf("%s on authenticated routes requires VaryBy.UserID or VaryBy.TenantID", PolicyTypeCacheRead)
+		if !cacheRead.CacheRead.VaryByUserID && !cacheRead.CacheRead.VaryByTenantID && !cacheRead.CacheRead.VaryByIdentityPart {
+			return fmt.Errorf("%s on authenticated routes requires VaryBy.UserID or an identity-bearing VaryBy.Parts entry", PolicyTypeCacheRead)
 		}
 	}
 
@@ -135,20 +159,23 @@ func findPolicies(metas []Metadata, policyType PolicyType) []Metadata {
 	return matches
 }
 
-func policyOrderStage(policyType PolicyType) int {
-	switch policyType {
+func policyOrderStage(meta Metadata) int {
+	if meta.Stage > 0 {
+		return meta.Stage
+	}
+	switch meta.Type {
 	case PolicyTypeAuthRequired:
-		return 1
+		return StageAuth
 	case PolicyTypeTenantRequired, PolicyTypeTenantMatchFromPath:
-		return 2
+		return StageIsolation
 	case PolicyTypeRequirePerm, PolicyTypeRequireAnyPerm:
-		return 3
+		return StageRBAC
 	case PolicyTypeRateLimit:
-		return 4
+		return StageRateLimit
 	case PolicyTypeCacheRead, PolicyTypeCacheInvalidate:
-		return 5
+		return StageCache
 	case PolicyTypeCacheControl:
-		return 6
+		return StageCacheControl
 	default:
 		return 0
 	}

@@ -75,8 +75,13 @@ type Features struct {
 	AllowTestOverrides bool
 }
 
+// ConfigMutator adjusts the goAuth configuration after the project defaults are
+// applied and before goAuth's lint runs. Optional features use it to switch on
+// the goAuth settings they own.
+type ConfigMutator func(*goauth.Config)
+
 // ProjectGoAuthConfig builds the goAuth configuration for this project.
-func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features) (goauth.Config, error) {
+func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features, mutators ...ConfigMutator) (goauth.Config, error) {
 	cfg := goauth.DefaultConfig()
 
 	// ------------------------------------------------------------
@@ -276,6 +281,11 @@ func ProjectGoAuthConfig(mode Mode, tenancy TenancySettings, features Features) 
 	// AUTH_TEST_REFRESH_TTL=5m
 	if err := applyTestOverrides(&cfg, features.AllowTestOverrides); err != nil {
 		return goauth.Config{}, err
+	}
+	for _, mutate := range mutators {
+		if mutate != nil {
+			mutate(&cfg)
+		}
 	}
 	// Run goAuth advisory lint checks.
 	//

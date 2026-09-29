@@ -22,12 +22,12 @@ type providerCloser interface {
 //   - shutdown should be called during application shutdown
 //   - AUTH_TEST_* variables are honored for deterministic local perf scenarios
 //     only when features.AllowTestOverrides is set (APP_ENV=dev/test)
-func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, tenancy TenancySettings, features Features, userProvider goauth.UserProvider) (*goauth.Engine, func(), error) {
+func NewGoAuthEngine(redisClient redis.UniversalClient, mode Mode, tenancy TenancySettings, features Features, userProvider goauth.UserProvider, mutators ...ConfigMutator) (*goauth.Engine, func(), error) {
 	if redisClient == nil {
 		return nil, nil, fmt.Errorf("goAuth provider requires redis client")
 	}
 
-	cfg, err := ProjectGoAuthConfig(mode, tenancy, features)
+	cfg, err := ProjectGoAuthConfig(mode, tenancy, features, mutators...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize goAuth config: %w", err)
 	}

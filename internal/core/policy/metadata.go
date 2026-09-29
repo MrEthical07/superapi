@@ -49,6 +49,9 @@ type CacheReadMetadata struct {
 	VaryByUserID bool
 	// VaryByTenantID indicates cache key varies by tenant ID.
 	VaryByTenantID bool
+	// VaryByIdentityPart indicates the cache key varies by an identity-bearing
+	// feature part (cache.KeyPart with Identity set).
+	VaryByIdentityPart bool
 }
 
 // CacheInvalidateMetadata stores cache invalidation policy details.
@@ -69,6 +72,12 @@ type Metadata struct {
 	CacheRead CacheReadMetadata
 	// CacheInvalidate holds cache invalidation metadata.
 	CacheInvalidate CacheInvalidateMetadata
+	// Stage orders a feature policy among the built-in ones (see the Stage*
+	// constants). Zero leaves the policy unordered.
+	Stage int
+	// Data holds feature-owned annotations that route rules read (for example
+	// the path parameter a policy enforces).
+	Data map[string]string
 }
 
 var policyMetadata sync.Map
@@ -85,6 +94,12 @@ func annotatePolicy(p Policy, meta Metadata) Policy {
 	}
 	policyMetadata.Store(policyPointer(p), meta)
 	return p
+}
+
+// Annotate registers metadata for a policy built outside this package (an
+// optional feature's policies) so the route validator can see it.
+func Annotate(p Policy, meta Metadata) Policy {
+	return annotatePolicy(p, meta)
 }
 
 // AnnotateCustom annotates custom policy metadata for validator compatibility.

@@ -227,6 +227,14 @@ func authRequiredWithEngine(engine *goauth.Engine, mode auth.Mode) Policy {
 					return
 				}
 
+				if exts := authExtensionsFor(engine); len(exts) > 0 {
+					if !applyAuthExtensions(exts, innerR, result, &principal) {
+						rid := requestid.FromContext(innerR.Context())
+						response.Error(innerW, apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), rid)
+						return
+					}
+				}
+
 				ctx := auth.WithContext(innerR.Context(), principal)
 				ctx = context.WithValue(ctx, goAuthEngineContextKey{}, engine)
 				next.ServeHTTP(innerW, innerR.WithContext(ctx))

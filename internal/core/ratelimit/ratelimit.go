@@ -400,6 +400,21 @@ func KeyByUserOrTenantOrTokenHash(prefixLen int) Keyer {
 	}
 }
 
+// KeyByUserOrTokenHash resolves user identity, then token-hash identity.
+func KeyByUserOrTokenHash(prefixLen int) Keyer {
+	user := KeyByUser()
+	token := KeyByTokenHash(prefixLen)
+	return func(r *http.Request) (Scope, string) {
+		if scope, id := user(r); scope != ScopeAnon {
+			return scope, id
+		}
+		if scope, id := token(r); scope != ScopeAnon {
+			return scope, id
+		}
+		return ScopeAnon, "anonymous"
+	}
+}
+
 // RetryAfterSeconds converts retry duration to whole seconds for Retry-After header.
 func RetryAfterSeconds(d time.Duration) int {
 	if d <= 0 {

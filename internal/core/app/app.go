@@ -59,7 +59,7 @@ type App struct {
 // Notes:
 // - DependencyBinder modules receive initialized dependencies before Register
 // - Any registration failure aborts startup and closes allocated resources
-func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
+func New(cfg *config.Config, log *logx.Logger, modules []Module, features ...Feature) (*App, error) {
 	if cfg == nil {
 		return nil, errors.New("nil config")
 	}
@@ -68,9 +68,15 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	}
 
 	router := httpx.NewMux()
-	deps, err := initDependencies(context.Background(), cfg)
+	deps, err := initDependencies(context.Background(), cfg, features)
 	if err != nil {
 		return nil, err
+	}
+	for _, warning := range deps.Deprecations() {
+		log.Warn().Msg(warning)
+	}
+	for _, lf := range deps.features {
+		router.UseRouteRules(lf.hooks.RouteRules...)
 	}
 	notifier, err := notify.New(cfg.Notify, cfg.Env, log)
 	if err != nil {
@@ -87,7 +93,14 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 		router.Handle(http.MethodGet, deps.Metrics.Path(), metricsHandler)
 	}
 
+	var featureMiddleware []func(http.Handler) http.Handler
+	for _, lf := range deps.features {
+		if lf.hooks.Middleware != nil {
+			featureMiddleware = append(featureMiddleware, lf.hooks.Middleware(deps))
+		}
+	}
 	handler := httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing,
+		httpx.WithFeatureMiddleware(featureMiddleware...),
 		// template:begin tenancy
 		httpx.WithTenantResolver(tenantResolver(cfg, deps)),
 		// template:end tenancy
