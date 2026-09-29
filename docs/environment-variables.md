@@ -150,7 +150,7 @@ Password-reset and email-verification secrets are delivered out-of-band by
 
 | Env var | Default | Notes |
 |---|---|---|
-| NOTIFY_DRIVER | noop | `noop` (discard) or `log` (development logger). Implement `notify.Notifier` for real email/SMS |
+| NOTIFY_DRIVER | noop | `noop` (discard) or `log` (development logger). Implement `notify.Notifier` for real email/SMS. With `AUTH_PASSWORD_RESET_ENABLED` or `AUTH_EMAIL_VERIFICATION_ENABLED` on, `noop` is refused at startup unless APP_ENV is dev/development/local/test (warning only there) |
 | NOTIFY_LOG_SECRETS | false | log driver prints full secrets. Only allowed with APP_ENV=dev (lint) |
 | NOTIFY_TIMEOUT | 10s | per-delivery timeout (delivery is asynchronous) |
 

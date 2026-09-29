@@ -623,6 +623,9 @@ func (c *Config) Lint() error {
 	default:
 		return fmt.Errorf("invalid notify driver: %q (valid: noop, log)", c.Notify.Driver)
 	}
+	if err := c.lintNotifyDelivery(); err != nil {
+		return err
+	}
 	if c.Notify.LogSecrets && !strings.EqualFold(strings.TrimSpace(c.Env), "dev") {
 		return fmt.Errorf("NOTIFY_LOG_SECRETS=true is only allowed with APP_ENV=dev")
 	}
@@ -992,6 +995,48 @@ func (c *Config) lintAuthFeatures() error {
 		}
 	}
 	return nil
+}
+
+// notifyDeliveryFlags names the enabled auth features that depend on a working
+// notifier, in a stable order.
+func (c *Config) notifyDeliveryFlags() []string {
+	var flags []string
+	if c.Auth.PasswordResetEnabled {
+		flags = append(flags, "AUTH_PASSWORD_RESET_ENABLED")
+	}
+	if c.Auth.EmailVerificationEnabled {
+		flags = append(flags, "AUTH_EMAIL_VERIFICATION_ENABLED")
+	}
+	return flags
+}
+
+func (c *Config) usesNoopNotifier() bool {
+	driver := strings.ToLower(strings.TrimSpace(c.Notify.Driver))
+	return driver == "" || driver == NotifyDriverNoop
+}
+
+// lintNotifyDelivery refuses to start a non-development deployment whose
+// password-reset or email-verification feature can never deliver its message.
+// The noop driver discards every challenge, so with verification on new
+// accounts would sit in pending_verification forever, and reset emails would
+// never arrive. In dev/test it is allowed (and warned about, see Warnings).
+func (c *Config) lintNotifyDelivery() error {
+	flags := c.notifyDeliveryFlags()
+	if len(flags) == 0 || !c.usesNoopNotifier() || isDevOrTestEnv(c.Env) {
+		return nil
+	}
+	return fmt.Errorf("%s needs a notifier that delivers messages, but NOTIFY_DRIVER is noop, which discards every reset and verification message (users could never finish either flow); set NOTIFY_DRIVER=smtp (or a driver your project registers), or turn the feature off. noop is only allowed with APP_ENV=dev or APP_ENV=test", strings.Join(flags, " and "))
+}
+
+// Warnings returns human-readable startup warnings about settings that are
+// valid but almost certainly not what a real deployment wants. Callers log
+// these at startup; they never fail startup on their own.
+func (c *Config) Warnings() []string {
+	var out []string
+	if flags := c.notifyDeliveryFlags(); len(flags) > 0 && c.usesNoopNotifier() {
+		out = append(out, strings.Join(flags, " and ")+" is on but NOTIFY_DRIVER=noop discards every reset and verification message, so those flows cannot complete. Allowed here because APP_ENV="+strings.TrimSpace(c.Env)+"; startup fails in other environments. Use NOTIFY_DRIVER=log to see the messages locally, or NOTIFY_DRIVER=smtp to send them.")
+	}
+	return out
 }
 
 // DecodeKey32 decodes a base64 (standard or URL, padded or not) 32-byte key.

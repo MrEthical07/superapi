@@ -240,7 +240,10 @@ type Notifier interface {
 ```
 
 - `NOTIFY_DRIVER=noop` (default) discards messages. Reset and verification
-  cannot complete until you plug in a real notifier.
+  cannot complete with it, so **startup fails** when
+  `AUTH_PASSWORD_RESET_ENABLED` or `AUTH_EMAIL_VERIFICATION_ENABLED` is on
+  with the noop driver unless `APP_ENV` is `dev`, `development`, `local` or
+  `test`; there it only logs a warning at startup.
 - `NOTIFY_DRIVER=log` logs a redacted message; the full secret is logged only
   with `APP_ENV=dev` and `NOTIFY_LOG_SECRETS=true` (lint enforces dev).
 - Production: implement `Notifier` over SMTP or your email/SMS provider (build
