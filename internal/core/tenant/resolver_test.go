@@ -164,7 +164,7 @@ func TestMiddlewareCachesValidation(t *testing.T) {
 func TestValidationCacheExpiry(t *testing.T) {
 	c := newValidationCache(time.Second)
 	now := time.Unix(1000, 0)
-	c.now = func() time.Time { return now }
+	setClock(c, func() time.Time { return now })
 	c.put("acme", true)
 	if active, ok := c.get("acme"); !ok || !active {
 		t.Fatal("expected fresh cache hit")

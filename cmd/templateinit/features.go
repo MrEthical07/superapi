@@ -25,6 +25,8 @@ var features = []feature{
 			"internal/core/tenant/resolver.go",
 			"internal/core/tenant/resolver_test.go",
 			"internal/core/tenant/directory.go",
+			"internal/core/tenant/cache.go",
+			"internal/core/tenant/cache_test.go",
 			"internal/core/config/tenancy_test.go",
 			"internal/modules/auth/tenancy_http_test.go",
 			"cmd/createuser/tenant.go",

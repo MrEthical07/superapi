@@ -47,7 +47,7 @@ headers) and stores the same value under a SuperAPI key, readable with
 | `TENANCY_HEADER` | X-Tenant-ID | header for the header resolver; a repeated header is rejected |
 | `TENANCY_BASE_DOMAIN` | — | subdomain resolver: `acme.example.com` -> `acme` (single label only) |
 | `TENANCY_VALIDATE` | true | tenant must exist and be `active` (needs Postgres) |
-| `TENANCY_VALIDATE_CACHE_TTL` | 30s | in-process cache of validation results, positive and negative (bounded) |
+| `TENANCY_VALIDATE_CACHE_TTL` | 30s | in-process cache of validation results, positive and negative. Bounded LRU: 10,000 active tenants plus a separate 1,000-entry segment for unknown/inactive ones, which live a quarter of this TTL (at least 1s). A flood of made-up tenant ids can only churn the negative segment, never evict real tenants |
 | `TENANCY_EXEMPT_PATHS` | /healthz,/readyz,/metrics | exact paths that skip resolution (metrics path always exempt) |
 
 A path-segment resolver is intentionally not provided: a global pre-routing

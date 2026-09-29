@@ -214,7 +214,7 @@ enabled — see docs/enabling-webauthn.md.
 | TENANCY_HEADER | X-Tenant-ID | header carrying the tenant id (header resolver) |
 | TENANCY_BASE_DOMAIN | (empty) | parent domain for the subdomain resolver; required when `TENANCY_RESOLVER=subdomain` (`acme.example.com` -> tenant `acme`) |
 | TENANCY_VALIDATE | true | require the tenant to exist in `tenants` with `status='active'`; requires Postgres |
-| TENANCY_VALIDATE_CACHE_TTL | 30s | in-process cache for tenant validation results (positive and negative); `0` disables |
+| TENANCY_VALIDATE_CACHE_TTL | 30s | in-process cache for tenant validation results; `0` disables. Bounded LRU (10,000 active + 1,000 unknown/inactive entries); negative results expire after a quarter of this TTL (min 1s) |
 | TENANCY_EXEMPT_PATHS | /healthz,/readyz,/metrics | exact paths that skip tenant resolution; the metrics path is always exempt |
 
 Behavior:

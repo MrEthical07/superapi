@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MrEthical07/superapi/internal/core/auth"
@@ -25,10 +24,6 @@ const (
 // in Redis keys (sessions, rate limits, cache), so they are kept short and to a
 // conservative character set.
 const maxTenantIDLength = 64
-
-// maxCacheEntries bounds the in-process validation cache so a flood of random
-// tenant ids cannot grow it without limit.
-const maxCacheEntries = 10_000
 
 // ResolverConfig configures the tenant resolution middleware.
 type ResolverConfig struct {
@@ -206,48 +201,4 @@ func lookupActive(ctx context.Context, dir Directory, cache *validationCache, te
 	active := record.Active()
 	cache.put(tenantID, active)
 	return active, nil
-}
-
-type cacheEntry struct {
-	active  bool
-	expires time.Time
-}
-
-// validationCache is a small TTL cache of tenant validation results. Negative
-// results are cached too so unknown ids cannot be used to hammer the database.
-type validationCache struct {
-	mu      sync.RWMutex
-	ttl     time.Duration
-	entries map[string]cacheEntry
-	now     func() time.Time
-}
-
-func newValidationCache(ttl time.Duration) *validationCache {
-	return &validationCache{ttl: ttl, entries: make(map[string]cacheEntry), now: time.Now}
-}
-
-func (c *validationCache) get(tenantID string) (bool, bool) {
-	if c == nil {
-		return false, false
-	}
-	c.mu.RLock()
-	entry, ok := c.entries[tenantID]
-	c.mu.RUnlock()
-	if !ok || c.now().After(entry.expires) {
-		return false, false
-	}
-	return entry.active, true
-}
-
-func (c *validationCache) put(tenantID string, active bool) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.entries) >= maxCacheEntries {
-		// Simple bounded behavior: drop everything rather than track LRU order.
-		c.entries = make(map[string]cacheEntry)
-	}
-	c.entries[tenantID] = cacheEntry{active: active, expires: c.now().Add(c.ttl)}
 }
