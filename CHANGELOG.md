@@ -2,6 +2,181 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.11.0 (2026-09-29)
+
+Two structural changes and one hardening fix. A fresh clone now starts from a
+two-migration baseline instead of eight files of upgrade history, and tenancy is
+a removable feature: everything it does lives in `internal/tenancy/` behind
+generic hooks, and `make init --no-tenancy` deletes it and every trace of it.
+Runtime behavior is otherwise unchanged; the exceptions are listed first.
+
+**Behavior changes to note when upgrading:**
+
+- **Migrations were squashed to two.** `db/migrations` now holds `000001_init`
+  (users, TOTP and backup codes, WebAuthn) and `000002_tenancy` (the tenants
+  table, `users.tenant_id` and its lookup index). The eight v0.10.0 files are
+  gone. **Existing projects must keep their own migration history and must never
+  copy the new `000001`/`000002` over a database that already ran the old
+  files.** golang-migrate records only the current version number in
+  `schema_migrations`: a database that ran the old chain is at version 8, so
+  `migrate up` against the new files fails with `no migration found for version
+  8: read down for version 8 .: file does not exist`, and nothing is applied.
+  Keep your migrations directory as it is and take only the changes you want, as
+  new numbered files. Fresh clones can edit the two shipped files freely until
+  their first deployment (see Documentation).
+- **Tenancy moved to `internal/tenancy`.** Core no longer knows tenancy exists.
+  Old -> new, for every public symbol:
+
+  | Old | New |
+  |---|---|
+  | `policy.TenantRequired`, `TenantMatchFromPath`, `TenantRead`, `TenantWrite` | `tenancy.TenantRequired`, `TenantMatchFromPath`, `TenantRead`, `TenantWrite` |
+  | `policy.PolicyTypeTenantRequired`, `PolicyTypeTenantMatchFromPath` | `tenancy.PolicyTypeTenantRequired`, `PolicyTypeTenantMatchFromPath` |
+  | `policy.SetTenancyEnabled`, `policy.TenancyEnabled` | `tenancy.Enabled()` (read-only; set when the feature loads) |
+  | `policy.WithTenantMatchParam` | removed (it configured nothing the presets used) |
+  | `cache.CacheVaryBy{TenantID: true}` | `cache.CacheVaryBy{Parts: []cache.KeyPart{tenancy.CacheVary()}}` |
+  | `cache.CacheTagSpec{TenantID: true}` | `cache.CacheTagSpec{Parts: []cache.KeyPart{tenancy.CacheTag()}}` |
+  | `ratelimit.ScopeTenant`, `KeyByTenant`, `KeyByUserOrTenantOrTokenHash` | `tenancy.ScopeTenant`, `KeyByTenant`, `KeyByUserOrTenantOrTokenHash` (core keeps `KeyByUserOrTokenHash`) |
+  | `auth.WithRequestTenant`, `RequestTenantFromContext`, `DefaultTenantID` | `tenancy.WithRequestTenant`, `RequestTenantFromContext`, `DefaultTenantID` |
+  | `auth.AuthContext.TenantID` | `tenancy.PrincipalTenant(principal)` or `principal.Attribute("tenant_id")` |
+  | `internal/core/tenant` (`Middleware`, `ResolverConfig`, `Directory`, `Repository`, `Record`, `NormalizeSlug`, `ValidTenantID`, `IsSameTenant`, `TenantIDFromContext`, `RequireTenant`) | `internal/tenancy`, same names |
+  | `config.Config.Tenancy`, `config.TenancyConfig`, `config.TenancyResolver*` | `tenancy.Config`, `tenancy.LoadConfig`, `tenancy.ResolverHeader`, `ResolverSubdomain` |
+  | `StoreUserProvider.WithTenancy` and the `*InTenant` provider and repository methods | `tenancy.Provider` (wraps the core provider) and `tenancy.UserStore` |
+  | `httpx.WithTenantResolver` | `httpx.WithFeatureMiddleware` (the feature installs its own) |
+  | `make user tenant=acme create_tenant=1`, `make module tenant=1` | `make user flags="--tenant acme --create-tenant"`, `make module ... flags=--tenant` |
+
+  Import the new package as `github.com/<module>/internal/tenancy`.
+- **Removed from core**, replaced by generic seams: `cache.CacheVaryBy.TenantID`
+  and `TagSpec.TenantID` (now `Parts []cache.KeyPart`), `ratelimit.ScopeTenant`,
+  `KeyByTenant` and `KeyByUserOrTenantOrTokenHash`, `auth.TenancySettings` (the
+  `NewGoAuthEngine` and `ProjectGoAuthConfig` signatures lose their tenancy
+  argument and gain config mutators), `StoreUserProvider.WithTenancy`,
+  `auth.AuthContext.TenantID` (now `AuthContext.Attributes`),
+  `config.Config.Tenancy` and `Config.Deprecations()` (features report their own),
+  the tenancy argument of `authtest.NewEngine`, and the `tenantID` parameter of
+  every `auth.MFARepository` method. `app.New` and `app.NewDependencies` take the
+  optional features as extra arguments (`internal/features.All()...`).
+- **`whoami` omits `tenant_id` when tenancy is not registered.** Feature
+  attributes are reported as extra top-level fields, so `tenant_id` appears
+  because the tenancy feature is registered; in a project created with
+  `--no-tenancy` the response is `{"user_id","role","permissions"}`. With the
+  feature registered but off it is unchanged (`"0"`, goAuth's default tenant).
+- **Core MFA SQL no longer filters by tenant.** The TOTP and backup-code queries
+  are keyed by the globally unique user id. goAuth v0.6.0 resolves the user
+  through the tenant-scoped lookup (with its record-tenant backstop) before every
+  id-keyed provider call SuperAPI makes, and the endpoints only pass the
+  authenticated principal's own id, so the SQL predicate was redundant, and it
+  was the main thing tying core auth to tenancy. Reading goAuth's source found
+  three engine entry points that reach the provider without that lookup
+  (`VerifyBackupCode`, `ListWebAuthnCredentials`, `RemoveWebAuthnCredential`);
+  the tenancy provider scopes those itself, and tests prove a user id from
+  another tenant is rejected on every MFA and WebAuthn path (see Fixed).
+- **The JSON request body is always capped.** `DecodeAndValidateJSON` applies
+  `HTTP_MIDDLEWARE_MAX_BODY_BYTES`, or 1 MiB when that is `0` (which disables the
+  body-size middleware). An oversized body still returns `request body too large`.
+- Smaller changes for projects that extend the template: `users.email` now has a
+  `CHECK (email = lower(email))` and a single unique index on `lower(email)` (the
+  redundant raw-`email` unique constraint and index are gone); `StoredUser` and
+  `CreateStoredUserInput` have no tenant field; the core sqlc queries use
+  `SELECT *`/`RETURNING *`, so the generated `sqlcgen.User` model follows the
+  schema.
+
+### Added
+
+- **`internal/tenancy`**: the resolver middleware, tenant directory and LRU
+  cache, `TENANCY_*` settings, policies and presets, the goAuth
+  `TenantAwareUserProvider` decorator, the token-to-tenant binding check, cache
+  and rate-limit key parts, request-tenant helpers, `createuser` flags, its
+  tests and the `tenancytest` helpers (in-memory store, multi-tenant engine).
+- **Optional-feature hooks** (`docs/architecture.md`, "Optional features"):
+  `app.Feature` and `app.Hooks` (goAuth config mutator, user provider and
+  repository decorators, global middleware at a fixed position, auth extension,
+  route rules, deprecations), `app.UserCLI` for `createuser`,
+  `config.EnvString/EnvBool/EnvInt/EnvDuration/EnvCSV/EnvDeprecated` for
+  feature-owned settings (`superapi-verify` finds the keys wherever they live),
+  `policy.AuthExtension` (principal attributes and a post-authentication check
+  that returns the same 401), `policy.Annotate`, `Metadata.Stage/Data`,
+  `policy.RouteRule`, `policy.ResolvePreset`, `cache.KeyPart` with an identity
+  flag, `httpx.WithFeatureMiddleware`, `modulegen.RegisterExtension` and
+  `validator.RegisterExtension`. One registration point:
+  `internal/features/features.go`.
+- **`make init --no-tenancy`** deletes `internal/tenancy` and every file or
+  directory whose name contains `tenancy` (`feature.NameContains`), strips the
+  marked blocks (the registration line and the settings blocks), regenerates
+  sqlc, and leaves `db/migrations` with only `000001_init`. Template markers now
+  work in `.sql` files: `--no-webauthn` strips the WebAuthn table from the
+  baseline migration.
+- **CI**: the `templateinit` job also runs `--no-tenancy` and requires
+  `git grep -n -i tenan -- . ':!CHANGELOG.md'` to return nothing (exceptions go
+  in `.github/tenancy-allowlist.txt`, which is empty); a `tenancy` workflow runs
+  the suite with `TENANCY_ENABLED=true`.
+- `internal/tenancy/AGENTS.md`, `ratelimit.KeyByUserOrTokenHash`,
+  `httpx.DefaultJSONBodyLimit`.
+
+### Changed
+
+- The sqlc schema mirror is split like the migrations: `db/schema/auth_users.sql`
+  has no tenant reference and `db/schema/tenancy.sql` adds the tenants table and
+  `users.tenant_id`.
+- `whoami` marshals feature attributes; `http.Server` starts through
+  `net.Listen` and `Serve` (so a project without tenancy has no `ListenAndServe`
+  match in the tenant grep).
+- The `Makefile` passes `flags=` through to `cmd/createuser` and `cmd/modulegen`.
+
+### Removed
+
+- The eight v0.10.0 migrations, replaced by the baseline; the `system_settings`
+  no-op, the email-case duplicate check (a fresh database has no data) and the
+  "not unique, then unique" backup-code history.
+- The tenant code listed under Behavior changes.
+
+### Fixed
+
+- **A tenant-B request could list and remove a tenant-A user's WebAuthn
+  credentials, and consume a backup code, when the caller supplied the user id**
+  through goAuth engine methods that do not resolve the user first
+  (`Engine.ListWebAuthnCredentials`, `RemoveWebAuthnCredential`,
+  `VerifyBackupCode`). SuperAPI's endpoints only pass the principal's own id, so
+  this was not reachable over HTTP, but the provider now scopes those calls to the
+  request tenant (the WebAuthn queries had no tenant predicate before).
+- JSON bodies were unbounded when `HTTP_MIDDLEWARE_MAX_BODY_BYTES=0` (see
+  Behavior changes).
+
+### Documentation
+
+- `docs/workflows.md`, `AGENTS.md` and `docs/getting-started.md`: **the two
+  template migrations are yours to edit freely until your first deployment;
+  afterwards migrations are append-only and `make migrate-create NAME=...`
+  numbers the next one.** `docs/workflows.md` also explains why the new files
+  must not be copied over an existing database.
+- New: `docs/architecture.md` "Optional features" (every hook, ownership, removal
+  and a worked skeleton). Rewritten: `docs/multi-tenancy.md` (new paths, `tenancy`
+  imports, hooks, policies, cache and rate-limit parts, uniqueness),
+  `docs/removing-tenancy.md` (six steps). Updated: `docs/policies.md` and
+  `docs/cache-guide.md` (generic key parts, route rules, stages),
+  `docs/trim-to-what-you-need.md`, `docs/auth-bootstrap.md`,
+  `docs/auth-flows.md`, `docs/auth-goauth.md`, `docs/crud-examples.md`,
+  `docs/enabling-webauthn.md`, `docs/transactions.md`, `README.md`,
+  `CONTRIBUTING.md`, `.env.example` and `docs/environment-variables.md` (the
+  tenancy settings are their own removable block).
+
+### Verification
+
+- One uninterrupted final gate on the release commit: `docker compose ps`
+  healthy; `go mod tidy`, `make sqlc-generate` (twice) and `gofmt -l .` leave no
+  diff; `go build`, `go vet`, `golangci-lint run`,
+  `go run ./cmd/superapi-verify ./...`, `govulncheck ./...`.
+- `go test ./... -race -count=1` with tenancy off and with
+  `TENANCY_ENABLED=true`, and `make test-integration` against Postgres 18 and
+  Redis.
+- Migrations apply, roll back fully, and re-apply. A `pg_dump --schema-only`
+  comparison of the v0.10.0 chain against the new chain differs only by the
+  column order of `users.tenant_id`, the new `CHECK`, and the dropped redundant
+  raw-`email` unique constraint and index (listed in the pull request).
+- `make init` default, `--no-tenancy` and `--no-all` projects pass build, vet,
+  verify, tests and sqlc drift; the `--no-tenancy` project has only
+  `000001_init`, and `git grep -n -i tenan -- . ':!CHANGELOG.md'` returns
+  nothing; `docker build` and `docker compose config` pass.
+
 ## v0.10.0 (2026-09-29)
 
 Go 1.27, goAuth v0.6.0, and every open issue from the v0.9.0 review. The auth
