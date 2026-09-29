@@ -52,6 +52,40 @@ func TestStripMarkers(t *testing.T) {
 	}
 }
 
+// SQL files carry the same markers behind "--" comments (the baseline migration
+// wraps its optional tables that way).
+func TestStripMarkersInSQL(t *testing.T) {
+	in := strings.Join([]string{
+		"CREATE TABLE users (id INT);",
+		"-- template:begin webauthn",
+		"CREATE TABLE webauthn_credentials (id INT);",
+		"-- template:end webauthn",
+		"-- template:begin totp",
+		"CREATE TABLE user_totp (id INT);",
+		"-- template:end totp",
+		"",
+	}, "\n")
+
+	pruned, err := transform("db/migrations/000001_init.up.sql", []byte(in), transformContext{
+		opts:   Options{Prune: map[string]bool{"webauthn": true}},
+		remove: map[string]bool{"webauthn": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "CREATE TABLE users (id INT);\nCREATE TABLE user_totp (id INT);\n"; string(pruned) != want {
+		t.Fatalf("pruned SQL:\n%q\nwant\n%q", pruned, want)
+	}
+
+	kept, err := transform("db/migrations/000001_init.up.sql", []byte(in), transformContext{opts: Options{}, remove: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(kept), "template:") || !strings.Contains(string(kept), "webauthn_credentials") {
+		t.Fatalf("kept SQL must keep the tables and drop the marker lines:\n%s", kept)
+	}
+}
+
 func TestReplaceModule(t *testing.T) {
 	old := "github.com/MrEthical07/superapi"
 	in := strings.Join([]string{

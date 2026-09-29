@@ -14,7 +14,7 @@ import (
 const createAuthUser = `-- name: CreateAuthUser :one
 INSERT INTO users (email, password_hash, role, permissions, status, tenant_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
+RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
 `
 
 type CreateAuthUserParams struct {
@@ -45,15 +45,15 @@ func (q *Queries) CreateAuthUser(ctx context.Context, arg CreateAuthUserParams) 
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TenantID,
 		&i.AccountVersion,
 		&i.TotpEnabled,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getAuthUserByID = `-- name: GetAuthUserByID :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
 FROM users
 WHERE id = $1
 `
@@ -70,15 +70,15 @@ func (q *Queries) GetAuthUserByID(ctx context.Context, id pgtype.UUID) (User, er
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TenantID,
 		&i.AccountVersion,
 		&i.TotpEnabled,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getAuthUserByIDInTenant = `-- name: GetAuthUserByIDInTenant :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
 FROM users
 WHERE tenant_id = $1 AND id = $2
 `
@@ -102,15 +102,15 @@ func (q *Queries) GetAuthUserByIDInTenant(ctx context.Context, arg GetAuthUserBy
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TenantID,
 		&i.AccountVersion,
 		&i.TotpEnabled,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getAuthUserByLogin = `-- name: GetAuthUserByLogin :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
 FROM users
 WHERE lower(email) = lower($1)
 `
@@ -130,15 +130,15 @@ func (q *Queries) GetAuthUserByLogin(ctx context.Context, email string) (User, e
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TenantID,
 		&i.AccountVersion,
 		&i.TotpEnabled,
+		&i.TenantID,
 	)
 	return i, err
 }
 
 const getAuthUserByLoginInTenant = `-- name: GetAuthUserByLoginInTenant :one
-SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
+SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
 FROM users
 WHERE tenant_id = $1 AND lower(email) = lower($2)
 `
@@ -162,9 +162,9 @@ func (q *Queries) GetAuthUserByLoginInTenant(ctx context.Context, arg GetAuthUse
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TenantID,
 		&i.AccountVersion,
 		&i.TotpEnabled,
+		&i.TenantID,
 	)
 	return i, err
 }
@@ -188,7 +188,7 @@ func (q *Queries) UpdateAuthUserPasswordHash(ctx context.Context, arg UpdateAuth
 
 const updateAuthUserStatus = `-- name: UpdateAuthUserStatus :one
 UPDATE users SET status = $2, account_version = account_version + 1, updated_at = NOW() WHERE id = $1
-RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
+RETURNING id, email, password_hash, role, permissions, status, created_at, updated_at, account_version, totp_enabled, tenant_id
 `
 
 type UpdateAuthUserStatusParams struct {
@@ -213,9 +213,9 @@ func (q *Queries) UpdateAuthUserStatus(ctx context.Context, arg UpdateAuthUserSt
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.TenantID,
 		&i.AccountVersion,
 		&i.TotpEnabled,
+		&i.TenantID,
 	)
 	return i, err
 }
