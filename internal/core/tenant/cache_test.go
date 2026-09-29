@@ -43,31 +43,34 @@ func sizedCache(ttl time.Duration, maxActive, maxInactive int) (*validationCache
 
 func mustHit(t *testing.T, c *validationCache, key string, wantActive bool) {
 	t.Helper()
-	active, ok := c.get(key)
+	got, ok := c.get(key)
 	if !ok {
 		t.Fatalf("%q: expected a cache hit", key)
 	}
-	if active != wantActive {
-		t.Fatalf("%q: active=%v, want %v", key, active, wantActive)
+	if got.Active != wantActive {
+		t.Fatalf("%q: active=%v, want %v", key, got.Active, wantActive)
+	}
+	if got.ID != key {
+		t.Fatalf("%q: cached id=%q, want the id stored with it", key, got.ID)
 	}
 }
 
 func mustMiss(t *testing.T, c *validationCache, key string) {
 	t.Helper()
-	if active, ok := c.get(key); ok {
-		t.Fatalf("%q: unexpected cache hit (active=%v)", key, active)
+	if got, ok := c.get(key); ok {
+		t.Fatalf("%q: unexpected cache hit (%+v)", key, got)
 	}
 }
 
 func TestCacheEvictsLeastRecentlyUsedFirst(t *testing.T) {
 	c, _ := sizedCache(time.Minute, 3, 3)
-	c.put("a", true)
-	c.put("b", true)
-	c.put("c", true)
+	c.put("a", cachedTenant{ID: "a", Active: true})
+	c.put("b", cachedTenant{ID: "b", Active: true})
+	c.put("c", cachedTenant{ID: "c", Active: true})
 
 	// Touch "a": "b" is now the least recently used.
 	mustHit(t, c, "a", true)
-	c.put("d", true)
+	c.put("d", cachedTenant{ID: "d", Active: true})
 
 	mustMiss(t, c, "b")
 	mustHit(t, c, "a", true)
@@ -75,7 +78,7 @@ func TestCacheEvictsLeastRecentlyUsedFirst(t *testing.T) {
 	mustHit(t, c, "d", true)
 
 	// Order after those hits (oldest first): a, c, d. Adding "e" evicts "a".
-	c.put("e", true)
+	c.put("e", cachedTenant{ID: "e", Active: true})
 	mustMiss(t, c, "a")
 	for _, k := range []string{"c", "d", "e"} {
 		mustHit(t, c, k, true)
@@ -91,9 +94,9 @@ func TestCacheEvictsOneEntryNotEverything(t *testing.T) {
 	const capacity = 100
 	c, _ := sizedCache(time.Minute, capacity, 10)
 	for i := 0; i < capacity; i++ {
-		c.put(fmt.Sprintf("t%03d", i), true)
+		c.put(fmt.Sprintf("t%03d", i), cachedTenant{ID: fmt.Sprintf("t%03d", i), Active: true})
 	}
-	c.put("overflow", true)
+	c.put("overflow", cachedTenant{ID: "overflow", Active: true})
 
 	if got := c.active.len(); got != capacity {
 		t.Fatalf("size = %d, want %d", got, capacity)
@@ -107,10 +110,10 @@ func TestCacheEvictsOneEntryNotEverything(t *testing.T) {
 
 func TestCacheReinsertRefreshesRecency(t *testing.T) {
 	c, _ := sizedCache(time.Minute, 2, 2)
-	c.put("a", true)
-	c.put("b", true)
-	c.put("a", true) // moves "a" to the front without adding an entry
-	c.put("c", true)
+	c.put("a", cachedTenant{ID: "a", Active: true})
+	c.put("b", cachedTenant{ID: "b", Active: true})
+	c.put("a", cachedTenant{ID: "a", Active: true}) // moves "a" to the front without adding an entry
+	c.put("c", cachedTenant{ID: "c", Active: true})
 
 	mustMiss(t, c, "b")
 	mustHit(t, c, "a", true)
@@ -119,7 +122,7 @@ func TestCacheReinsertRefreshesRecency(t *testing.T) {
 
 func TestCacheEntriesExpireAfterTheirTTL(t *testing.T) {
 	c, clk := sizedCache(40*time.Second, 10, 10)
-	c.put("acme", true)
+	c.put("acme", cachedTenant{ID: "acme", Active: true})
 
 	clk.Advance(39 * time.Second)
 	mustHit(t, c, "acme", true)
@@ -134,7 +137,7 @@ func TestCacheEntriesExpireAfterTheirTTL(t *testing.T) {
 // deactivated is still re-checked within one TTL.
 func TestCacheHitsDoNotExtendTheDeadline(t *testing.T) {
 	c, clk := sizedCache(20*time.Second, 10, 10)
-	c.put("busy", true)
+	c.put("busy", cachedTenant{ID: "busy", Active: true})
 	for i := 0; i < 5; i++ {
 		clk.Advance(3 * time.Second)
 		mustHit(t, c, "busy", true)
@@ -145,9 +148,9 @@ func TestCacheHitsDoNotExtendTheDeadline(t *testing.T) {
 
 func TestCachePutResetsTheDeadline(t *testing.T) {
 	c, clk := sizedCache(20*time.Second, 10, 10)
-	c.put("acme", true)
+	c.put("acme", cachedTenant{ID: "acme", Active: true})
 	clk.Advance(15 * time.Second)
-	c.put("acme", true)
+	c.put("acme", cachedTenant{ID: "acme", Active: true})
 	clk.Advance(15 * time.Second)
 	mustHit(t, c, "acme", true)
 }
@@ -157,8 +160,8 @@ func TestNegativeResultsExpireSoonerThanPositiveOnes(t *testing.T) {
 		t.Fatalf("negativeTTL(40s) = %v, want 10s", got)
 	}
 	c, clk := sizedCache(40*time.Second, 10, 10)
-	c.put("real", true)
-	c.put("ghost", false)
+	c.put("real", cachedTenant{ID: "real", Active: true})
+	c.put("ghost", cachedTenant{ID: "ghost"})
 
 	clk.Advance(9 * time.Second)
 	mustHit(t, c, "real", true)
@@ -194,11 +197,11 @@ func TestFloodOfUnknownTenantsCannotEvictRealOnes(t *testing.T) {
 	real := make([]string, 50)
 	for i := range real {
 		real[i] = fmt.Sprintf("real-%02d", i)
-		c.put(real[i], true)
+		c.put(real[i], cachedTenant{ID: real[i], Active: true})
 	}
 
 	for i := 0; i < 50_000; i++ {
-		c.put(fmt.Sprintf("ghost-%d", i), false)
+		c.put(fmt.Sprintf("ghost-%d", i), cachedTenant{ID: fmt.Sprintf("ghost-%d", i)})
 	}
 
 	for _, id := range real {
@@ -211,16 +214,16 @@ func TestFloodOfUnknownTenantsCannotEvictRealOnes(t *testing.T) {
 
 func TestCacheMovesATenantBetweenSegmentsWhenItsStateChanges(t *testing.T) {
 	c, _ := sizedCache(time.Minute, 10, 10)
-	c.put("acme", false)
+	c.put("acme", cachedTenant{ID: "acme"})
 	mustHit(t, c, "acme", false)
 
-	c.put("acme", true) // tenant was created or re-activated
+	c.put("acme", cachedTenant{ID: "acme", Active: true}) // tenant was created or re-activated
 	mustHit(t, c, "acme", true)
 	if c.inactive.len() != 0 {
 		t.Fatal("a stale negative entry was left behind")
 	}
 
-	c.put("acme", false) // and deactivated again
+	c.put("acme", cachedTenant{ID: "acme"}) // and deactivated again
 	mustHit(t, c, "acme", false)
 	if c.active.len() != 0 {
 		t.Fatal("a stale positive entry was left behind")
@@ -229,14 +232,14 @@ func TestCacheMovesATenantBetweenSegmentsWhenItsStateChanges(t *testing.T) {
 
 func TestNilCacheIsANoOp(t *testing.T) {
 	var c *validationCache
-	c.put("acme", true)
+	c.put("acme", cachedTenant{ID: "acme", Active: true})
 	mustMiss(t, c, "acme")
 }
 
 func TestCacheCapacityFloor(t *testing.T) {
 	c, _ := sizedCache(time.Minute, 0, -5)
-	c.put("a", true)
-	c.put("b", true)
+	c.put("a", cachedTenant{ID: "a", Active: true})
+	c.put("b", cachedTenant{ID: "b", Active: true})
 	mustHit(t, c, "b", true)
 	mustMiss(t, c, "a")
 }
@@ -255,9 +258,9 @@ func TestCacheIsSafeUnderConcurrency(t *testing.T) {
 				key := fmt.Sprintf("t-%d", (g*7+i)%200)
 				switch i % 4 {
 				case 0:
-					c.put(key, true)
+					c.put(key, cachedTenant{ID: key, Active: true})
 				case 1:
-					c.put(key, false)
+					c.put(key, cachedTenant{ID: key})
 				default:
 					c.get(key)
 				}
@@ -294,6 +297,13 @@ func (d *countingDirectory) Get(ctx context.Context, id string) (Record, error) 
 	return d.inner.Get(ctx, id)
 }
 
+func (d *countingDirectory) GetBySlug(ctx context.Context, slug string) (Record, error) {
+	d.mu.Lock()
+	d.byID["slug:"+slug]++
+	d.mu.Unlock()
+	return d.inner.GetBySlug(ctx, slug)
+}
+
 func (d *countingDirectory) count(id string) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -307,12 +317,12 @@ func TestFloodDoesNotForceLookupsForRealTenants(t *testing.T) {
 	cache := newValidationCacheSized(time.Minute, 100, 10)
 
 	for i := 0; i < 5; i++ {
-		active, err := lookupActive(t.Context(), dir, cache, "acme")
-		if err != nil || !active {
-			t.Fatalf("acme: active=%v err=%v", active, err)
+		id, active, err := lookupTenant(t.Context(), dir, cache, ResolverHeader, "acme")
+		if err != nil || !active || id != "acme" {
+			t.Fatalf("acme: id=%q active=%v err=%v", id, active, err)
 		}
 		for j := 0; j < 200; j++ {
-			if active, err := lookupActive(t.Context(), dir, cache, fmt.Sprintf("ghost-%d-%d", i, j)); err != nil || active {
+			if _, active, err := lookupTenant(t.Context(), dir, cache, ResolverHeader, fmt.Sprintf("ghost-%d-%d", i, j)); err != nil || active {
 				t.Fatalf("ghost: active=%v err=%v", active, err)
 			}
 		}

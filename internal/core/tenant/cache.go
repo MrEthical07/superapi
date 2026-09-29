@@ -35,10 +35,20 @@ func negativeTTL(positive time.Duration) time.Duration {
 	return ttl
 }
 
+// cachedTenant is a remembered validation result: the tenant's id (the
+// subdomain resolver looks tenants up by slug but must attach the id) and
+// whether it may serve requests.
+type cachedTenant struct {
+	ID     string
+	Active bool
+}
+
 // validationCache remembers tenant validation results so the database is not
-// asked on every request. It has two bounded LRU segments with per-entry TTL:
-// one for active tenants and one, smaller and shorter-lived, for unknown or
-// inactive ones.
+// asked on every request. Keys name the resolver and the value it produced
+// (see cacheKey), so an id and a slug that happen to be spelled the same never
+// share an entry. It has two bounded LRU segments with per-entry TTL: one for
+// active tenants and one, smaller and shorter-lived, for unknown or inactive
+// ones.
 type validationCache struct {
 	active   *ttlLRU
 	inactive *ttlLRU
@@ -55,33 +65,39 @@ func newValidationCacheSized(ttl time.Duration, maxActive, maxInactive int) *val
 	}
 }
 
+// cacheKey builds the cache key for a value produced by a resolver ("header",
+// "subdomain"). Keying by resolver as well as value keeps a header id "acme"
+// and a subdomain slug "acme" apart: they name different columns and may point
+// at different tenants.
+func cacheKey(resolver, value string) string { return resolver + ":" + value }
+
 // get returns the cached result for key and whether there was a live entry.
-func (c *validationCache) get(key string) (active, ok bool) {
+func (c *validationCache) get(key string) (cachedTenant, bool) {
 	if c == nil {
-		return false, false
+		return cachedTenant{}, false
 	}
-	if c.active.get(key) {
-		return true, true
+	if id, ok := c.active.get(key); ok {
+		return cachedTenant{ID: id, Active: true}, true
 	}
-	if c.inactive.get(key) {
-		return false, true
+	if id, ok := c.inactive.get(key); ok {
+		return cachedTenant{ID: id, Active: false}, true
 	}
-	return false, false
+	return cachedTenant{}, false
 }
 
 // put records a validation result. The other segment's entry for key, if any,
 // is dropped so a tenant that changed state is never reported from both.
-func (c *validationCache) put(key string, active bool) {
+func (c *validationCache) put(key string, v cachedTenant) {
 	if c == nil {
 		return
 	}
-	if active {
+	if v.Active {
 		c.inactive.remove(key)
-		c.active.put(key)
+		c.active.put(key, v.ID)
 		return
 	}
 	c.active.remove(key)
-	c.inactive.put(key)
+	c.inactive.put(key, v.ID)
 }
 
 // ttlLRU is a fixed-capacity set of keys with a time-to-live per entry. When
@@ -100,6 +116,7 @@ type ttlLRU struct {
 
 type lruEntry struct {
 	key     string
+	value   string
 	expires time.Time
 }
 
@@ -116,35 +133,37 @@ func newTTLLRU(max int, ttl time.Duration) *ttlLRU {
 	}
 }
 
-// get reports whether key has a live entry, marking it most recently used. An
-// expired entry is removed.
-func (l *ttlLRU) get(key string) bool {
+// get returns the value stored for key if it has a live entry, marking it most
+// recently used. An expired entry is removed.
+func (l *ttlLRU) get(key string) (string, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	el, ok := l.items[key]
 	if !ok {
-		return false
+		return "", false
 	}
-	if l.now().After(el.Value.(*lruEntry).expires) {
+	entry := el.Value.(*lruEntry)
+	if l.now().After(entry.expires) {
 		l.removeElement(el)
-		return false
+		return "", false
 	}
 	l.order.MoveToFront(el)
-	return true
+	return entry.value, true
 }
 
-// put stores key with a fresh deadline and evicts the least recently used
-// entry if the segment is over capacity.
-func (l *ttlLRU) put(key string) {
+// put stores key and value with a fresh deadline and evicts the least recently
+// used entry if the segment is over capacity.
+func (l *ttlLRU) put(key, value string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	expires := l.now().Add(l.ttl)
 	if el, ok := l.items[key]; ok {
-		el.Value.(*lruEntry).expires = expires
+		entry := el.Value.(*lruEntry)
+		entry.value, entry.expires = value, expires
 		l.order.MoveToFront(el)
 		return
 	}
-	l.items[key] = l.order.PushFront(&lruEntry{key: key, expires: expires})
+	l.items[key] = l.order.PushFront(&lruEntry{key: key, value: value, expires: expires})
 	for l.order.Len() > l.max {
 		l.removeElement(l.order.Back())
 	}

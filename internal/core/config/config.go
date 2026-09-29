@@ -653,6 +653,11 @@ func (c *Config) Lint() error {
 			if c.Tenancy.BaseDomain == "" {
 				return fmt.Errorf("tenancy resolver %q requires TENANCY_BASE_DOMAIN", TenancyResolverSubdomain)
 			}
+			// The subdomain is a slug; only the tenants table can turn it into
+			// the tenant id that goAuth and modules use.
+			if !c.Tenancy.Validate {
+				return fmt.Errorf("tenancy resolver %q looks tenants up by slug in the tenants table, so it requires TENANCY_VALIDATE=true (and Postgres)", TenancyResolverSubdomain)
+			}
 		default:
 			return fmt.Errorf("invalid tenancy resolver: %q (valid: header, subdomain)", c.Tenancy.Resolver)
 		}

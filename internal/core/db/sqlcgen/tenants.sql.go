@@ -61,6 +61,28 @@ func (q *Queries) GetTenantByID(ctx context.Context, id string) (Tenant, error) 
 	return i, err
 }
 
+const getTenantBySlug = `-- name: GetTenantBySlug :one
+SELECT id, slug, name, status, created_at, updated_at
+FROM tenants
+WHERE slug = $1
+`
+
+// Slugs are stored lower-case (the subdomain resolver lower-cases the host
+// label); callers pass a normalized slug. tenants.slug is UNIQUE.
+func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (Tenant, error) {
+	row := q.db.QueryRow(ctx, getTenantBySlug, slug)
+	var i Tenant
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listTenants = `-- name: ListTenants :many
 SELECT id, slug, name, status, created_at, updated_at
 FROM tenants

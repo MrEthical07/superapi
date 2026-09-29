@@ -212,7 +212,7 @@ enabled — see docs/enabling-webauthn.md.
 | TENANCY_ENABLED | false | enables multi-tenant policy, cache and rate-limit behavior, the tenant resolution middleware, and goAuth tenant-scoped user lookup |
 | TENANCY_RESOLVER | header | how the request tenant is resolved: `header` or `subdomain` |
 | TENANCY_HEADER | X-Tenant-ID | header carrying the tenant id (header resolver) |
-| TENANCY_BASE_DOMAIN | (empty) | parent domain for the subdomain resolver; required when `TENANCY_RESOLVER=subdomain` (`acme.example.com` -> tenant `acme`) |
+| TENANCY_BASE_DOMAIN | (empty) | parent domain for the subdomain resolver; required when `TENANCY_RESOLVER=subdomain` (`acme.example.com` -> the tenant whose `tenants.slug` is `acme`; its id is attached) |
 | TENANCY_VALIDATE | true | require the tenant to exist in `tenants` with `status='active'`; requires Postgres |
 | TENANCY_VALIDATE_CACHE_TTL | 30s | in-process cache for tenant validation results; `0` disables. Bounded LRU (10,000 active + 1,000 unknown/inactive entries); negative results expire after a quarter of this TTL (min 1s) |
 | TENANCY_EXEMPT_PATHS | /healthz,/readyz,/metrics | exact paths that skip tenant resolution; the metrics path is always exempt |
@@ -233,7 +233,7 @@ Behavior:
 Lint dependency rules:
 
 - TENANCY_RESOLVER must be `header` or `subdomain` (checked only when enabled)
-- TENANCY_RESOLVER=subdomain requires TENANCY_BASE_DOMAIN
+- TENANCY_RESOLVER=subdomain requires TENANCY_BASE_DOMAIN and TENANCY_VALIDATE=true (the slug is looked up in `tenants`)
 - TENANCY_VALIDATE=true requires POSTGRES_ENABLED=true
 
 Deprecated:

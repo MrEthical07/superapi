@@ -45,10 +45,40 @@ headers) and stores the same value under a SuperAPI key, readable with
 | `TENANCY_ENABLED` | false | master switch |
 | `TENANCY_RESOLVER` | header | `header` or `subdomain` |
 | `TENANCY_HEADER` | X-Tenant-ID | header for the header resolver; a repeated header is rejected |
-| `TENANCY_BASE_DOMAIN` | — | subdomain resolver: `acme.example.com` -> `acme` (single label only) |
-| `TENANCY_VALIDATE` | true | tenant must exist and be `active` (needs Postgres) |
+| `TENANCY_BASE_DOMAIN` | — | subdomain resolver: `acme.example.com` -> slug `acme` (single label only) |
+| `TENANCY_VALIDATE` | true | tenant must exist and be `active` (needs Postgres). **Required** with `TENANCY_RESOLVER=subdomain` |
 | `TENANCY_VALIDATE_CACHE_TTL` | 30s | in-process cache of validation results, positive and negative. Bounded LRU: 10,000 active tenants plus a separate 1,000-entry segment for unknown/inactive ones, which live a quarter of this TTL (at least 1s). A flood of made-up tenant ids can only churn the negative segment, never evict real tenants |
 | `TENANCY_EXEMPT_PATHS` | /healthz,/readyz,/metrics | exact paths that skip resolution (metrics path always exempt) |
+
+### Header vs subdomain: id vs slug
+
+The two resolvers read different columns of `tenants`:
+
+| Resolver | Reads | Looks up | Attaches to the request |
+|---|---|---|---|
+| `header` | tenant **id** from `X-Tenant-ID` | `tenants.id` | that id |
+| `subdomain` | tenant **slug** from the host label | `tenants.slug` (unique) | the tenant's **id** |
+
+A subdomain is naturally a slug (`acme.example.com`), and the slug never
+reaches goAuth, sessions, cache keys or modules: the resolver maps it to the
+tenant's id, so everything downstream (`RequestTenantFromContext`,
+`principal.TenantID`, tenant-scoped SQL) sees the same id whichever resolver
+is configured. Slugs follow the tenant id rules (1-64 characters of
+`[a-z0-9._-]`, starting alphanumeric) and are **lower-case**: hostnames are
+case-insensitive, the label is lower-cased before the lookup, and
+`Repository.Create` lower-cases the slug it stores. A tenant whose stored slug
+has upper-case letters can never be reached by subdomain; fix it with
+`UPDATE tenants SET slug = lower(slug)`.
+
+The validation cache is keyed by resolver and value, so id `acme` and slug
+`acme` (which may be different tenants) never share an entry. Because a slug
+cannot become an id without the `tenants` table, `TENANCY_RESOLVER=subdomain`
+with `TENANCY_VALIDATE=false` is rejected at startup.
+
+**Upgrading from v0.9.0:** the subdomain resolver used to take the label as the
+tenant *id*. If your tenants were created with `slug = id` (what `make user
+create_tenant=1` does) nothing changes. Otherwise make sure every tenant's slug
+is the subdomain you serve it on.
 
 A path-segment resolver is intentionally not provided: a global pre-routing
 resolver would force every route, including `/api/v1/auth/*`, under a tenant
