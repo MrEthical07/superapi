@@ -207,6 +207,7 @@ enabled — see docs/enabling-webauthn.md.
 | WEBAUTHN_REQUIRE_FOR_LOGIN | false | gate login behind an assertion for users with a credential |
 | WEBAUTHN_REJECT_CLONED_AUTHENTICATORS | true | fail assertions whose signature counter regressed |
 
+<!-- template:begin tenancy -->
 ## 7a. Tenancy Variables
 
 | Env var | Default | Notes |
@@ -221,16 +222,20 @@ enabled — see docs/enabling-webauthn.md.
 
 Behavior:
 
-- With TENANCY_ENABLED=false (default), tenancy is inert. Preset policies do not
-  default to tenant scoping/keying (authenticated cache reads vary by user id
-  instead of tenant id), a `{tenant_id}` path parameter is treated as an
-  ordinary parameter, no tenant middleware runs, and goAuth stays tenant-blind.
-- With TENANCY_ENABLED=true, tenant scoping/keying defaults return,
-  `{tenant_id}` routes must carry `TenantRequired` + `TenantMatchFromPath`, the
-  tenant middleware resolves and validates the tenant on every non-exempt
-  request (400 `tenant required`/`tenant invalid`, 404 `tenant not found`, 503
-  when validation cannot reach Postgres), and goAuth `MultiTenant.Enabled` is
-  set so every user lookup is scoped to that tenant. See docs/multi-tenancy.md.
+- The tenancy feature loads and lints these itself (`internal/tenancy`, through
+  `config.EnvBool` and friends); core config does not know them.
+- With TENANCY_ENABLED=false (default), tenancy is inert. The tenant presets
+  vary cached responses by user id instead of tenant id, a `{tenant_id}` path
+  parameter is treated as an ordinary parameter, no tenant middleware runs, and
+  goAuth stays tenant-blind (every principal carries goAuth's default tenant
+  `0`).
+- With TENANCY_ENABLED=true, the tenant presets scope cache and rate limits by
+  tenant, `{tenant_id}` routes must carry `tenancy.TenantRequired` +
+  `tenancy.TenantMatchFromPath`, the tenant middleware resolves and validates
+  the tenant on every non-exempt request (400 `tenant required`/`tenant
+  invalid`, 404 `tenant not found`, 503 when validation cannot reach
+  Postgres), and goAuth `MultiTenant.Enabled` is set so every user lookup is
+  scoped to that tenant. See docs/multi-tenancy.md.
 
 Lint dependency rules:
 
@@ -244,7 +249,8 @@ Deprecated:
   `MultiTenant.EnforceIsolation` a no-op). It is still accepted for one release
   and logs a deprecation warning at startup when set. Remove it.
 
-See docs/policies.md, docs/multi-tenancy.md and docs/removing-tenancy.md.
+See docs/multi-tenancy.md and docs/removing-tenancy.md.
+<!-- template:end tenancy -->
 
 ## 8. Rate-Limit Variables
 
