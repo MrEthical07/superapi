@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"reflect"
 
-	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 	"github.com/MrEthical07/superapi/internal/core/response"
 )
 
@@ -81,11 +80,7 @@ func Adapter[Req any, Resp any](fn HandlerFunc[Req, Resp]) http.Handler {
 		var req Req
 		if !noBody {
 			if err := DecodeAndValidateJSON(w, r, &req); err != nil {
-				if _, isApp := apperr.AsAppError(err); isApp {
-					response.Error(w, err, reqID)
-					return
-				}
-				response.Error(w, mapDecodeError(err), reqID)
+				response.Error(w, err, reqID)
 				return
 			}
 		}
