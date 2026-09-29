@@ -119,3 +119,28 @@ func TestCacheReadRejectsInvalidVaryPart(t *testing.T) {
 	}()
 	CacheRead(mgr, cache.CacheReadConfig{TTL: time.Minute, VaryBy: cache.CacheVaryBy{Parts: []cache.KeyPart{{Name: "org"}}}})
 }
+
+// BenchmarkAuthRequired_Extensions measures what an auth extension adds to an
+// authenticated request: the registry lookup, the attribute slice and the check.
+func BenchmarkAuthRequired_Extensions(b *testing.B) {
+	run := func(b *testing.B, exts ...AuthExtension) {
+		engine, token := newPolicyTestAuthEngine(b)
+		UseAuthExtensions(engine, exts...)
+		b.Cleanup(func() { UseAuthExtensions(engine) })
+		h := Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), AuthRequired(engine, auth.ModeJWTOnly))
+		req := httptest.NewRequest(http.MethodGet, "/secure", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			h.ServeHTTP(httptest.NewRecorder(), req)
+		}
+	}
+	b.Run("none", func(b *testing.B) { run(b) })
+	b.Run("attribute_and_check", func(b *testing.B) {
+		run(b, AuthExtension{
+			Attribute: func(r *goauth.AuthResult) (string, string) { return "org", r.Role },
+			Check:     func(*http.Request, *goauth.AuthResult) error { return nil },
+		})
+	})
+}
