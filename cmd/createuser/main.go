@@ -17,9 +17,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/app"
 	coreauth "github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/config"
-	// template:begin tenancy
-	"github.com/MrEthical07/superapi/internal/core/tenant"
-	// template:end tenancy
+	"github.com/MrEthical07/superapi/internal/features"
 )
 
 type options struct {
@@ -27,10 +25,9 @@ type options struct {
 	role                string
 	passwordStdin       bool
 	requireVerification bool
-	// template:begin tenancy
-	tenantID     string
-	createTenant bool
-	// template:end tenancy
+	// steps are the optional features' parts of account creation; a feature
+	// registers its flags through app.UserCLI.
+	steps []app.UserStep
 }
 
 func main() {
@@ -38,7 +35,8 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	opts, err := parseFlags(args, stderr)
+	registered := features.All()
+	opts, err := parseFlags(args, stderr, registered)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -60,16 +58,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "error: AUTH_ENABLED=true is required (with POSTGRES_ENABLED and REDIS_ENABLED); see .env.example")
 		return 1
 	}
-	// template:begin tenancy
-	if cfg.Tenancy.Enabled && opts.tenantID == "" {
-		fmt.Fprintln(stderr, "error: TENANCY_ENABLED=true requires --tenant")
-		return 2
+	for _, step := range opts.steps {
+		if err := step.Validate(cfg); err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			return 2
+		}
 	}
-	if !cfg.Tenancy.Enabled && opts.tenantID != "" {
-		fmt.Fprintln(stderr, "error: --tenant requires TENANCY_ENABLED=true")
-		return 2
-	}
-	// template:end tenancy
 
 	password, err := readPassword(opts.passwordStdin, stdin, stderr)
 	if err != nil {
@@ -80,22 +74,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	deps, err := app.NewDependencies(ctx, cfg)
+	deps, err := app.NewDependencies(ctx, cfg, registered...)
 	if err != nil {
 		fmt.Fprintln(stderr, "error: init dependencies:", err)
 		return 1
 	}
 	defer deps.Close()
 
-	// template:begin tenancy
-	if opts.tenantID != "" {
-		if err := ensureTenant(ctx, deps, cfg, opts); err != nil {
+	for _, step := range opts.steps {
+		ctx, err = step.Prepare(ctx, deps)
+		if err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			return 1
 		}
-		ctx = coreauth.WithRequestTenant(ctx, opts.tenantID)
 	}
-	// template:end tenancy
 
 	result, err := deps.AuthEngine.CreateAccount(ctx, goauth.CreateAccountRequest{
 		Identifier: opts.email,
@@ -128,26 +120,27 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "created user\n  id:     %s\n  email:  %s\n  role:   %s\n  status: %s\n", result.UserID, opts.email, result.Role, status)
-	// template:begin tenancy
-	if opts.tenantID != "" {
-		fmt.Fprintf(stdout, "  tenant: %s\n", opts.tenantID)
+	for _, step := range opts.steps {
+		for _, line := range step.Summary() {
+			fmt.Fprintln(stdout, line)
+		}
 	}
-	// template:end tenancy
 	return 0
 }
 
-func parseFlags(args []string, stderr io.Writer) (options, error) {
+func parseFlags(args []string, stderr io.Writer, registered []app.Feature) (options, error) {
 	fs := flag.NewFlagSet("createuser", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var opts options
 	fs.StringVar(&opts.email, "email", "", "login identifier (email) for the new account (required)")
 	fs.StringVar(&opts.role, "role", coreauth.RoleUser, "role to assign (must exist in internal/core/auth/roles.go)")
-	// template:begin tenancy
-	fs.StringVar(&opts.tenantID, "tenant", "", "tenant id (required when TENANCY_ENABLED=true)")
-	fs.BoolVar(&opts.createTenant, "create-tenant", false, "create the tenant (active) if it does not exist")
-	// template:end tenancy
 	fs.BoolVar(&opts.passwordStdin, "password-stdin", false, "read the password from stdin instead of prompting")
 	fs.BoolVar(&opts.requireVerification, "require-verification", false, "leave the account pending email verification (only with AUTH_EMAIL_VERIFICATION_ENABLED)")
+	for _, f := range registered {
+		if cli, ok := f.(app.UserCLI); ok {
+			opts.steps = append(opts.steps, cli.UserFlags(fs))
+		}
+	}
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -159,12 +152,6 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	if opts.email == "" {
 		return options{}, errors.New("--email is required")
 	}
-	// template:begin tenancy
-	opts.tenantID = strings.TrimSpace(opts.tenantID)
-	if opts.tenantID != "" && !tenant.ValidTenantID(opts.tenantID) {
-		return options{}, fmt.Errorf("invalid --tenant %q", opts.tenantID)
-	}
-	// template:end tenancy
 	return opts, nil
 }
 

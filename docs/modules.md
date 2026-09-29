@@ -146,7 +146,7 @@ Routes are registered in routes.go through router.Handle(...).
 Policy order must follow:
 
 1. auth
-2. tenant
+2. isolation (added by an optional feature; skip when none applies)
 3. rbac
 4. rate limit
 5. cache
@@ -177,8 +177,8 @@ Repository interfaces should use domain terms.
 Good contract examples:
 
 - CreateProject(ctx, input) (Project, error)
-- GetProjectByID(ctx, tenantID, id) (Project, error)
-- ListProjects(ctx, tenantID, limit) ([]Project, error)
+- GetProjectByID(ctx, ownerID, id) (Project, error)
+- ListProjects(ctx, ownerID, limit) ([]Project, error)
 
 Bad contract examples:
 
@@ -228,7 +228,7 @@ Mistake: repository interface leaks storage terms
 
 - Fix: use domain nouns and use-case method names
 
-Mistake: authenticated cache route has no user/tenant vary key
+Mistake: authenticated cache route has no user (or identity-bearing part) vary key
 
 - Fix: configure safe vary dimensions so policy validation and runtime isolation stay correct
 

@@ -34,14 +34,15 @@ type TemplateOptions struct {
 	UseDB bool
 	// UseAuth includes AuthRequired policy wiring.
 	UseAuth bool
-	// UseTenant includes tenant policy wiring.
-	UseTenant bool
 	// UseRateLimit includes default rate-limit policy wiring.
 	UseRateLimit bool
 	// UseCache includes default cache-read policy wiring.
 	UseCache bool
 	// CreateMigration creates an initial migration scaffold.
 	CreateMigration bool
+	// Extra switches on registered feature extensions by flag name (see
+	// Extension).
+	Extra map[string]bool
 }
 
 // TemplateConfig combines normalized spec and generation options.
@@ -258,8 +259,12 @@ func renderRoutesFile(cfg TemplateConfig) string {
 		`"net/http"`,
 		`"github.com/MrEthical07/superapi/internal/core/httpx"`,
 	}
-	if cfg.Options.UseAuth || cfg.Options.UseTenant || cfg.Options.UseRateLimit || cfg.Options.UseCache {
+	exts := cfg.Options.enabled()
+	if cfg.Options.UseAuth || len(exts) > 0 || cfg.Options.UseRateLimit || cfg.Options.UseCache {
 		imports = append(imports, `"github.com/MrEthical07/superapi/internal/core/policy"`)
+	}
+	for _, ext := range exts {
+		imports = append(imports, ext.Imports...)
 	}
 	if cfg.Options.UseCache || cfg.Options.UseRateLimit {
 		imports = append(imports, `"time"`)
@@ -284,11 +289,10 @@ func renderRoutesFile(cfg TemplateConfig) string {
 	b.WriteString("\tif m.handler == nil {\n")
 	b.WriteString("\t\tm.handler = NewHandler(NewService(" + newRepoCall(cfg) + "))\n")
 	b.WriteString("\t}\n\n")
-	if cfg.Options.UseTenant {
-		// modulegen cannot know the runtime tenancy flag; remind the operator.
-		b.WriteString("\t// NOTE: TenantRequired() below needs TENANCY_ENABLED=true at runtime,\n")
-		b.WriteString("\t// otherwise every request to this route is rejected (no tenant in context).\n")
-		b.WriteString("\t// Remove the tenant policy (and --tenant) if this module is not tenant-scoped.\n")
+	for _, ext := range exts {
+		for _, note := range ext.Notes {
+			b.WriteString("\t// " + note + "\n")
+		}
 	}
 	if len(policies) == 0 {
 		b.WriteString("\tr.Handle(http.MethodGet, \"/api/v1/" + spec.RoutePath + "/ping\", httpx.Adapter(m.handler.Ping))\n")
@@ -313,8 +317,9 @@ func routePolicies(cfg TemplateConfig) []string {
 	if opt.UseAuth {
 		policies = append(policies, "\t\tpolicy.AuthRequired(m.runtime.AuthEngine(), m.runtime.AuthMode()),")
 	}
-	if opt.UseTenant {
-		policies = append(policies, "\t\tpolicy.TenantRequired(),")
+	exts := opt.enabled()
+	for _, ext := range exts {
+		policies = append(policies, ext.Policies...)
 	}
 	if opt.UseRateLimit {
 		policies = append(policies, "\t\tpolicy.RateLimit(m.runtime.Limiter(), ratelimit.Rule{Limit: 30, Window: time.Minute, Scope: ratelimit.ScopeAuto}),")
@@ -325,16 +330,17 @@ func routePolicies(cfg TemplateConfig) []string {
 		cacheCfg.WriteString("Key: \"" + spec.Package + ".ping\", ")
 		cacheCfg.WriteString("TTL: 30 * time.Second")
 		cacheCfg.WriteString(", TagSpecs: []cache.CacheTagSpec{{Name: \"" + spec.Package + ".ping\"")
-		if opt.UseTenant {
-			cacheCfg.WriteString(", TenantID: true")
+		parts := cachePartExpr(exts)
+		if parts != "" {
+			cacheCfg.WriteString(", Parts: []cache.KeyPart{" + parts + "}")
 		} else if opt.UseAuth {
 			cacheCfg.WriteString(", UserID: true")
 		}
 		cacheCfg.WriteString("}}")
-		if opt.UseAuth || opt.UseTenant {
+		if opt.UseAuth || len(exts) > 0 {
 			cacheCfg.WriteString(", AllowAuthenticated: true, VaryBy: cache.CacheVaryBy{")
-			if opt.UseTenant {
-				cacheCfg.WriteString("TenantID: true")
+			if parts != "" {
+				cacheCfg.WriteString("Parts: []cache.KeyPart{" + parts + "}")
 			} else {
 				cacheCfg.WriteString("UserID: true")
 			}
@@ -344,6 +350,17 @@ func routePolicies(cfg TemplateConfig) []string {
 		policies = append(policies, "\t\tpolicy.CacheRead(m.runtime.CacheManager(), "+cacheCfg.String()+"),")
 	}
 	return policies
+}
+
+// cachePartExpr joins the enabled extensions' cache key parts.
+func cachePartExpr(exts []Extension) string {
+	var parts []string
+	for _, ext := range exts {
+		if ext.CachePart != "" {
+			parts = append(parts, ext.CachePart)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func renderDTOFile(spec ModuleSpec) string {

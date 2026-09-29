@@ -33,25 +33,23 @@ r.Handle(method, pattern, handler,
     // 1. Authentication (outermost — reject unauthenticated early, add auth context for downstream policies)
     policy.AuthRequired(authEngine, mode),
 
-    // 2. Tenant scope (after auth — needs AuthContext)
-    policy.TenantRequired(),
+    // 2. Isolation (optional — only when an optional feature provides one, for
+    //    example a hypothetical orgs.OrgRequired(); after auth — needs AuthContext)
+    orgs.OrgRequired(),
 
-    // 3. Tenant path match (optional — for routes with tenant_id in URL)
-    policy.TenantMatchFromPath("tenant_id"),
-
-    // 4. RBAC (after tenant — needs AuthContext)
+    // 3. RBAC (after isolation — needs AuthContext)
     policy.RequirePerm("project.write"),
     // or: policy.RequireAnyPerm("project.write", "project.admin"),
 
-    // 5. Rate limit (after auth — so user/tenant scope is available for keying)
+    // 4. Rate limit (after auth — so the user scope is available for keying)
     policy.RateLimit(limiter, rule),
 
-    // 6. Cache (innermost — closest to handler)
+    // 5. Cache (innermost — closest to handler)
     policy.CacheRead(cacheMgr, cacheConfig),
     // or for writes:
     policy.CacheInvalidate(cacheMgr, invalidateConfig),
 
-    // 7. Browser/proxy cache directives (optional)
+    // 6. Browser/proxy cache directives (optional)
     policy.CacheControl(policy.CacheControlConfig{Public: true, MaxAge: 60 * time.Second}),
 )
 ```
@@ -103,12 +101,15 @@ the route validates per the engine's configured `ValidationMode`; an explicit
 
 ```go
 type AuthContext struct {
-    UserID      string   // Always present on success
-    TenantID    string   // Present if user has tenant scope
-    Role        string   // "user", "admin", etc.
-    Permissions []string // e.g., ["system.whoami", "project.write"]
+    UserID      string           // Always present on success
+    Role        string           // "user", "admin", etc.
+    Permissions []string         // e.g., ["system.whoami", "project.write"]
+    Attributes  []auth.Attribute // Feature-owned values (see AuthExtension)
 }
 ```
+
+`principal.Attribute(key)` returns the value of one attribute, or `""` when no
+feature set it.
 
 Reading it in handlers/services:
 
@@ -118,6 +119,28 @@ if !ok {
     // Not authenticated (should not happen after AuthRequired policy)
 }
 ```
+
+### AuthExtension (optional features)
+
+An optional feature takes part in every `AuthRequired` policy through a
+`policy.AuthExtension`, so core never learns the feature exists:
+
+```go
+type AuthExtension struct {
+    // Adds one feature-owned principal attribute from goAuth's result
+    // (return an empty key to add none).
+    Attribute func(result *goauth.AuthResult) (key, value string)
+    // Runs after goAuth accepted the token. A non-nil error rejects the
+    // request with the same 401 as an invalid token, so a client cannot tell
+    // why it was rejected.
+    Check func(r *http.Request, result *goauth.AuthResult) error
+}
+```
+
+Features hand their extension to the app through `app.Hooks.AuthExtension`, and
+the app registers them once at startup with
+`policy.UseAuthExtensions(engine, extensions...)`. When no feature registers
+one, `AuthRequired` behaves exactly as described above.
 
 ### RequirePerm(perms...)
 
@@ -148,74 +171,66 @@ policy.RequireAnyPerm("project.write", "project.admin")
 
 ---
 
-## 3. Tenant policies
+## 3. Optional-feature policies and route rules
 
-File: `internal/core/policy/tenant.go`
+Core ships no isolation policy. An optional feature that needs one (per
+organization, per region, per plan) defines it in its own package and plugs it
+into core through the generic mechanisms below. See
+[architecture.md](architecture.md#13-optional-features) for how features are
+registered, and the feature's own `docs/removing-*.md` guide if it has one.
 
-> **Tenancy is optional (gated by `TENANCY_ENABLED`, default `false`).**
-> When tenancy is disabled, the preset chains do not default to tenant
-> scoping/keying (authenticated cache reads vary by user id instead), and the
-> route validator treats a `{tenant_id}` path segment as an ordinary parameter
-> rather than forcing `TenantRequired` + `TenantMatchFromPath` onto the route.
-> The tenant policies below are still available and enforce correctly whenever
-> you attach them explicitly; the dependency rule "`TenantMatchFromPath`
-> requires `TenantRequired`" holds regardless of the flag. When
-> `TENANCY_ENABLED=true`, `{tenant_id}` routes must carry the tenant policies.
-> To remove tenancy entirely, see docs/removing-tenancy.md.
+**Stages.** Every policy has a stage that fixes where it may appear; the route
+validator rejects a policy that appears after one of a later stage:
 
-### Tenant binding (TENANCY_ENABLED=true)
+| Stage | Constant | Built-in policies |
+|---|---|---|
+| 1 | `policy.StageAuth` | `AuthRequired` |
+| 2 | `policy.StageIsolation` | none in core; feature isolation policies go here (after auth, before RBAC) |
+| 3 | `policy.StageRBAC` | `RequirePerm`, `RequireAnyPerm` |
+| 4 | `policy.StageRateLimit` | `RateLimit`, `RateLimitWithKeyer` |
+| 5 | `policy.StageCache` | `CacheRead`, `CacheInvalidate` |
+| 6 | `policy.StageCacheControl` | `CacheControl` |
 
-With tenancy on, the tenant middleware resolves and validates the request
-tenant before routing (docs/multi-tenancy.md). `AuthRequired` then rejects any
-token whose tenant differs from the request tenant (401), in every validation
-mode, and `TenantRequired` returns 404 on the same mismatch. Routes do not need
-extra policies for this; they still need `TenantRequired` (and
-`TenantMatchFromPath` for `{tenant_id}` paths) to require a tenant-scoped
-principal.
-
-### TenantRequired()
-
-Ensures the authenticated user has a non-empty `tenant_id` in their AuthContext.
+**Annotation.** A feature policy registers its validator-visible metadata with
+`policy.Annotate(p, policy.Metadata{Type, Name, Stage, Data})`. `Stage` places
+it in the order above; `Data` carries feature-owned annotations (for example the
+path parameter the policy enforces) for route rules to read.
 
 ```go
-policy.TenantRequired()
+func OrgRequired() policy.Policy {
+    p := func(next http.Handler) http.Handler { /* reject when the principal has no org */ }
+    return policy.Annotate(p, policy.Metadata{
+        Type:  "org_required",
+        Name:  "OrgRequired",
+        Stage: policy.StageIsolation,
+    })
+}
 ```
 
-**Behavior:**
-- No AuthContext → 401 `unauthorized`
-- AuthContext present but `tenant_id` is empty → 403 `forbidden` ("tenant scope required")
-- Tenant present → passes through
+**Route rules.** A `policy.RouteRule`
+(`func(method, pattern string, metas []policy.Metadata) error`) is an extra
+check the route validator runs after the built-in ones, for example "a route
+with an `{org_id}` path segment must carry the org path-match policy".
+Features contribute rules through `app.Hooks.RouteRules`, and the router
+applies them to every route (`policy.MustValidateRouteWith`). For static
+verification a feature also calls `validator.RegisterExtension(...)` (policy
+parsers, identity cache-part names, rules, hints) from a file of its own, so
+`superapi-verify` enforces the same rules.
 
-**When to use:** For any endpoint that should only be accessible to users who belong to a tenant.
+**Principal attributes.** The values an isolation policy compares (an org id, for
+example) reach it as `AuthContext.Attributes`, added by the feature's
+`policy.AuthExtension` (see section 2).
 
-### TenantMatchFromPath(paramName)
+**Isolation mismatch strategy.** Prefer returning 404 (not 403) when a
+principal asks for a scope it does not belong to. With 403, an attacker could
+enumerate which scope ids exist by comparing 403 with 404; returning 404 for
+both "does not exist" and "exists but is not yours" closes that leak.
 
-Compares the tenant ID from the URL path parameter with the authenticated user's `tenant_id`.
-
-```go
-policy.TenantMatchFromPath("tenant_id")
-```
-
-**Behavior:**
-- No AuthContext → 401 `unauthorized`
-- Path param missing or empty → 400 `bad_request`
-- User has no `tenant_id` → 403 `forbidden`
-- User's `tenant_id` != path param value → **404 `not_found`** (intentional: prevents tenant enumeration)
-- Match → passes through
-
-**Mismatch strategy: 404 (not 403)**
-
-Returning 404 instead of 403 on tenant mismatch is a deliberate security decision. If we returned 403, an attacker could enumerate which tenant IDs exist by checking which IDs return 403 vs 404. By returning 404 for both "doesn't exist" and "exists but not yours", we prevent this information leak.
-
-**When to use:** For routes like `/api/v1/tenants/{tenant_id}/projects` where the tenant ID is in the URL and you need to verify the user belongs to that tenant.
-
-### Self-routes (alternative to TenantMatchFromPath)
-
-For routes like `/api/v1/tenants/self` where the tenant ID comes from the auth context (not the URL), use `TenantRequired()` and resolve the tenant ID in the handler:
-
-```go
-tenantID, ok := tenant.TenantIDFromContext(r.Context())
-```
+**Presets.** Core ships `policy.PublicRead(...)`. A feature builds its own
+validated presets from `policy.ResolvePreset(opts...)`,
+`PresetSettings.Require(...)` and `policy.MustValidatePreset(...)`; the options
+are the same (`policy.WithAuthEngine`, `WithLimiter`, `WithCacheManager`,
+`WithCache`, `WithCacheVaryBy`, ...).
 
 ---
 
@@ -240,30 +255,30 @@ policy.RateLimit(limiter, ratelimit.Rule{
 Rate limiting with a custom key function.
 
 ```go
-policy.RateLimitWithKeyer(limiter, "projects.list", rule, ratelimit.KeyByTenant())
+policy.RateLimitWithKeyer(limiter, "projects.list", rule, ratelimit.KeyByUser())
 ```
 
 ### Scopes and keying strategies
 
 | Scope | Constant | Key based on | When to use |
 |---|---|---|---|
-| Auto | `ScopeAuto` | User → Tenant → Token hash → Anonymous | Default. Tries the most specific scope available. |
+| Auto | `ScopeAuto` | User → Token hash → Anonymous | Default. Tries the most specific scope available. |
 | Anon | `ScopeAnon` | Static "anonymous" | Public endpoints, no identity available |
 | IP | `ScopeIP` | Resolved client IP (trusted proxy headers when configured) | Public endpoints where IP is meaningful |
 | User | `ScopeUser` | `AuthContext.UserID` | Authenticated endpoints, per-user limits |
-| Tenant | `ScopeTenant` | `AuthContext.TenantID` | Tenant-scoped endpoints, shared limit across tenant users |
 | Token | `ScopeToken` | SHA-256 hash prefix of Bearer token | When you want per-token limits (e.g., API keys) |
 
 **Built-in keyers:**
 
 - `ratelimit.KeyByIP()` — key by resolved client IP
 - `ratelimit.KeyByUser()` — key by user ID from auth context
-- `ratelimit.KeyByTenant()` — key by tenant ID from auth context
 - `ratelimit.KeyByTokenHash(prefixLen)` — key by token hash prefix
-- `ratelimit.KeyByUserOrTenantOrTokenHash(prefixLen)` — cascading: user → tenant → token → anon
+- `ratelimit.KeyByUserOrTokenHash(prefixLen)` — cascading: user → token → anon
 - `ratelimit.KeyByAnonymous()` — static "anonymous" key
 
-**Custom keyers** can be provided as `func(r *http.Request) (Scope, string)`.
+**Custom keyers** can be provided as `func(r *http.Request) (Scope, string)`. An
+optional feature uses this to add a scope of its own (a shared per-organization
+limit, for example) by exporting its own `Scope` constant and keyer.
 
 ### Key format
 
@@ -313,7 +328,7 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
         {Name: "project", PathParams: []string{"id"}},
     },
     VaryBy: cache.CacheVaryBy{
-        TenantID:    true,
+        UserID:      true,
         PathParams:  []string{"id"},
         QueryParams: []string{"limit", "cursor"},
     },
@@ -340,8 +355,8 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 |---|---|---|
 | `Name` | `string` | Base tag family name |
 | `PathParams` | `[]string` | Path params appended to tag scope |
-| `TenantID` | `bool` | Include auth tenant id in tag scope |
 | `UserID` | `bool` | Include auth user id in tag scope |
+| `Parts` | `[]cache.KeyPart` | Feature-contributed dimensions (see [cache-guide.md](cache-guide.md#key-parts)); resolving a tag whose part is empty is an error |
 | `Literals` | `[]CacheTagLiteral` | Constant key/value dimensions for scope splits |
 
 **CacheVaryBy fields:**
@@ -349,9 +364,9 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 | Field | Type | Description |
 |---|---|---|
 | `Method` | `bool` | Include HTTP method in key |
-| `TenantID` | `bool` | Include tenant ID from AuthContext |
 | `UserID` | `bool` | Include user ID from AuthContext |
 | `Role` | `bool` | Include role from AuthContext |
+| `Parts` | `[]cache.KeyPart` | Feature-contributed dimensions, each rendered `name=value` in the key (see [cache-guide.md](cache-guide.md#key-parts)) |
 | `PathParams` | `[]string` | Include named path parameters |
 | `QueryParams` | `[]string` | Include specific query parameters (hash of values) |
 | `Headers` | `[]string` | Include specific request headers |
@@ -372,7 +387,7 @@ policy.CacheRead(cacheMgr, cache.CacheReadConfig{
 For authenticated routes (those with `AuthRequired`), `CacheRead` must include at least one identity boundary:
 
 - `VaryBy.UserID = true`, or
-- `VaryBy.TenantID = true`
+- a `VaryBy.Parts` entry whose `cache.KeyPart` has `Identity: true` (a part contributed by an optional feature that names who the response is for)
 
 If neither is set, validation fails and route registration panics. `AllowAuthenticated` does not bypass this requirement.
 
@@ -390,7 +405,7 @@ Bumps versions for resolved TagSpecs after a successful write operation, causing
 policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
     TagSpecs: []cache.CacheTagSpec{
         {Name: "project", PathParams: []string{"id"}},
-        {Name: "project-list", TenantID: true},
+        {Name: "project-list", UserID: true},
     },
 })
 ```
@@ -415,7 +430,7 @@ policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
 | Cache statuses | `200` | Avoid caching error responses by default |
 | Set-Cookie handling | Skip responses with `Set-Cookie` | Prevent session and identity leakage |
 | Max body guard | `CACHE_DEFAULT_MAX_BYTES` | Avoid unbounded Redis memory usage |
-| Authenticated key isolation | Require `VaryBy.UserID` or `VaryBy.TenantID` | Prevent cross-user cache data leaks |
+| Authenticated key isolation | Require `VaryBy.UserID` or an identity-bearing `VaryBy.Parts` entry | Prevent cross-user cache data leaks |
 | Redis error handling | Fail-open in non-prod, fail-closed in prod by default | Balance availability in dev/test with safer prod posture |
 
 ---
@@ -460,7 +475,7 @@ policy.CacheControl(policy.CacheControlConfig{
 
 ### Placement guidance
 
-- Place `CacheControl(...)` after auth/tenant/rbac/rate-limit/cache policies so it applies consistently to both fresh and cached responses.
+- Place `CacheControl(...)` after auth/isolation/rbac/rate-limit/cache policies so it applies consistently to both fresh and cached responses.
 - Use conservative values for authenticated routes; avoid `public` unless the response is intentionally shared.
 
 ---
@@ -504,10 +519,10 @@ policy.Noop()
 
 The strict validator enforces:
 
-- Policy order: auth -> tenant -> RBAC -> rate-limit -> cache.
-- Auth dependency: RBAC and tenant policies require `AuthRequired`.
-- Tenant path safety: routes containing `{tenant_id}` must include `TenantRequired` and `TenantMatchFromPath("tenant_id")`.
-- Cache safety: authenticated routes using `CacheRead` must vary by user or tenant.
+- Policy order by stage: auth -> isolation -> RBAC -> rate-limit -> cache -> cache-control (see section 3).
+- Auth dependency: RBAC policies require `AuthRequired`.
+- Cache safety: authenticated routes using `CacheRead` must vary by `UserID` or an identity-bearing `VaryBy.Parts` entry.
+- Feature rules: every `policy.RouteRule` a feature registered runs after the checks above (for example, a path-parameter isolation policy required whenever the route has a matching path segment).
 
 ### Static verification
 
@@ -521,20 +536,17 @@ make verify
 
 Use built-in validated presets when possible:
 
-- `policy.TenantRead(...)`
-- `policy.TenantWrite(...)`
 - `policy.PublicRead(...)`
+- feature presets, when an optional feature ships them (built from `policy.ResolvePreset`, see section 3)
 
 Example:
 
 ```go
-r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
-    policy.TenantRead(
-        policy.WithAuthEngine(authEngine, auth.ModeStrict),
+r.Handle(http.MethodGet, "/api/v1/public/resource", handler,
+    policy.PublicRead(
         policy.WithLimiter(limiter),
         policy.WithCacheManager(cacheMgr),
-        policy.WithCache(30*time.Second, cache.CacheTagSpec{Name: "project", PathParams: []string{"id"}}),
-        policy.WithCacheVaryBy(cache.CacheVaryBy{TenantID: true, PathParams: []string{"id"}}),
+        policy.WithCache(30*time.Second, cache.CacheTagSpec{Name: "resource"}),
     )...,
 )
 ```
@@ -561,9 +573,9 @@ r.Handle(http.MethodGet, "/api/v1/status", handler,
 Policies:
 - Rate limit by IP (no auth context available)
 - CacheRead if safe (no user-specific data)
-- No auth or tenant policies
+- No auth or isolation policies
 
-### Authenticated route (no tenant)
+### Authenticated route
 
 Example: `GET /api/v1/auth/whoami`
 
@@ -572,31 +584,30 @@ r.Handle(http.MethodGet, "/api/v1/auth/whoami", handler,
     policy.AuthRequired(authEngine, mode),
     policy.RateLimitWithKeyer(limiter, "whoami", ratelimit.Rule{
         Limit: 30, Window: time.Minute, Scope: ratelimit.ScopeUser,
-    }, ratelimit.KeyByUserOrTenantOrTokenHash(16)),
+    }, ratelimit.KeyByUserOrTokenHash(16)),
 )
 ```
 
 Policies:
 - AuthRequired (hybrid or strict)
 - Rate limit by user/token (auth context available after AuthRequired)
-- CacheRead only when `VaryBy.UserID` or `VaryBy.TenantID` is set
+- CacheRead only when `VaryBy.UserID` (or an identity-bearing `VaryBy.Parts` entry) is set
 
-### Tenant-scoped read route
+### Authenticated, cached read route
 
 Example: `GET /api/v1/projects/{id}`
 
 ```go
 r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
     policy.AuthRequired(authEngine, auth.ModeStrict),
-    policy.TenantRequired(),
-    policy.RateLimitWithKeyer(limiter, "projects.get", rule, ratelimit.KeyByTenant()),
+    policy.RateLimitWithKeyer(limiter, "projects.get", rule, ratelimit.KeyByUser()),
     policy.CacheRead(cacheMgr, cache.CacheReadConfig{
-        TTL:                30 * time.Second,
+        TTL: 30 * time.Second,
         TagSpecs: []cache.CacheTagSpec{
             {Name: "project", PathParams: []string{"id"}},
         },
         VaryBy: cache.CacheVaryBy{
-            TenantID:   true,
+            UserID:     true,
             PathParams: []string{"id"},
         },
     }),
@@ -604,24 +615,22 @@ r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
 ```
 
 Policies:
-- AuthRequired strict (recommended for tenant data)
-- TenantRequired
-- Rate limit by tenant
-- CacheRead with tenant + path param vary
+- AuthRequired strict (recommended for user data)
+- Rate limit by user
+- CacheRead with user + path param vary
 
-### Tenant-scoped write route
+### Authenticated write route
 
 Example: `POST /api/v1/projects`
 
 ```go
 r.Handle(http.MethodPost, "/api/v1/projects", handler,
     policy.AuthRequired(authEngine, auth.ModeStrict),
-    policy.TenantRequired(),
     policy.RequirePerm("project.write"),
-    policy.RateLimitWithKeyer(limiter, "projects.create", rule, ratelimit.KeyByTenant()),
+    policy.RateLimitWithKeyer(limiter, "projects.create", rule, ratelimit.KeyByUser()),
     policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
         TagSpecs: []cache.CacheTagSpec{
-            {Name: "project-list", TenantID: true},
+            {Name: "project-list", UserID: true},
         },
     }),
 )
@@ -629,25 +638,42 @@ r.Handle(http.MethodPost, "/api/v1/projects", handler,
 
 Policies:
 - AuthRequired strict
-- TenantRequired
 - RequirePerm for write permission
-- Rate limit by tenant
+- Rate limit by user
 - CacheInvalidate to bump project-list scope
 
-### Tenant-scoped delete route
+### Authenticated delete route
 
 Example: `DELETE /api/v1/projects/{id}`
 
 ```go
 r.Handle(http.MethodDelete, "/api/v1/projects/{id}", handler,
     policy.AuthRequired(authEngine, auth.ModeStrict),
-    policy.TenantRequired(),
     policy.RequirePerm("project.delete"),
     policy.CacheInvalidate(cacheMgr, cache.CacheInvalidateConfig{
         TagSpecs: []cache.CacheTagSpec{
             {Name: "project", PathParams: []string{"id"}},
-            {Name: "project-list", TenantID: true},
+            {Name: "project-list", UserID: true},
         },
+    }),
+)
+```
+
+### With an optional isolation feature
+
+A feature that scopes data adds its isolation policy right after
+`AuthRequired`, and its cache key part to the `VaryBy` and tag specs. With the
+hypothetical `orgs` feature used in [cache-guide.md](cache-guide.md#key-parts):
+
+```go
+r.Handle(http.MethodGet, "/api/v1/projects/{id}", handler,
+    policy.AuthRequired(authEngine, auth.ModeStrict),
+    orgs.OrgRequired(),
+    policy.RateLimitWithKeyer(limiter, "projects.get", rule, orgs.KeyByOrg()),
+    policy.CacheRead(cacheMgr, cache.CacheReadConfig{
+        TTL:      30 * time.Second,
+        TagSpecs: []cache.CacheTagSpec{{Name: "project", PathParams: []string{"id"}}},
+        VaryBy:   cache.CacheVaryBy{Parts: []cache.KeyPart{orgs.CacheVary()}, PathParams: []string{"id"}},
     }),
 )
 ```
@@ -674,11 +700,11 @@ r.Handle(method, pattern, handler,
 // BAD — all authenticated users share the same cache entry
 policy.CacheRead(cacheMgr, cache.CacheReadConfig{
     TTL: 30 * time.Second,
-    // No VaryBy.TenantID or VaryBy.UserID!
+    // No VaryBy.UserID or identity-bearing VaryBy.Parts entry!
 })
 ```
 
-This is now a fail-fast configuration error. Authenticated routes require `VaryBy.TenantID` or `VaryBy.UserID`.
+This is now a fail-fast configuration error. Authenticated routes require `VaryBy.UserID` or an identity-bearing `VaryBy.Parts` entry.
 
 ### Rate limiting before auth on user-scoped routes
 
@@ -694,16 +720,16 @@ r.Handle(method, pattern, handler,
 
 ### Forgetting CacheInvalidate on write routes
 
-If you cache `GET /api/v1/projects` with `TagSpecs: [{Name:"project-list", TenantID:true}]` but forget to add matching `CacheInvalidate` tag specs on writes, list cache stays stale until TTL expires.
+If you cache `GET /api/v1/projects` with `TagSpecs: [{Name:"project-list", UserID:true}]` but forget to add matching `CacheInvalidate` tag specs on writes, list cache stays stale until TTL expires.
 
-### Using TenantMatchFromPath with wrong param name
+### Naming the wrong path parameter in a path-match policy
 
 ```go
-// Route: /api/v1/tenants/{id}
-policy.TenantMatchFromPath("tenant_id")  // WRONG — param is "id", not "tenant_id"
+// Route: /api/v1/orgs/{id}
+orgs.OrgMatchFromPath("org_id")  // WRONG — param is "id", not "org_id"
 ```
 
-**Fix:** Match the chi path parameter name exactly.
+**Fix:** Match the chi path parameter name exactly. This applies to any feature policy that reads a path parameter.
 
 ### Empty permission lists
 
@@ -717,7 +743,7 @@ Both constructors require at least one non-empty permission and panic on invalid
 
 ## 11. Required configuration by policy
 
-### 11.1 Auth / Tenant / RBAC
+### 11.1 Auth / RBAC
 
 Required environment:
 
@@ -762,5 +788,6 @@ When adding a new policy:
 3. Use typed app error codes from `internal/core/errors/errors.go`.
 4. Add focused tests under `internal/core/policy/*_test.go`.
 5. Document required env/config and exact failure behavior in this file.
+6. A policy that an optional feature owns lives in the feature's package, is registered with `policy.Annotate` (with a `Stage`), and is documented in the feature's own guide instead of here.
 
 This keeps the template copy-paste friendly and production-safe by default.

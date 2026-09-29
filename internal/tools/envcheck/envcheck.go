@@ -3,8 +3,10 @@
 //
 // It parses Go source (not text, so commented-out examples do not count) and
 // collects the string-literal first argument of known env readers such as
-// getenv/getBool (config), envBool/envCSV (auth) and os.Getenv/os.LookupEnv.
-// superapi-verify runs it so an undocumented variable fails CI.
+// getenv/getBool (config), envBool/envCSV (auth), the exported config.Env*
+// readers optional features use for their own settings, and
+// os.Getenv/os.LookupEnv. superapi-verify runs it so an undocumented variable
+// fails CI.
 package envcheck
 
 import (
@@ -27,20 +29,22 @@ var readers = map[string]bool{
 	"getenv": true, "getBool": true, "getInt": true, "getInt32": true, "getInt64": true,
 	"getDuration": true, "getFloat64": true, "getCSV": true,
 	"envBool": true, "envCSV": true, "envDuration": true,
+	"EnvString": true, "EnvBool": true, "EnvInt": true, "EnvDuration": true, "EnvCSV": true,
 	"Getenv": true, "LookupEnv": true,
 }
 
-// exampleExempt lists keys intentionally absent from .env.example (still
-// required in the docs).
-var exampleExempt = map[string]string{
-	"TENANCY_ENFORCE_ISOLATION": "deprecated and ignored; documented only",
-}
+// deprecatedReaders are call names for keys that are deprecated and ignored:
+// they must be documented in docs/environment-variables.md but are
+// intentionally absent from .env.example.
+var deprecatedReaders = map[string]bool{"EnvDeprecated": true}
 
 var keyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
 
 // Result lists variables read by code but missing from each document.
 type Result struct {
-	Keys           []string
+	Keys []string
+	// Deprecated lists the keys read through config.EnvDeprecated.
+	Deprecated     []string
 	MissingExample []string
 	MissingDocs    []string
 }
@@ -62,7 +66,7 @@ func (r Result) Problems() []string {
 
 // Check scans root (the repository root) and compares against its docs.
 func Check(root string) (Result, error) {
-	keys, err := CollectKeys(root)
+	keys, deprecated, err := collect(root)
 	if err != nil {
 		return Result{}, err
 	}
@@ -76,8 +80,12 @@ func Check(root string) (Result, error) {
 	}
 
 	res := Result{Keys: keys}
+	for k := range deprecated {
+		res.Deprecated = append(res.Deprecated, k)
+	}
+	sort.Strings(res.Deprecated)
 	for _, k := range keys {
-		if _, exempt := exampleExempt[k]; !exempt && !example[k] {
+		if !deprecated[k] && !example[k] {
 			res.MissingExample = append(res.MissingExample, k)
 		}
 		if !docs[k] {
@@ -89,7 +97,15 @@ func Check(root string) (Result, error) {
 
 // CollectKeys returns every env key read by non-test Go files under root.
 func CollectKeys(root string) ([]string, error) {
-	seen := map[string]bool{}
+	keys, _, err := collect(root)
+	return keys, err
+}
+
+// collect returns every key read and the subset that is only ever read as
+// deprecated (never as a live setting).
+func collect(root string) ([]string, map[string]bool, error) {
+	live := map[string]bool{}
+	dead := map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -104,20 +120,31 @@ func CollectKeys(root string) ([]string, error) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		return collectFile(path, seen)
+		return collectFile(path, live, dead)
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	seen := map[string]bool{}
+	for k := range live {
+		seen[k] = true
+	}
+	deprecated := map[string]bool{}
+	for k := range dead {
+		seen[k] = true
+		if !live[k] {
+			deprecated[k] = true
+		}
 	}
 	keys := make([]string, 0, len(seen))
 	for k := range seen {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	return keys, nil
+	return keys, deprecated, nil
 }
 
-func collectFile(path string, seen map[string]bool) error {
+func collectFile(path string, live, dead map[string]bool) error {
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 	if err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
@@ -134,7 +161,12 @@ func collectFile(path string, seen map[string]bool) error {
 		case *ast.SelectorExpr:
 			name = fn.Sel.Name
 		}
-		if !readers[name] {
+		into := live
+		switch {
+		case readers[name]:
+		case deprecatedReaders[name]:
+			into = dead
+		default:
 			return true
 		}
 		lit, ok := call.Args[0].(*ast.BasicLit)
@@ -142,7 +174,7 @@ func collectFile(path string, seen map[string]bool) error {
 			return true
 		}
 		if key, err := strconv.Unquote(lit.Value); err == nil && keyPattern.MatchString(key) {
-			seen[key] = true
+			into[key] = true
 		}
 		return true
 	})

@@ -29,12 +29,6 @@ func PublicRead(opts ...PresetOption) []Policy {
 	return policies
 }
 
-func requireAuthEngine(name string, cfg presetConfig) {
-	if cfg.authEngine == nil {
-		panicInvalidRouteConfigf("%s preset requires WithAuthEngine(engine, mode)", name)
-	}
-}
-
 func requireLimiter(name string, cfg presetConfig) {
 	if cfg.limiter == nil {
 		panicInvalidRouteConfigf("%s preset requires WithLimiter(limiter)", name)

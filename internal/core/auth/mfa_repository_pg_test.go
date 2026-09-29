@@ -19,7 +19,7 @@ func TestMFARepositorySQL(t *testing.T) {
 	mfa := NewMFARepository(pg)
 	ctx := context.Background()
 
-	u, err := users.Create(ctx, CreateStoredUserInput{TenantID: "tenant-a", Identifier: "mfa@example.com", PasswordHash: "h", Status: "active"})
+	u, err := users.Create(ctx, CreateStoredUserInput{Identifier: "mfa@example.com", PasswordHash: "h", Status: "active"})
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -35,41 +35,42 @@ func TestMFARepositorySQL(t *testing.T) {
 	}
 
 	// Setup stores an unverified secret: TOTP stays off, version unchanged.
-	if err := mfa.UpsertTOTPSecret(ctx, "tenant-a", u.ID, []byte("cipher-1")); err != nil {
+	if err := mfa.UpsertTOTPSecret(ctx, u.ID, []byte("cipher-1")); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 	if v, on := version(); v != 1 || on {
 		t.Fatalf("after setup: version=%d enabled=%v", v, on)
 	}
-	// Other tenant cannot touch it.
-	if err := mfa.UpsertTOTPSecret(ctx, "tenant-b", u.ID, []byte("evil")); !errors.Is(err, ErrAuthUserNotFound) {
-		t.Fatalf("cross-tenant upsert err=%v", err)
+	// A user that does not exist cannot be given a secret or read back.
+	const missing = "00000000-0000-0000-0000-000000000000"
+	if err := mfa.UpsertTOTPSecret(ctx, missing, []byte("evil")); !errors.Is(err, ErrAuthUserNotFound) {
+		t.Fatalf("missing-user upsert err=%v", err)
 	}
-	if _, found, _ := mfa.GetTOTP(ctx, "tenant-b", u.ID); found {
-		t.Fatal("cross-tenant GetTOTP must not find the record")
+	if _, found, _ := mfa.GetTOTP(ctx, missing); found {
+		t.Fatal("missing-user GetTOTP must not find a record")
 	}
 
 	// Verify, then enable: version advances exactly once.
-	if err := mfa.MarkTOTPVerified(ctx, "tenant-a", u.ID); err != nil {
+	if err := mfa.MarkTOTPVerified(ctx, u.ID); err != nil {
 		t.Fatalf("mark verified: %v", err)
 	}
-	if err := mfa.UpsertTOTPSecret(ctx, "tenant-a", u.ID, []byte("cipher-1")); err != nil {
+	if err := mfa.UpsertTOTPSecret(ctx, u.ID, []byte("cipher-1")); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 	if v, on := version(); v != 2 || !on {
 		t.Fatalf("after enable: version=%d enabled=%v", v, on)
 	}
-	state, found, err := mfa.GetTOTP(ctx, "", u.ID)
+	state, found, err := mfa.GetTOTP(ctx, u.ID)
 	if err != nil || !found || !state.Verified || !state.Enabled || string(state.SecretCiphertext) != "cipher-1" {
 		t.Fatalf("state=%+v found=%v err=%v", state, found, err)
 	}
 
 	// Counter only moves forward.
-	if err := mfa.AdvanceTOTPCounter(ctx, "tenant-a", u.ID, 10); err != nil {
+	if err := mfa.AdvanceTOTPCounter(ctx, u.ID, 10); err != nil {
 		t.Fatalf("advance: %v", err)
 	}
 	for _, c := range []int64{10, 9} {
-		if err := mfa.AdvanceTOTPCounter(ctx, "tenant-a", u.ID, c); !errors.Is(err, ErrTOTPCounterNotAdvanced) {
+		if err := mfa.AdvanceTOTPCounter(ctx, u.ID, c); !errors.Is(err, ErrTOTPCounterNotAdvanced) {
 			t.Fatalf("counter %d: err=%v want ErrTOTPCounterNotAdvanced", c, err)
 		}
 	}
@@ -77,17 +78,17 @@ func TestMFARepositorySQL(t *testing.T) {
 	// Backup codes: replace, single use under concurrency, replace again.
 	// ReplaceBackupCodes is two statements and must run in the caller's
 	// transaction.
-	replace := func(tenantID string, hashes ...[32]byte) error {
+	replace := func(userID string, hashes ...[32]byte) error {
 		return pg.WithTx(ctx, func(ctx context.Context) error {
-			return mfa.ReplaceBackupCodes(ctx, tenantID, u.ID, hashes)
+			return mfa.ReplaceBackupCodes(ctx, userID, hashes)
 		})
 	}
 	h1, h2 := sha256.Sum256([]byte("code-1")), sha256.Sum256([]byte("code-2"))
-	if err := replace("tenant-a", h1, h2); err != nil {
+	if err := replace(u.ID, h1, h2); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
-	if err := replace("tenant-b", h1); !errors.Is(err, ErrAuthUserNotFound) {
-		t.Fatalf("cross-tenant replace err=%v", err)
+	if err := replace(missing, h1); !errors.Is(err, ErrAuthUserNotFound) {
+		t.Fatalf("missing-user replace err=%v", err)
 	}
 	var wins atomic.Int32
 	var wg sync.WaitGroup
@@ -95,7 +96,7 @@ func TestMFARepositorySQL(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ok, err := mfa.ConsumeBackupCode(ctx, "tenant-a", u.ID, h1)
+			ok, err := mfa.ConsumeBackupCode(ctx, u.ID, h1)
 			if err != nil {
 				t.Errorf("consume: %v", err)
 			}
@@ -108,34 +109,34 @@ func TestMFARepositorySQL(t *testing.T) {
 	if wins.Load() != 1 {
 		t.Fatalf("backup code consumed %d times, want exactly 1", wins.Load())
 	}
-	if ok, _ := mfa.ConsumeBackupCode(ctx, "tenant-b", u.ID, h2); ok {
-		t.Fatal("cross-tenant consume succeeded")
+	if ok, _ := mfa.ConsumeBackupCode(ctx, missing, h2); ok {
+		t.Fatal("missing-user consume succeeded")
 	}
-	codes, err := mfa.ListUnusedBackupCodes(ctx, "tenant-a", u.ID)
+	codes, err := mfa.ListUnusedBackupCodes(ctx, u.ID)
 	if err != nil || len(codes) != 1 || codes[0] != h2 {
 		t.Fatalf("unused codes=%v err=%v", codes, err)
 	}
-	if err := replace("tenant-a", h1, h2); err != nil {
+	if err := replace(u.ID, h1, h2); err != nil {
 		t.Fatalf("replace again (reusing hashes): %v", err)
 	}
-	if codes, _ := mfa.ListUnusedBackupCodes(ctx, "tenant-a", u.ID); len(codes) != 2 {
+	if codes, _ := mfa.ListUnusedBackupCodes(ctx, u.ID); len(codes) != 2 {
 		t.Fatalf("after replace: %d codes", len(codes))
 	}
 
 	// Disable removes secret and codes, clears the flag, advances version.
-	if err := mfa.DisableTOTP(ctx, "tenant-b", u.ID); !errors.Is(err, ErrAuthUserNotFound) {
-		t.Fatalf("cross-tenant disable err=%v", err)
+	if err := mfa.DisableTOTP(ctx, missing); !errors.Is(err, ErrAuthUserNotFound) {
+		t.Fatalf("missing-user disable err=%v", err)
 	}
-	if err := mfa.DisableTOTP(ctx, "tenant-a", u.ID); err != nil {
+	if err := mfa.DisableTOTP(ctx, u.ID); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	if v, on := version(); v != 3 || on {
 		t.Fatalf("after disable: version=%d enabled=%v", v, on)
 	}
-	if _, found, _ := mfa.GetTOTP(ctx, "", u.ID); found {
+	if _, found, _ := mfa.GetTOTP(ctx, u.ID); found {
 		t.Fatal("secret must be gone")
 	}
-	if codes, _ := mfa.ListUnusedBackupCodes(ctx, "", u.ID); len(codes) != 0 {
+	if codes, _ := mfa.ListUnusedBackupCodes(ctx, u.ID); len(codes) != 0 {
 		t.Fatalf("backup codes must be gone, got %d", len(codes))
 	}
 

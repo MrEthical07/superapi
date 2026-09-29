@@ -133,3 +133,34 @@ func TestAssembleGlobalMiddleware_RequestTimeout(t *testing.T) {
 		t.Fatalf("missing X-Request-Id header")
 	}
 }
+
+// Feature middleware sits innermost, just before routing: it sees the request
+// id and client IP set by the outer layers, and the first one listed is the
+// outermost of the feature layers.
+func TestAssembleGlobalMiddleware_FeatureMiddlewarePosition(t *testing.T) {
+	var order []string
+	tag := func(name string) func(http.Handler) http.Handler {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				order = append(order, name)
+				if name == "first" && r.Header.Get("X-Request-Id") == "" && w.Header().Get("X-Request-Id") == "" {
+					t.Error("feature middleware must run after RequestID")
+				}
+				next.ServeHTTP(w, r)
+			})
+		}
+	}
+	base := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		order = append(order, "route")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	h := AssembleGlobalMiddleware(base, config.HTTPMiddlewareConfig{RequestIDEnabled: true}, testLogger(t), nil,
+		WithFeatureMiddleware(tag("first"), nil, tag("second")))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := strings.Join(order, ","); got != "first,second,route" {
+		t.Fatalf("order = %s, want first,second,route", got)
+	}
+}

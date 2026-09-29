@@ -122,8 +122,8 @@ goAuth-driven writes that need more than one statement the provider is the
 service boundary. It is given a `TxRunner` (`*storage.Postgres`, via
 `WithTx(deps.DB)`) and wraps the repository call in `WithTx`. The one such
 write today is `ReplaceBackupCodes`: a delete followed by an insert, two
-statements because the `(user_id, code_hash)` unique constraint (migration
-000008) rejects re-inserting a hash that the same statement deletes. The
+statements because the `(user_id, code_hash)` unique constraint
+(`user_backup_codes_user_code_unique` in the baseline migration) rejects re-inserting a hash that the same statement deletes. The
 repository never starts the transaction: `sqlcMFARepository.ReplaceBackupCodes`
 checks `storage.Postgres.InTx(ctx)` and returns `ErrTransactionRequired`
 outside one, so a wiring mistake fails loudly instead of losing a user's backup

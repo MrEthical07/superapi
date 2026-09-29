@@ -22,8 +22,9 @@ make user email=admin@example.com role=admin
 - With `AUTH_EMAIL_VERIFICATION_ENABLED=true` the account is activated
   immediately (the operator vouches for the address); pass
   `--require-verification` to `go run ./cmd/createuser` to leave it pending.
-- With `TENANCY_ENABLED=true`, `tenant=acme` is required; `create_tenant=1`
-  creates the tenant row if it does not exist.
+- Extra flags are passed straight through: `make user email=... flags="--require-verification"`.
+  Optional features can add their own flags to `createuser` (they show up in
+  `go run ./cmd/createuser --help` when the feature is present).
 - goAuth's password policy applies; a duplicate email is reported as such.
 
 Direct invocation: `go run ./cmd/createuser --help`. Container image:
@@ -31,30 +32,45 @@ Direct invocation: `go run ./cmd/createuser --help`. Container image:
 
 ## 2. The users schema
 
-Migrations `000003_auth_users`, `000005_users_tenant`, `000006_auth_mfa` and
-`000007_users_email_ci`
-(mirrored in `db/schema/auth_users.sql` and `db/schema/auth_mfa.sql`):
+The template ships two migrations in `db/migrations/`:
+
+- `000001_init` is the baseline: `users`, the TOTP and backup-code tables, and
+  the WebAuthn credentials table.
+- `000002_*` is optional. It belongs to an optional feature (see
+  [trim-to-what-you-need.md](trim-to-what-you-need.md)), adds that feature's
+  tables and columns, and is deleted together with the feature when it is
+  pruned.
+
+Both are yours to edit freely until your project's first deployment (reshape
+`users`, add columns, drop what you do not need). After the first deployment
+migrations are append-only: add a new numbered file with
+`make migrate-create NAME=...`.
+
+The baseline is mirrored for sqlc in `db/schema/auth_users.sql`,
+`db/schema/auth_mfa.sql` and `db/schema/webauthn_credentials.sql`. The `users`
+table:
 
 | Column | Purpose |
 |---|---|
 | `id UUID` | user id (goAuth `UserID`) |
-| `email TEXT UNIQUE` | login identifier, stored lower-case (unique on `lower(email)`; globally unique by default; see [multi-tenancy.md](multi-tenancy.md#6-identifier-uniqueness-a-schema-decision)) |
+| `email TEXT` | login identifier, always lower-case: `CHECK (email = lower(email))` plus a unique index on `lower(email)` (one account per address) |
 | `password_hash TEXT` | Argon2id hash produced by goAuth |
 | `role TEXT` | role name from `roles.go` |
 | `permissions BIGINT` | reserved (permissions come from the role registry) |
 | `status TEXT` | `active`, `pending_verification`, `disabled`, `locked`, `deleted` |
-| `tenant_id TEXT` | owning tenant; `'0'` is goAuth's default tenant |
 | `account_version INT` | advanced on status/TOTP changes; revokes older sessions |
 | `totp_enabled BOOL` | whether login requires a TOTP second factor |
 | `created_at`, `updated_at` | timestamps |
 
+The core schema has no scoping column: accounts are global. An optional
+feature that scopes accounts adds its column in its own migration.
+
 Related tables: `user_totp` (AES-256-GCM encrypted secret, verified flag,
 last used counter), `user_backup_codes` (SHA-256 hashes, `used_at`, unique per
-`(user_id, code_hash)` since migration 000008),
-`webauthn_credentials` (migration 000004), `tenants` (000002).
+`(user_id, code_hash)`) and `webauthn_credentials`.
 
-All migrations are applied by `make migrate-up`. The WebAuthn, tenancy and MFA
-tables are inert until their feature is enabled.
+`make migrate-up` applies everything. The WebAuthn and TOTP tables are inert
+until their feature is enabled (`WEBAUTHN_ENABLED`, `AUTH_TOTP_ENABLED`).
 
 Queries live in `db/queries/auth_users.sql` and `db/queries/auth_mfa.sql`;
 regenerate with `make sqlc-generate`. Never edit `internal/core/db/sqlcgen/`.

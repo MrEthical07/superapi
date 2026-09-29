@@ -22,7 +22,7 @@ func TestRPIDLintMatchesGoAuth(t *testing.T) {
 	}
 	for _, id := range ids {
 		t.Run(id, func(t *testing.T) {
-			cfg, err := ProjectGoAuthConfig(ModeStrict, TenancySettings{}, Features{})
+			cfg, err := ProjectGoAuthConfig(ModeStrict, Features{})
 			if err != nil {
 				t.Fatalf("ProjectGoAuthConfig: %v", err)
 			}

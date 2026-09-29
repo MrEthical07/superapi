@@ -33,7 +33,7 @@ func TestCacheReadMissThenHitReturnsSameBodyAndContentType(t *testing.T) {
 
 	calls := 0
 	r := chi.NewRouter()
-	r.Get("/api/v1/tenants/{id}", Chain(
+	r.Get("/api/v1/things/{id}", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -48,11 +48,11 @@ func TestCacheReadMissThenHitReturnsSameBodyAndContentType(t *testing.T) {
 		}),
 	).ServeHTTP)
 
-	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil)
 	rr1 := httptest.NewRecorder()
 	r.ServeHTTP(rr1, req1)
 
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil)
 	rr2 := httptest.NewRecorder()
 	r.ServeHTTP(rr2, req2)
 
@@ -76,7 +76,7 @@ func TestCacheReadBypassesLargeResponses(t *testing.T) {
 
 	calls := 0
 	r := chi.NewRouter()
-	r.Get("/api/v1/tenants/{id}", Chain(
+	r.Get("/api/v1/things/{id}", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
 			w.WriteHeader(http.StatusOK)
@@ -91,8 +91,8 @@ func TestCacheReadBypassesLargeResponses(t *testing.T) {
 		}),
 	).ServeHTTP)
 
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil))
 
 	if calls != 2 {
 		t.Fatalf("handler calls=%d want=2 (large response should bypass cache)", calls)
@@ -105,7 +105,7 @@ func TestCacheReadBypassesSetCookieResponses(t *testing.T) {
 
 	calls := 0
 	r := chi.NewRouter()
-	r.Get("/api/v1/tenants/{id}", Chain(
+	r.Get("/api/v1/things/{id}", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
 			w.Header().Set("Set-Cookie", "session=abc")
@@ -115,20 +115,20 @@ func TestCacheReadBypassesSetCookieResponses(t *testing.T) {
 		CacheRead(mgr, cache.CacheReadConfig{TTL: 30 * time.Second, VaryBy: cache.CacheVaryBy{PathParams: []string{"id"}}}),
 	).ServeHTTP)
 
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil))
 
 	if calls != 2 {
 		t.Fatalf("handler calls=%d want=2 (set-cookie should bypass cache)", calls)
 	}
 }
 
-func TestCacheReadAuthSafetyPanicsWithoutUserOrTenantVary(t *testing.T) {
+func TestCacheReadAuthSafetyPanicsWithoutIdentityVary(t *testing.T) {
 	mr := miniredis.RunT(t)
 	mgr := newCacheManagerForPolicyTests(t, mr.Addr(), true)
 
 	r := chi.NewRouter()
-	r.Get("/api/v1/tenants/{id}", Chain(
+	r.Get("/api/v1/things/{id}", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
@@ -136,8 +136,8 @@ func TestCacheReadAuthSafetyPanicsWithoutUserOrTenantVary(t *testing.T) {
 		CacheRead(mgr, cache.CacheReadConfig{TTL: 30 * time.Second, VaryBy: cache.CacheVaryBy{PathParams: []string{"id"}}}),
 	).ServeHTTP)
 
-	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
-	req1 = req1.WithContext(auth.WithContext(req1.Context(), auth.AuthContext{UserID: "u1", TenantID: "t1"}))
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil)
+	req1 = req1.WithContext(auth.WithContext(req1.Context(), auth.AuthContext{UserID: "u1"}))
 
 	defer func() {
 		recovered := recover()
@@ -157,7 +157,7 @@ func TestCacheReadAuthVaryByUserProducesDifferentEntries(t *testing.T) {
 	mgr := newCacheManagerForPolicyTests(t, mr.Addr(), true)
 
 	r := chi.NewRouter()
-	r.Get("/api/v1/tenants/{id}", Chain(
+	r.Get("/api/v1/things/{id}", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, _ := auth.FromContext(r.Context())
 			w.WriteHeader(http.StatusOK)
@@ -172,12 +172,12 @@ func TestCacheReadAuthVaryByUserProducesDifferentEntries(t *testing.T) {
 		}),
 	).ServeHTTP)
 
-	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil)
 	req1 = req1.WithContext(auth.WithContext(req1.Context(), auth.AuthContext{UserID: "u1"}))
 	rr1 := httptest.NewRecorder()
 	r.ServeHTTP(rr1, req1)
 
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil)
 	req2 = req2.WithContext(auth.WithContext(req2.Context(), auth.AuthContext{UserID: "u2"}))
 	rr2 := httptest.NewRecorder()
 	r.ServeHTTP(rr2, req2)
@@ -194,7 +194,7 @@ func TestCacheInvalidateBumpsTagVersionForcesMiss(t *testing.T) {
 	getCalls := 0
 
 	r := chi.NewRouter()
-	r.Get("/api/v1/tenants/{id}", Chain(
+	r.Get("/api/v1/things/{id}", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			getCalls++
 			w.WriteHeader(http.StatusOK)
@@ -202,27 +202,27 @@ func TestCacheInvalidateBumpsTagVersionForcesMiss(t *testing.T) {
 		}),
 		CacheRead(mgr, cache.CacheReadConfig{
 			TTL:      time.Minute,
-			TagSpecs: []cache.CacheTagSpec{{Name: "tenant"}},
+			TagSpecs: []cache.CacheTagSpec{{Name: "thing"}},
 			VaryBy:   cache.CacheVaryBy{PathParams: []string{"id"}},
 		}),
 	).ServeHTTP)
 
-	r.Post("/api/v1/tenants", Chain(
+	r.Post("/api/v1/things", Chain(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		}),
-		CacheInvalidate(mgr, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{{Name: "tenant"}}}),
+		CacheInvalidate(mgr, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{{Name: "thing"}}}),
 	).ServeHTTP)
 
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil))
 	if getCalls != 1 {
 		t.Fatalf("get calls=%d want=1 after warm cache", getCalls)
 	}
 
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/tenants", nil))
-	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/things", nil))
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil))
 
 	if getCalls != 2 {
 		t.Fatalf("get calls=%d want=2 after invalidate", getCalls)
@@ -242,7 +242,7 @@ func TestCacheReadFailOpenOnRedisError(t *testing.T) {
 	)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil)
 	h.ServeHTTP(rr, req)
 
 	if !called {
@@ -266,7 +266,7 @@ func TestCacheReadFailClosedOnRedisError(t *testing.T) {
 	)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/t1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/things/t1", nil)
 	h.ServeHTTP(rr, req)
 
 	if called {
@@ -288,21 +288,21 @@ func TestCacheInvalidateNoopWithoutSuccessStatus(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 		}),
-		CacheInvalidate(mgr, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{{Name: "tenant", PathParams: []string{"id"}}}}),
+		CacheInvalidate(mgr, cache.CacheInvalidateConfig{TagSpecs: []cache.CacheTagSpec{{Name: "thing", PathParams: []string{"id"}}}}),
 	)
 
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/tenants", nil))
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/v1/things", nil))
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want=%d", rr.Code, http.StatusBadRequest)
 	}
 
-	token, err := mgr.TagVersionToken(context.Background(), []string{"tenant"})
+	token, err := mgr.TagVersionToken(context.Background(), []string{"thing"})
 	if err != nil {
 		t.Fatalf("TagVersionToken() error = %v", err)
 	}
-	if token != "tenant=0" {
-		t.Fatalf("token=%q want=%q", token, "tenant=0")
+	if token != "thing=0" {
+		t.Fatalf("token=%q want=%q", token, "thing=0")
 	}
 }
 

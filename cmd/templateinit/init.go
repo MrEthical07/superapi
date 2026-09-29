@@ -80,10 +80,19 @@ func Run(opts Options) (Result, error) {
 	// 1. Delete pruned features (and the init tool itself).
 	var toDelete []string
 	sqlTouched := false
+	regenRequired := false
 	for _, f := range features {
 		if opts.Prune[f.Marker] {
 			toDelete = append(toDelete, f.Paths...)
+			if f.NameContains != "" {
+				named, err := findNamed(root, f.NameContains)
+				if err != nil {
+					return res, err
+				}
+				toDelete = append(toDelete, named...)
+			}
 			sqlTouched = sqlTouched || f.TouchesSQL
+			regenRequired = regenRequired || f.SQLRegenRequired
 		}
 	}
 	if !opts.KeepInit {
@@ -162,6 +171,7 @@ func Run(opts Options) (Result, error) {
 		res.Notes = append(res.Notes, "LICENSE copyright holder left as a TODO (pass --copyright)")
 	}
 	res.Notes = append(res.Notes, "SECURITY.md contact left as a TODO: add your security contact")
+	regenFailed := false
 
 	if !opts.DryRun && !opts.SkipPostSteps {
 		if newModule != oldModule || len(res.Deleted) > 0 {
@@ -170,12 +180,14 @@ func Run(opts Options) (Result, error) {
 			}
 		}
 		if sqlTouched {
-			if sqlc := findSQLC(); sqlc != "" {
+			if sqlc := sqlcFinder(); sqlc != "" {
 				if err := runCmd(opts, root, sqlc, "generate"); err != nil {
 					res.Notes = append(res.Notes, "sqlc generate failed: "+err.Error()+" (run make sqlc-generate)")
+					regenFailed = true
 				}
 			} else {
 				res.Notes = append(res.Notes, "sqlc not found: run `make sqlc-generate` to drop generated models for pruned tables")
+				regenFailed = true
 			}
 		}
 	}
@@ -184,8 +196,18 @@ func Run(opts Options) (Result, error) {
 		fmt.Fprintf(opts.Out, "note    %s\n", n)
 	}
 	sort.Strings(res.Modified)
+	if regenFailed && regenRequired {
+		return res, errSQLCRequired
+	}
 	return res, nil
 }
+
+// errSQLCRequired is returned when a pruned feature leaves generated sqlc code
+// that no longer matches the schema and sqlc could not regenerate it.
+var errSQLCRequired = errors.New("the generated sqlc code still refers to pruned columns and sqlc could not regenerate it: the project builds but fails at run time until you install sqlc (go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1) and run `make sqlc-generate`")
+
+// sqlcFinder locates sqlc; tests replace it.
+var sqlcFinder = findSQLC
 
 type transformContext struct {
 	opts      Options
@@ -392,6 +414,39 @@ func textFiles(root string) ([]string, error) {
 			return nil // binary
 		}
 		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out, err
+}
+
+// findNamed lists (relative, slash separated) every file or directory under
+// root whose base name contains sub, ignoring case. A matched directory is
+// listed once and not descended into.
+func findNamed(root, sub string) ([]string, error) {
+	sub = strings.ToLower(sub)
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "vendor":
+				return filepath.SkipDir
+			}
+		}
+		if strings.Contains(strings.ToLower(d.Name()), sub) {
+			out = append(out, rel)
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+		}
 		return nil
 	})
 	sort.Strings(out)

@@ -54,20 +54,20 @@ func newRotationFixture(t *testing.T) rotationFixture {
 func (f rotationFixture) enroll(t *testing.T, ciphertext []byte) {
 	t.Helper()
 	ctx := context.Background()
-	if err := f.mfa.UpsertTOTPSecret(ctx, "", f.userID, ciphertext); err != nil {
+	if err := f.mfa.UpsertTOTPSecret(ctx, f.userID, ciphertext); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if err := f.mfa.MarkTOTPVerified(ctx, "", f.userID); err != nil {
+	if err := f.mfa.MarkTOTPVerified(ctx, f.userID); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if err := f.mfa.UpsertTOTPSecret(ctx, "", f.userID, ciphertext); err != nil {
+	if err := f.mfa.UpsertTOTPSecret(ctx, f.userID, ciphertext); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 }
 
 func (f rotationFixture) stored(t *testing.T) []byte {
 	t.Helper()
-	state, found, err := f.mfa.GetTOTP(context.Background(), "", f.userID)
+	state, found, err := f.mfa.GetTOTP(context.Background(), f.userID)
 	if err != nil || !found {
 		t.Fatalf("GetTOTP: found=%v err=%v", found, err)
 	}
@@ -146,7 +146,7 @@ type failingRotateRepo struct {
 	calls int
 }
 
-func (r *failingRotateRepo) RotateTOTPSecret(context.Context, string, string, []byte, []byte) (bool, error) {
+func (r *failingRotateRepo) RotateTOTPSecret(context.Context, string, []byte, []byte) (bool, error) {
 	r.calls++
 	return false, errors.New("database unavailable")
 }
@@ -180,7 +180,7 @@ func TestRotateTOTPSecretIsCompareAndSwap(t *testing.T) {
 	original := []byte("ciphertext-original")
 	f.enroll(t, original)
 
-	swapped, err := f.mfa.RotateTOTPSecret(ctx, "", f.userID, []byte("stale-ciphertext"), []byte("next"))
+	swapped, err := f.mfa.RotateTOTPSecret(ctx, f.userID, []byte("stale-ciphertext"), []byte("next"))
 	if err != nil || swapped {
 		t.Fatalf("stale prev: swapped=%v err=%v, want no swap", swapped, err)
 	}
@@ -188,7 +188,7 @@ func TestRotateTOTPSecretIsCompareAndSwap(t *testing.T) {
 		t.Fatal("a stale swap changed the row")
 	}
 
-	swapped, err = f.mfa.RotateTOTPSecret(ctx, "", f.userID, original, []byte("ciphertext-next"))
+	swapped, err = f.mfa.RotateTOTPSecret(ctx, f.userID, original, []byte("ciphertext-next"))
 	if err != nil || !swapped {
 		t.Fatalf("matching prev: swapped=%v err=%v", swapped, err)
 	}
@@ -196,23 +196,19 @@ func TestRotateTOTPSecretIsCompareAndSwap(t *testing.T) {
 		t.Fatalf("stored = %q", f.stored(t))
 	}
 
-	// Tenant scoping applies: a wrong tenant matches nothing.
-	if swapped, _ := f.mfa.RotateTOTPSecret(ctx, "some-other-tenant", f.userID, []byte("ciphertext-next"), []byte("x")); swapped {
-		t.Fatal("a swap must respect tenant scope")
-	}
 	// A missing row is a no-op, not an error.
-	if swapped, err := f.mfa.RotateTOTPSecret(ctx, "", "00000000-0000-0000-0000-000000000000", []byte("a"), []byte("b")); err != nil || swapped {
+	if swapped, err := f.mfa.RotateTOTPSecret(ctx, "00000000-0000-0000-0000-000000000000", []byte("a"), []byte("b")); err != nil || swapped {
 		t.Fatalf("unknown user: swapped=%v err=%v", swapped, err)
 	}
 
 	// Disabled and re-enrolled meanwhile: nothing resurrected.
-	if err := f.mfa.DisableTOTP(ctx, "", f.userID); err != nil {
+	if err := f.mfa.DisableTOTP(ctx, f.userID); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if swapped, _ := f.mfa.RotateTOTPSecret(ctx, "", f.userID, []byte("ciphertext-next"), []byte("zombie")); swapped {
+	if swapped, _ := f.mfa.RotateTOTPSecret(ctx, f.userID, []byte("ciphertext-next"), []byte("zombie")); swapped {
 		t.Fatal("a swap must not recreate a removed secret")
 	}
-	if _, found, _ := f.mfa.GetTOTP(ctx, "", f.userID); found {
+	if _, found, _ := f.mfa.GetTOTP(ctx, f.userID); found {
 		t.Fatal("the secret must stay removed")
 	}
 }
@@ -233,7 +229,7 @@ func TestRemovedKeyBreaksOnlyUnrotatedRowsThroughTheProvider(t *testing.T) {
 
 	retired := mustRing(t, KeyRing{Keys: map[string][]byte{"new": key(2)}, ActiveKID: "new"})
 	sealedNew, _ := retired.Seal(other.ID, []byte("seed-2"))
-	if err := f.mfa.UpsertTOTPSecret(ctx, "", other.ID, sealedNew); err != nil {
+	if err := f.mfa.UpsertTOTPSecret(ctx, other.ID, sealedNew); err != nil {
 		t.Fatalf("upsert other: %v", err)
 	}
 

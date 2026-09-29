@@ -1,5 +1,4 @@
--- Hand-authored mirror of the tables in migration 000006_auth_mfa, with the
--- unique constraint from 000008_backup_codes_unique.
+-- Hand-authored mirror of the second-factor tables in migration 000001_init.
 
 CREATE TABLE IF NOT EXISTS user_totp (
     user_id           UUID PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
@@ -16,6 +15,6 @@ CREATE TABLE IF NOT EXISTS user_backup_codes (
     code_hash  BYTEA NOT NULL CHECK (octet_length(code_hash) = 32),
     used_at    TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- 000008_backup_codes_unique: a code appears at most once per user.
+    -- A code appears at most once per user.
     CONSTRAINT user_backup_codes_user_code_unique UNIQUE (user_id, code_hash)
 );

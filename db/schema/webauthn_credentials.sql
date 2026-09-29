@@ -1,5 +1,5 @@
--- Hand-authored mirror of migration 000004_webauthn_credentials (always
--- applied; inert until WEBAUTHN_ENABLED=true). See docs/enabling-webauthn.md.
+-- Hand-authored mirror of the WebAuthn table in migration 000001_init (inert
+-- until WEBAUTHN_ENABLED=true). See docs/enabling-webauthn.md.
 
 CREATE TABLE IF NOT EXISTS webauthn_credentials (
     credential_id    BYTEA PRIMARY KEY,

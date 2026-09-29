@@ -69,7 +69,7 @@ func TestSMTPPasswordResetInDevModeWithoutTLS(t *testing.T) {
 	srv := startFakeSMTP(t, nil)
 	n := newTestSMTP(t, smtpConfig(srv, config.SMTPTLSNone))
 
-	const challenge = "tenant:abc/def+ghi jkl&x=1#frag"
+	const challenge = "acme:abc/def+ghi jkl&x=1#frag"
 	if err := n.SendPasswordReset(sendCtx(t), "alice@example.com", challenge); err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestSMTPPasswordResetInDevModeWithoutTLS(t *testing.T) {
 		t.Fatalf("MIME headers: %v", msg.Header)
 	}
 
-	wantLink := "https://app.example.com/reset?token=tenant%3Aabc%2Fdef%2Bghi%20jkl%26x%3D1%23frag"
+	wantLink := "https://app.example.com/reset?token=acme%3Aabc%2Fdef%2Bghi%20jkl%26x%3D1%23frag"
 	if !strings.Contains(body, wantLink+"\r\n") {
 		t.Fatalf("body does not carry the escaped link %q:\n%s", wantLink, body)
 	}
@@ -154,7 +154,7 @@ func TestBuildLinkEscaping(t *testing.T) {
 		name, template, challenge, want string
 	}{
 		{"plain token", "https://x.test/r?t={token}", "abc123", "https://x.test/r?t=abc123"},
-		{"colons and slashes", "https://x.test/r?t={token}", "tenant:id/code", "https://x.test/r?t=tenant%3Aid%2Fcode"},
+		{"colons and slashes", "https://x.test/r?t={token}", "acme:id/code", "https://x.test/r?t=acme%3Aid%2Fcode"},
 		{"query delimiters", "https://x.test/r?t={token}", "a&b=c?d#e", "https://x.test/r?t=a%26b%3Dc%3Fd%23e"},
 		{"plus and space", "https://x.test/r?t={token}", "a+b c", "https://x.test/r?t=a%2Bb%20c"},
 		{"path position", "https://x.test/verify/{token}/done", "a/b c", "https://x.test/verify/a%2Fb%20c/done"},

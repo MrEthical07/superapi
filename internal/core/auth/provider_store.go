@@ -13,20 +13,18 @@ import (
 // It depends on domain repositories, not backend query objects.
 //
 // It also implements goauth.WebAuthnCredentialProvider (provider_webauthn.go).
-// It implements goauth.TenantAwareUserProvider so goAuth v0.5.0 can build with
-// MultiTenant.Enabled. The tenant-scoped lookups constrain the query to the
-// tenant in SQL. When tenancy is disabled (the default) the provider leaves
-// UserRecord.TenantID empty, exactly as v0.8.0 did, so goAuth keeps using its
-// default tenant and single-tenant output is unchanged.
+// The provider is keyed by the user ids goAuth hands it and never looks at a
+// request scope: an optional feature that partitions users wraps it
+// with a decorator installed through app.Hooks.UserProvider, which then owns
+// the extra goAuth interfaces that scoping needs.
 type StoreUserProvider struct {
 	repo UserRepository
 	// template:begin webauthn
 	webauthnRepo WebAuthnCredentialRepository
 	// template:end webauthn
-	mfaRepo        MFARepository
-	cipher         SecretCipher
-	tx             TxRunner
-	tenancyEnabled bool
+	mfaRepo MFARepository
+	cipher  SecretCipher
+	tx      TxRunner
 }
 
 // TxRunner runs fn in one database transaction: repository calls made with the
@@ -36,26 +34,13 @@ type TxRunner interface {
 	WithTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
-var (
-	_ goauth.UserProvider            = (*StoreUserProvider)(nil)
-	_ goauth.TenantAwareUserProvider = (*StoreUserProvider)(nil)
-)
+var _ goauth.UserProvider = (*StoreUserProvider)(nil)
 
 const defaultLookupTimeout = 3 * time.Second
 
 // NewStoreUserProvider creates a store-backed user provider.
 func NewStoreUserProvider(repo UserRepository) *StoreUserProvider {
 	return &StoreUserProvider{repo: repo}
-}
-
-// WithTenancy records whether multi-tenancy (TENANCY_ENABLED) is on. When on,
-// returned records carry their stored tenant id; when off, TenantID is left
-// empty to preserve single-tenant behavior.
-func (p *StoreUserProvider) WithTenancy(enabled bool) *StoreUserProvider {
-	if p != nil {
-		p.tenancyEnabled = enabled
-	}
-	return p
 }
 
 // WithMFA attaches TOTP/backup-code persistence and the cipher that encrypts
@@ -89,8 +74,7 @@ func (p *StoreUserProvider) inTx(ctx context.Context, fn func(ctx context.Contex
 	return p.tx.WithTx(ctx, fn)
 }
 
-// GetUserByIdentifier looks up a user by login identifier. It is tenant-blind,
-// which is goAuth's contract when multi-tenancy is disabled.
+// GetUserByIdentifier looks up a user by login identifier.
 func (p *StoreUserProvider) GetUserByIdentifier(identifier string) (goauth.UserRecord, error) {
 	if p == nil || p.repo == nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -106,10 +90,10 @@ func (p *StoreUserProvider) GetUserByIdentifier(identifier string) (goauth.UserR
 		}
 		return goauth.UserRecord{}, fmt.Errorf("get user by identifier: %w", err)
 	}
-	return p.toRecord(row), nil
+	return RecordFromStored(row), nil
 }
 
-// GetUserByID looks up a user by canonical user id (tenant-blind).
+// GetUserByID looks up a user by canonical user id.
 func (p *StoreUserProvider) GetUserByID(userID string) (goauth.UserRecord, error) {
 	if p == nil || p.repo == nil {
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
@@ -125,50 +109,7 @@ func (p *StoreUserProvider) GetUserByID(userID string) (goauth.UserRecord, error
 		}
 		return goauth.UserRecord{}, fmt.Errorf("get user by id: %w", err)
 	}
-	return p.toRecord(row), nil
-}
-
-// GetUserByIdentifierInTenant resolves an identifier within tenantID only
-// (goauth.TenantAwareUserProvider). The tenant predicate is applied in SQL; an
-// identifier that exists only in another tenant, or an empty tenant, is
-// reported as not found.
-func (p *StoreUserProvider) GetUserByIdentifierInTenant(ctx context.Context, tenantID, identifier string) (goauth.UserRecord, error) {
-	if p == nil || p.repo == nil {
-		return goauth.UserRecord{}, goauth.ErrUserNotFound
-	}
-
-	ctx, cancel := boundedContext(ctx)
-	defer cancel()
-
-	row, err := p.repo.GetByIdentifierInTenant(ctx, tenantID, identifier)
-	if err != nil {
-		if errors.Is(err, ErrAuthUserNotFound) {
-			return goauth.UserRecord{}, goauth.ErrUserNotFound
-		}
-		return goauth.UserRecord{}, fmt.Errorf("get user by identifier in tenant: %w", err)
-	}
-	return p.toRecord(row), nil
-}
-
-// GetUserByIDInTenant resolves a user id within tenantID only
-// (goauth.TenantAwareUserProvider). A user in another tenant, or an empty
-// tenant, is reported as not found.
-func (p *StoreUserProvider) GetUserByIDInTenant(ctx context.Context, tenantID, userID string) (goauth.UserRecord, error) {
-	if p == nil || p.repo == nil {
-		return goauth.UserRecord{}, goauth.ErrUserNotFound
-	}
-
-	ctx, cancel := boundedContext(ctx)
-	defer cancel()
-
-	row, err := p.repo.GetByIDInTenant(ctx, tenantID, userID)
-	if err != nil {
-		if errors.Is(err, ErrAuthUserNotFound) {
-			return goauth.UserRecord{}, goauth.ErrUserNotFound
-		}
-		return goauth.UserRecord{}, fmt.Errorf("get user by id in tenant: %w", err)
-	}
-	return p.toRecord(row), nil
+	return RecordFromStored(row), nil
 }
 
 // UpdatePasswordHash persists a new password hash for the given user.
@@ -193,15 +134,6 @@ func lookupContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), defaultLookupTimeout)
 }
 
-// boundedContext applies the default lookup timeout to a caller context,
-// keeping any shorter deadline the caller already set.
-func boundedContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithTimeout(ctx, defaultLookupTimeout)
-}
-
 // CreateUser inserts a new auth user record.
 func (p *StoreUserProvider) CreateUser(ctx context.Context, input goauth.CreateUserInput) (goauth.UserRecord, error) {
 	if p == nil || p.repo == nil {
@@ -209,11 +141,10 @@ func (p *StoreUserProvider) CreateUser(ctx context.Context, input goauth.CreateU
 	}
 
 	row, err := p.repo.Create(ctx, CreateStoredUserInput{
-		TenantID:     p.createTenant(input.TenantID),
 		Identifier:   input.Identifier,
 		PasswordHash: input.PasswordHash,
 		Role:         input.Role,
-		Status:       mapAccountStatusToString(input.Status),
+		Status:       AccountStatusText(input.Status),
 	})
 	if err != nil {
 		if errors.Is(err, ErrAuthUserExists) {
@@ -223,7 +154,7 @@ func (p *StoreUserProvider) CreateUser(ctx context.Context, input goauth.CreateU
 		}
 		return goauth.UserRecord{}, fmt.Errorf("create user: %w", err)
 	}
-	return p.toRecord(row), nil
+	return RecordFromStored(row), nil
 }
 
 // UpdateAccountStatus updates account status and returns latest user record.
@@ -232,22 +163,21 @@ func (p *StoreUserProvider) UpdateAccountStatus(ctx context.Context, userID stri
 		return goauth.UserRecord{}, goauth.ErrUserNotFound
 	}
 
-	row, err := p.repo.UpdateStatus(ctx, userID, mapAccountStatusToString(status))
+	row, err := p.repo.UpdateStatus(ctx, userID, AccountStatusText(status))
 	if err != nil {
 		if errors.Is(err, ErrAuthUserNotFound) {
 			return goauth.UserRecord{}, goauth.ErrUserNotFound
 		}
 		return goauth.UserRecord{}, fmt.Errorf("update account status: %w", err)
 	}
-	return p.toRecord(row), nil
+	return RecordFromStored(row), nil
 }
 
 // --- TOTP and backup codes ---
 //
 // These delegate to the MFA repository. TOTP secrets are encrypted with the
 // configured SecretCipher before they reach the database (goAuth hands the
-// provider the raw secret). Every call is scoped to the request tenant when
-// tenancy is enabled. With no MFA repository wired (AUTH_TOTP_ENABLED=false)
+// provider the raw secret). With no MFA repository wired (AUTH_TOTP_ENABLED=false)
 // the store reports "no TOTP configured" and refuses mutations; goAuth never
 // invokes them while TOTP is disabled.
 
@@ -260,7 +190,7 @@ func (p *StoreUserProvider) GetTOTPSecret(ctx context.Context, userID string) (*
 	if !p.mfaReady() {
 		return &goauth.TOTPRecord{}, nil
 	}
-	state, found, err := p.mfaRepo.GetTOTP(ctx, p.scopeTenant(ctx), userID)
+	state, found, err := p.mfaRepo.GetTOTP(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +224,7 @@ func (p *StoreUserProvider) rotateSecretLazily(ctx context.Context, userID strin
 	if err != nil {
 		return
 	}
-	_, _ = p.mfaRepo.RotateTOTPSecret(ctx, p.scopeTenant(ctx), userID, current, next)
+	_, _ = p.mfaRepo.RotateTOTPSecret(ctx, userID, current, next)
 }
 
 // EnableTOTP stores the (encrypted) secret and sets TOTP enabled to the
@@ -311,7 +241,7 @@ func (p *StoreUserProvider) EnableTOTP(ctx context.Context, userID string, secre
 	if err != nil {
 		return err
 	}
-	return p.mfaErr(p.mfaRepo.UpsertTOTPSecret(ctx, p.scopeTenant(ctx), userID, ciphertext))
+	return p.mfaErr(p.mfaRepo.UpsertTOTPSecret(ctx, userID, ciphertext))
 }
 
 // DisableTOTP removes the TOTP secret and all backup codes.
@@ -319,7 +249,7 @@ func (p *StoreUserProvider) DisableTOTP(ctx context.Context, userID string) erro
 	if !p.mfaReady() {
 		return errMFAUnavailable
 	}
-	return p.mfaErr(p.mfaRepo.DisableTOTP(ctx, p.scopeTenant(ctx), userID))
+	return p.mfaErr(p.mfaRepo.DisableTOTP(ctx, userID))
 }
 
 // MarkTOTPVerified flags the stored secret as verified.
@@ -327,7 +257,7 @@ func (p *StoreUserProvider) MarkTOTPVerified(ctx context.Context, userID string)
 	if !p.mfaReady() {
 		return errMFAUnavailable
 	}
-	return p.mfaErr(p.mfaRepo.MarkTOTPVerified(ctx, p.scopeTenant(ctx), userID))
+	return p.mfaErr(p.mfaRepo.MarkTOTPVerified(ctx, userID))
 }
 
 // UpdateTOTPLastUsedCounter records the last accepted TOTP counter. The update
@@ -337,7 +267,7 @@ func (p *StoreUserProvider) UpdateTOTPLastUsedCounter(ctx context.Context, userI
 	if !p.mfaReady() {
 		return errMFAUnavailable
 	}
-	return p.mfaErr(p.mfaRepo.AdvanceTOTPCounter(ctx, p.scopeTenant(ctx), userID, counter))
+	return p.mfaErr(p.mfaRepo.AdvanceTOTPCounter(ctx, userID, counter))
 }
 
 // GetBackupCodes returns the hashes of the user's unused backup codes.
@@ -345,7 +275,7 @@ func (p *StoreUserProvider) GetBackupCodes(ctx context.Context, userID string) (
 	if !p.mfaReady() {
 		return []goauth.BackupCodeRecord{}, nil
 	}
-	hashes, err := p.mfaRepo.ListUnusedBackupCodes(ctx, p.scopeTenant(ctx), userID)
+	hashes, err := p.mfaRepo.ListUnusedBackupCodes(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +297,7 @@ func (p *StoreUserProvider) ReplaceBackupCodes(ctx context.Context, userID strin
 		hashes[i] = c.Hash
 	}
 	return p.mfaErr(p.inTx(ctx, func(ctx context.Context) error {
-		return p.mfaRepo.ReplaceBackupCodes(ctx, p.scopeTenant(ctx), userID, hashes)
+		return p.mfaRepo.ReplaceBackupCodes(ctx, userID, hashes)
 	}))
 }
 
@@ -377,7 +307,7 @@ func (p *StoreUserProvider) ConsumeBackupCode(ctx context.Context, userID string
 	if !p.mfaReady() {
 		return false, nil
 	}
-	return p.mfaRepo.ConsumeBackupCode(ctx, p.scopeTenant(ctx), userID, codeHash)
+	return p.mfaRepo.ConsumeBackupCode(ctx, userID, codeHash)
 }
 
 func (p *StoreUserProvider) mfaReady() bool {
@@ -391,43 +321,12 @@ func (p *StoreUserProvider) mfaErr(err error) error {
 	return err
 }
 
-// scopeTenant returns the tenant MFA queries are restricted to: empty (no
-// restriction) with tenancy off; the request tenant, or goAuth's default
-// tenant when none is attached, with tenancy on. goAuth resolves the same
-// tenant from the context before calling any id-keyed provider method.
-func (p *StoreUserProvider) scopeTenant(ctx context.Context) string {
-	if p == nil || !p.tenancyEnabled {
-		return ""
-	}
-	if tenantID, ok := RequestTenantFromContext(ctx); ok {
-		return tenantID
-	}
-	return DefaultTenantID
-}
-
 // --- Mapping helpers ---
 
-// toRecord maps a stored user to goAuth's record. TenantID is only populated
-// when tenancy is enabled; with tenancy off it stays empty (v0.8.0 behavior).
-func (p *StoreUserProvider) toRecord(row StoredUser) goauth.UserRecord {
-	record := mapUserToRecord(row)
-	if p != nil && p.tenancyEnabled {
-		record.TenantID = row.TenantID
-	}
-	return record
-}
-
-// createTenant picks the tenant a new user is stored under. With tenancy on,
-// goAuth passes the request's tenant; with it off every user belongs to the
-// default tenant regardless of input.
-func (p *StoreUserProvider) createTenant(inputTenant string) string {
-	if p == nil || !p.tenancyEnabled {
-		return DefaultTenantID
-	}
-	return tenantOrDefault(inputTenant)
-}
-
-func mapUserToRecord(row StoredUser) goauth.UserRecord {
+// RecordFromStored maps a stored user to goAuth's record. It leaves any
+// feature-owned goauth.UserRecord field for the feature's
+// provider wrapper to fill.
+func RecordFromStored(row StoredUser) goauth.UserRecord {
 	return goauth.UserRecord{
 		UserID:         row.ID,
 		Identifier:     row.Email,
@@ -439,7 +338,8 @@ func mapUserToRecord(row StoredUser) goauth.UserRecord {
 	}
 }
 
-func mapAccountStatusToString(s goauth.AccountStatus) string {
+// AccountStatusText is the stored text of a goAuth account status.
+func AccountStatusText(s goauth.AccountStatus) string {
 	switch s {
 	case goauth.AccountActive:
 		return "active"

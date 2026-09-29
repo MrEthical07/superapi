@@ -17,14 +17,11 @@ func TestParseFlags(t *testing.T) {
 		{name: "email is lower-cased", args: []string{"--email", " A@Example.COM ", "--role", "admin"}},
 		{name: "missing email", args: []string{}, wantErr: "--email is required"},
 		{name: "positional password rejected", args: []string{"--email", "a@example.com", "hunter2"}, wantErr: "never passed as an argument"},
-		// template:begin tenancy
-		{name: "bad tenant", args: []string{"--email", "a@example.com", "--tenant", "../x"}, wantErr: "invalid --tenant"},
-		// template:end tenancy
 		{name: "no password flag exists", args: []string{"--email", "a@example.com", "--password", "x"}, wantErr: "flag provided but not defined"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opts, err := parseFlags(tc.args, &stderr)
+			opts, err := parseFlags(tc.args, &stderr, nil)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)

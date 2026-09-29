@@ -9,7 +9,6 @@ import (
 	goauth "github.com/MrEthical07/goAuth"
 	"github.com/alicebob/miniredis/v2"
 
-	"github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/cache"
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
@@ -25,44 +24,6 @@ func newPresetDeps(t *testing.T) (*goauth.Engine, ratelimit.Limiter, *cache.Mana
 	mr := miniredis.RunT(t)
 	mgr := newCacheManagerForPolicyTests(t, mr.Addr(), true)
 	return &goauth.Engine{}, presetAllowLimiter{}, mgr
-}
-
-func TestTenantReadPresetPassesValidator(t *testing.T) {
-	engine, limiter, mgr := newPresetDeps(t)
-
-	policies := TenantRead(
-		WithAuthEngine(engine, auth.ModeStrict),
-		WithLimiter(limiter),
-		WithCacheManager(mgr),
-		WithCache(45*time.Second, cache.CacheTagSpec{Name: "project"}),
-	)
-
-	metas, err := DescribePolicies(policies...)
-	if err != nil {
-		t.Fatalf("DescribePolicies() error = %v", err)
-	}
-	if err := ValidateRouteMetadata(http.MethodGet, "/api/v1/projects/{id}", metas); err != nil {
-		t.Fatalf("ValidateRouteMetadata() error = %v", err)
-	}
-}
-
-func TestTenantWritePresetPassesValidator(t *testing.T) {
-	engine, limiter, mgr := newPresetDeps(t)
-
-	policies := TenantWrite(
-		WithAuthEngine(engine, auth.ModeStrict),
-		WithLimiter(limiter),
-		WithCacheManager(mgr),
-		WithInvalidateTags(cache.CacheTagSpec{Name: "project"}),
-	)
-
-	metas, err := DescribePolicies(policies...)
-	if err != nil {
-		t.Fatalf("DescribePolicies() error = %v", err)
-	}
-	if err := ValidateRouteMetadata(http.MethodPost, "/api/v1/projects", metas); err != nil {
-		t.Fatalf("ValidateRouteMetadata() error = %v", err)
-	}
 }
 
 func TestPublicReadPresetPassesValidator(t *testing.T) {
@@ -81,21 +42,6 @@ func TestPublicReadPresetPassesValidator(t *testing.T) {
 	if err := ValidateRouteMetadata(http.MethodGet, "/api/v1/public/status", metas); err != nil {
 		t.Fatalf("ValidateRouteMetadata() error = %v", err)
 	}
-}
-
-func TestTenantReadPresetPanicsWithoutAuth(t *testing.T) {
-	_, limiter, mgr := newPresetDeps(t)
-
-	defer func() {
-		if recovered := recover(); recovered == nil {
-			t.Fatalf("expected panic")
-		}
-	}()
-
-	_ = TenantRead(
-		WithLimiter(limiter),
-		WithCacheManager(mgr),
-	)
 }
 
 func TestPublicReadPresetOrderIsStable(t *testing.T) {

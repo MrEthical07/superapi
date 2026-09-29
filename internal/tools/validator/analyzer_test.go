@@ -60,13 +60,11 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
 	func register(r httpx.Router, h http.Handler, engine *goauth.Engine, limiter ratelimit.Limiter, cacheManager *cache.Manager) {
-	r.Handle(http.MethodGet, "/api/v1/tenants/{tenant_id}/projects", h,
+	r.Handle(http.MethodGet, "/api/v1/projects", h,
 			policy.AuthRequired(engine, "strict"),
-		policy.TenantRequired(),
-		policy.TenantMatchFromPath("tenant_id"),
 		policy.RequirePerm("project.read"),
-		policy.RateLimit(limiter, ratelimit.Rule{Limit: 10, Window: time.Minute, Scope: ratelimit.ScopeTenant}),
-		policy.CacheRead(cacheManager, cache.CacheReadConfig{TTL: time.Minute, VaryBy: cache.CacheVaryBy{TenantID: true}}),
+		policy.RateLimit(limiter, ratelimit.Rule{Limit: 10, Window: time.Minute, Scope: ratelimit.ScopeUser}),
+		policy.CacheRead(cacheManager, cache.CacheReadConfig{TTL: time.Minute, VaryBy: cache.CacheVaryBy{UserID: true}}),
 	)
 }
 `

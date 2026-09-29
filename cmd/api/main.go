@@ -9,6 +9,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/app"
 	"github.com/MrEthical07/superapi/internal/core/config"
 	"github.com/MrEthical07/superapi/internal/core/logx"
+	"github.com/MrEthical07/superapi/internal/features"
 	"github.com/MrEthical07/superapi/internal/modules"
 )
 
@@ -17,6 +18,7 @@ import (
 // - It loads config, validates config, builds app dependencies, and runs HTTP server.
 // - For dependency wiring details, see internal/core/app/deps.go.
 // - For module registration, see internal/modules/modules.go.
+// - For optional features, see internal/features/features.go.
 
 func main() {
 	cfg, err := config.Load()
@@ -36,14 +38,11 @@ func main() {
 		log.Fatalf("logger init failed: %v", err)
 	}
 
-	for _, warning := range cfg.Deprecations() {
-		logger.Warn().Msg(warning)
-	}
 	for _, warning := range cfg.Warnings() {
 		logger.Warn().Msg(warning)
 	}
 
-	a, err := app.New(cfg, logger, modules.All())
+	a, err := app.New(cfg, logger, modules.All(), features.All()...)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("app init failed")
 	}

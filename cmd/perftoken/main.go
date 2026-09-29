@@ -15,6 +15,7 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/app"
 	coreauth "github.com/MrEthical07/superapi/internal/core/auth"
 	"github.com/MrEthical07/superapi/internal/core/config"
+	"github.com/MrEthical07/superapi/internal/features"
 )
 
 type tokenOutput struct {
@@ -25,7 +26,8 @@ type tokenOutput struct {
 }
 
 // perftoken mints tokens for load tests using the same goAuth engine the API
-// server builds from config (app.NewDependencies), so perf runs exercise the
+// server builds from config and the registered optional features
+// (app.NewDependencies), so perf runs exercise the
 // real role registry and JWT settings. The password flag is acceptable here
 // because it only ever carries throwaway load-test credentials; use
 // cmd/createuser (make user) for real accounts.
@@ -60,7 +62,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	deps, err := app.NewDependencies(ctx, cfg)
+	deps, err := app.NewDependencies(ctx, cfg, features.All()...)
 	if err != nil {
 		log.Fatalf("init dependencies failed: %v", err)
 	}

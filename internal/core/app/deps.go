@@ -68,6 +68,8 @@ type Dependencies struct {
 	// verification messages.
 	AuthUsers auth.UserRepository
 	authClose func()
+	// features are the loaded optional features, in registration order.
+	features []loadedFeature
 }
 
 // DependencyBinder allows modules to receive initialized Dependencies.
@@ -94,8 +96,8 @@ func AuthFeatures(cfg *config.Config) auth.Features {
 // NewDependencies initializes process dependencies from config. The server
 // (App) and command-line tools such as cmd/createuser share it so they build
 // the exact same goAuth engine. Call Close when done.
-func NewDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, error) {
-	return initDependencies(ctx, cfg)
+func NewDependencies(ctx context.Context, cfg *config.Config, features ...Feature) (*Dependencies, error) {
+	return initDependencies(ctx, cfg, features)
 }
 
 // Close releases pooled connections and the auth engine. It does not shut
@@ -115,18 +117,18 @@ func (d *Dependencies) Close() {
 	}
 }
 
-func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, error) {
+func initDependencies(ctx context.Context, cfg *config.Config, features []Feature) (*Dependencies, error) {
+	loaded, err := loadFeatures(cfg, features)
+	if err != nil {
+		return nil, err
+	}
 	deps := &Dependencies{
 		Readiness: readiness.NewService(),
 		RateLimit: cfg.RateLimit,
 		Cache:     cfg.Cache,
 		Auth:      cfg.Auth,
+		features:  loaded,
 	}
-
-	// Apply the tenancy decision to the policy engine before any module
-	// registers routes or constructs presets, so preset defaults and route
-	// validation reflect TENANCY_ENABLED.
-	policy.SetTenancyEnabled(cfg.Tenancy.Enabled)
 
 	if cfg.Postgres.Enabled {
 		pool, err := db.NewPool(ctx, cfg.Postgres)
@@ -212,7 +214,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			return nil, fmt.Errorf("init auth provider: user repository unavailable")
 		}
 
-		userProvider := auth.NewStoreUserProvider(userRepo).WithTenancy(cfg.Tenancy.Enabled)
+		userProvider := auth.NewStoreUserProvider(userRepo)
 
 		// template:begin webauthn
 		// The provider always carries the WebAuthn credential capability so
@@ -237,9 +239,25 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			userProvider = userProvider.WithMFA(auth.NewMFARepository(deps.DB), cipher).WithTx(deps.DB)
 		}
 
-		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, auth.TenancySettings{
-			Enabled: cfg.Tenancy.Enabled,
-		}, AuthFeatures(cfg), userProvider)
+		var provider goauth.UserProvider = userProvider
+		var mutators []auth.ConfigMutator
+		var extensions []policy.AuthExtension
+		for _, lf := range deps.features {
+			if lf.hooks.UserProvider != nil {
+				provider = lf.hooks.UserProvider(deps, userProvider)
+			}
+			if lf.hooks.UserRepository != nil {
+				userRepo = lf.hooks.UserRepository(deps, userRepo)
+			}
+			if lf.hooks.GoAuthConfig != nil {
+				mutators = append(mutators, lf.hooks.GoAuthConfig)
+			}
+			if lf.hooks.AuthExtension != nil {
+				extensions = append(extensions, *lf.hooks.AuthExtension)
+			}
+		}
+
+		engine, closeFn, err := auth.NewGoAuthEngine(deps.Redis, authMode, AuthFeatures(cfg), provider, mutators...)
 		if err != nil {
 			if deps.Redis != nil {
 				_ = deps.Redis.Close()
@@ -249,6 +267,7 @@ func initDependencies(ctx context.Context, cfg *config.Config) (*Dependencies, e
 			}
 			return nil, fmt.Errorf("init auth provider: %w", err)
 		}
+		policy.UseAuthExtensions(engine, extensions...)
 		deps.AuthEngine = engine
 		deps.AuthUsers = userRepo
 		deps.authClose = closeFn

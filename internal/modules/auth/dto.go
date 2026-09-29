@@ -1,9 +1,12 @@
 package auth
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"strings"
 
+	coreauth "github.com/MrEthical07/superapi/internal/core/auth"
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 )
 
@@ -97,11 +100,62 @@ type tokenResponse struct {
 	MFATypes     []string `json:"mfa_types,omitempty"`
 }
 
+// whoamiResponse describes the authenticated principal. Attributes are the
+// values optional features attached to it (see policy.AuthExtension); each is
+// reported as an extra top-level field under its own key, after user_id, so a
+// feature that is not registered adds nothing.
 type whoamiResponse struct {
-	UserID      string   `json:"user_id"`
-	TenantID    string   `json:"tenant_id,omitempty"`
-	Role        string   `json:"role,omitempty"`
-	Permissions []string `json:"permissions,omitempty"`
+	UserID      string
+	Role        string
+	Permissions []string
+	Attributes  []coreauth.Attribute
+}
+
+// MarshalJSON emits user_id, the feature attributes, then role and
+// permissions. An attribute with an empty value, or whose key collides with a
+// core field, is skipped.
+func (w whoamiResponse) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	field := func(key string, value any) error {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		if buf.Len() > 1 {
+			buf.WriteByte(',')
+		}
+		k, _ := json.Marshal(key)
+		buf.Write(k)
+		buf.WriteByte(':')
+		buf.Write(encoded)
+		return nil
+	}
+	if err := field("user_id", w.UserID); err != nil {
+		return nil, err
+	}
+	reserved := map[string]bool{"user_id": true, "role": true, "permissions": true}
+	for _, attr := range w.Attributes {
+		if attr.Value == "" || reserved[attr.Key] {
+			continue
+		}
+		reserved[attr.Key] = true
+		if err := field(attr.Key, attr.Value); err != nil {
+			return nil, err
+		}
+	}
+	if w.Role != "" {
+		if err := field("role", w.Role); err != nil {
+			return nil, err
+		}
+	}
+	if len(w.Permissions) > 0 {
+		if err := field("permissions", w.Permissions); err != nil {
+			return nil, err
+		}
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
 }
 
 // --- registration ---

@@ -197,7 +197,7 @@ func analyzeFile(filePath string) ([]Diagnostic, error) {
 			return true
 		}
 
-		if err := corepolicy.ValidateRouteMetadata(method, pattern, metas); err != nil {
+		if err := corepolicy.ValidateRouteMetadataWith(extensionRules(), method, pattern, metas); err != nil {
 			diagnostics = append(diagnostics, Diagnostic{
 				File:    filePath,
 				Line:    line,
@@ -274,16 +274,6 @@ func parsePolicyMetadata(expr ast.Expr) (corepolicy.Metadata, error) {
 		meta.Type = corepolicy.PolicyTypeRequirePerm
 	case "RequireAnyPerm":
 		meta.Type = corepolicy.PolicyTypeRequireAnyPerm
-	case "TenantRequired":
-		meta.Type = corepolicy.PolicyTypeTenantRequired
-	case "TenantMatchFromPath":
-		meta.Type = corepolicy.PolicyTypeTenantMatchFromPath
-		if len(call.Args) > 0 {
-			param, err := extractStringLiteral(call.Args[0])
-			if err == nil {
-				meta.TenantPathParam = param
-			}
-		}
 	case "RateLimit", "RateLimitWithKeyer":
 		meta.Type = corepolicy.PolicyTypeRateLimit
 	case "CacheRead":
@@ -301,7 +291,14 @@ func parsePolicyMetadata(expr ast.Expr) (corepolicy.Metadata, error) {
 	case "Noop":
 		meta.Type = corepolicy.PolicyTypeNoop
 	default:
-		return corepolicy.Metadata{}, fmt.Errorf("unsupported policy constructor %s", name)
+		parse, ok := extensionPolicy(name)
+		if !ok {
+			return corepolicy.Metadata{}, fmt.Errorf("unsupported policy constructor %s", name)
+		}
+		meta = parse(call)
+		if meta.Name == "" {
+			meta.Name = name
+		}
 	}
 
 	return meta, nil
@@ -339,6 +336,12 @@ func parseCacheReadMetadata(call *ast.CallExpr) corepolicy.CacheReadMetadata {
 					continue
 				}
 				varyKey := keyExprName(varyKV.Key)
+				if varyKey == "Parts" {
+					if partsIdentity(varyKV.Value) {
+						meta.VaryByIdentityPart = true
+					}
+					continue
+				}
 				flag, flagOK := boolLiteral(varyKV.Value)
 				if !flagOK {
 					continue
@@ -346,8 +349,6 @@ func parseCacheReadMetadata(call *ast.CallExpr) corepolicy.CacheReadMetadata {
 				switch varyKey {
 				case "UserID":
 					meta.VaryByUserID = flag
-				case "TenantID":
-					meta.VaryByTenantID = flag
 				}
 			}
 		}
@@ -405,4 +406,25 @@ func boolLiteral(expr ast.Expr) (bool, bool) {
 	default:
 		return false, false
 	}
+}
+
+// partsIdentity reports whether a VaryBy.Parts literal lists a call to a
+// registered identity-bearing part constructor (see Extension.IdentityParts).
+// Anything else, including a part built elsewhere, is not counted: the
+// verifier cannot see its Identity flag, so it errs toward reporting.
+func partsIdentity(expr ast.Expr) bool {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	for _, elt := range lit.Elts {
+		call, ok := elt.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		if isIdentityPart(keyExprName(call.Fun)) {
+			return true
+		}
+	}
+	return false
 }

@@ -44,7 +44,6 @@ func newPolicyTestAuthEngine(t testing.TB) (*goauth.Engine, string) {
 		user: goauth.UserRecord{
 			UserID:            "u1",
 			Identifier:        "user@example.com",
-			TenantID:          "t1",
 			PasswordHash:      hash,
 			Status:            goauth.AccountActive,
 			Role:              "user",
@@ -61,7 +60,7 @@ func newPolicyTestAuthEngine(t testing.TB) (*goauth.Engine, string) {
 		mr.Close()
 	})
 
-	engine, closeFn, err := auth.NewGoAuthEngine(redisClient, auth.ModeHybrid, auth.TenancySettings{}, auth.Features{}, provider)
+	engine, closeFn, err := auth.NewGoAuthEngine(redisClient, auth.ModeHybrid, auth.Features{}, provider)
 	if err != nil {
 		t.Fatalf("new auth engine: %v", err)
 	}

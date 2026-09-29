@@ -19,7 +19,7 @@ reference, but do not preserve legacy SQL-centric or dual data-access patterns.
 - App wiring lives in internal/core/app.
 - Modules are registered in internal/modules/modules.go.
 - Module internals must follow handler/service/repository separation.
-- Policies remain mandatory for behavioral guarantees (auth, tenant, RBAC, rate-limit, cache, cache-control).
+- Policies remain mandatory for behavioral guarantees (auth, feature isolation, RBAC, rate-limit, cache, cache-control).
 
 ## 3. Data Layer Rules (Hard Constraints)
 
@@ -50,7 +50,7 @@ Always attach policies explicitly when route behavior requires auth/isolation/co
 
 Required policy order:
 1. auth
-2. tenant
+2. feature isolation (policies an optional feature contributes; policy.StageIsolation)
 3. rbac
 4. rate limit
 5. cache
@@ -69,14 +69,15 @@ Do not bypass policy.MustValidateRoute / validator-backed route checks.
 - Keep auth mode behavior explicit (jwt_only, hybrid, strict).
 - Never return password-reset or email-verification secrets in HTTP responses; deliver them through internal/core/notify (Notifier). Keep request endpoints enumeration-safe (same status and body whether or not the account exists).
 - Never accept a role from client input on public endpoints; create privileged accounts with cmd/createuser (make user).
-- Never expose goAuth audit events to end users or tenant admins.
+- Never expose goAuth audit events to end users or to admins of any scope.
 
-## 6a. Tenancy Rules
+## 6a. Optional Feature Rules
 
-- Tenancy is off by default (TENANCY_ENABLED). When on, internal/core/tenant.Middleware resolves and validates the request tenant and attaches it with auth.WithRequestTenant (which calls goauth.WithTenantID).
-- Read the tenant with auth.RequestTenantFromContext or the principal's TenantID; never from headers in module code.
-- policy.AuthRequired rejects tokens from another tenant; tenant-scoped routes still need policy.TenantRequired (and TenantMatchFromPath for {tenant_id} paths).
-- Scope tenant-owned queries by tenant_id in SQL.
+- Optional features live in their own package outside internal/core, load and lint their own env (config.Env*), and plug into core through app.Hooks registered in internal/features/features.go. Core never imports a feature. See docs/architecture.md, "Optional features".
+- Do not name a feature in core code, core docs or core tests: describe the generic mechanism. A feature owns its directory and every file whose name contains its name; CI proves that `make init --no-<feature>` leaves no trace of it.
+- A goAuth provider decorator must keep every optional goAuth interface the core provider implements (capabilities are detected by type assertion); assert each at compile time.
+- Core SQL never mentions a feature's columns; the feature's queries live in db/queries/<feature>.sql.
+- A feature that has its own rules for agents documents them in internal/<feature>/AGENTS.md; read it before changing that package.
 
 ## 7. Cache Usage Rules
 
@@ -118,7 +119,7 @@ Never:
 - Policies: docs/policies.md
 - Cache: docs/cache-guide.md
 - Auth: docs/auth-flows.md, docs/auth-goauth.md (links goAuth docs pinned to the go.mod version), docs/auth-bootstrap.md
-- Tenancy: docs/multi-tenancy.md, docs/removing-tenancy.md
+- Optional features: docs/architecture.md ("Optional features"); each feature has its own docs/<feature>.md and, when it can be removed, docs/removing-<feature>.md
 - Getting started / clone flow: docs/getting-started.md
 - Runtime/config: docs/environment-variables.md, docs/workflows.md
   (every env var the code reads must be in .env.example and docs/environment-variables.md; superapi-verify enforces it)
@@ -129,7 +130,7 @@ Use this sequence for most feature work:
 
 1. Define behavior first:
 - endpoint shape (request/response)
-- auth/tenant/rbac requirements
+- auth/feature isolation/rbac requirements
 - cache/rate-limit requirements
 
 2. Add or update module code in this order:
@@ -160,7 +161,8 @@ Preferred scaffold command:
 Optional scaffold flags:
 
 - make module name=projects db=1
-- make module name=projects auth=1 tenant=1 ratelimit=1 cache=1
+- make module name=projects auth=1 ratelimit=1 cache=1
+- make module name=projects auth=1 flags=--<feature> (an option an optional feature adds)
 
 Post-scaffold hardening checklist:
 
@@ -188,6 +190,9 @@ shared code.
 Relational path guidance:
 
 1. Add migration files under db/migrations.
+   - The template ships 000001_init and, if kept, an optional second migration. They are yours to edit freely until your first deployment (reshape users, delete the second one if unused, keep db/schema in step).
+   - After your first deployment migrations are append-only: never edit or renumber an applied file; add a new one with `make migrate-create NAME=...`, which numbers it after the last.
+   - Never copy the template's 000001/000002 over a database that already ran other files: golang-migrate records only a version number and fails with "no migration found for version N".
 2. Mirror schema under db/schema.
 3. Add/update query definitions under db/queries.
 4. Regenerate code when required:
@@ -228,7 +233,7 @@ Do not introduce compatibility layers that keep dual access patterns alive.
 For protected routes, policy order must be:
 
 1. auth
-2. tenant
+2. feature isolation (optional)
 3. rbac
 4. rate limit
 5. cache
@@ -236,8 +241,8 @@ For protected routes, policy order must be:
 
 Safety checks:
 
-- authenticated cache routes must vary by user or tenant
-- tenant_id path routes must enforce tenant policies
+- authenticated cache routes must vary by user or an identity-bearing key part (cache.KeyPart with Identity)
+- routes an optional feature scopes must carry that feature's isolation policies (its route rules and superapi-verify enforce this)
 - do not bypass route validator-backed registration
 
 ## 16. Performance Guidance

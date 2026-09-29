@@ -10,7 +10,8 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/ratelimit"
 )
 
-// PresetOption mutates preset behavior used by TenantRead/TenantWrite/PublicRead.
+// PresetOption mutates preset behavior used by PublicRead and by presets
+// defined outside this package (see ResolvePreset).
 type PresetOption func(*presetConfig)
 
 type presetConfig struct {
@@ -28,25 +29,12 @@ type presetConfig struct {
 	cacheConfigured  bool
 	cacheAllowAuth   bool
 	cacheVaryBy      cache.CacheVaryBy
+	cacheVarySet     bool
 	invalidateTagCfg []cache.CacheTagSpec
 	invalidateTagSet bool
-	tenantMatchParam string
 }
 
 func defaultPresetConfig() presetConfig {
-	// Tenant-aware defaults only apply when tenancy is enabled. With tenancy off,
-	// authenticated cache reads vary by user id instead of tenant id (which
-	// satisfies the "authenticated cache routes vary by user or tenant" rule),
-	// and the tenant path param default is empty.
-	varyBy := cache.CacheVaryBy{}
-	tenantMatchParam := ""
-	if TenancyEnabled() {
-		varyBy.TenantID = true
-		tenantMatchParam = "tenant_id"
-	} else {
-		varyBy.UserID = true
-	}
-
 	return presetConfig{
 		authMode: auth.ModeHybrid,
 		rateLimitRule: ratelimit.Rule{
@@ -56,9 +44,8 @@ func defaultPresetConfig() presetConfig {
 		cacheTTL:         30 * time.Second,
 		cacheTagSpecs:    []cache.CacheTagSpec{{Name: "resource"}},
 		cacheAllowAuth:   true,
-		cacheVaryBy:      varyBy,
+		cacheVaryBy:      cache.CacheVaryBy{UserID: true},
 		invalidateTagCfg: []cache.CacheTagSpec{{Name: "resource"}},
-		tenantMatchParam: tenantMatchParam,
 	}
 }
 
@@ -144,19 +131,79 @@ func WithInvalidateTags(tagSpecs ...cache.CacheTagSpec) PresetOption {
 	}
 }
 
-// WithTenantMatchParam overrides tenant path parameter name used by presets.
-func WithTenantMatchParam(param string) PresetOption {
-	return func(cfg *presetConfig) {
-		trimmed := strings.TrimSpace(param)
-		if trimmed != "" {
-			cfg.tenantMatchParam = trimmed
-		}
-	}
-}
-
 // WithCacheVaryBy overrides vary dimensions for preset-generated cache reads.
 func WithCacheVaryBy(varyBy cache.CacheVaryBy) PresetOption {
 	return func(cfg *presetConfig) {
 		cfg.cacheVaryBy = varyBy
+		cfg.cacheVarySet = true
+	}
+}
+
+// PresetSettings is the resolved configuration of a preset's options. Presets
+// defined outside this package (an optional feature's) build their policy
+// chains from it.
+type PresetSettings struct {
+	AuthEngine *goauth.Engine
+	AuthMode   auth.Mode
+	Limiter    ratelimit.Limiter
+	// RateLimit is the default rule (limit and window).
+	RateLimit      ratelimit.Rule
+	CacheManager   *cache.Manager
+	CacheTTL       time.Duration
+	CacheTags      []cache.CacheTagSpec
+	CacheAllowAuth bool
+	CacheVaryBy    cache.CacheVaryBy
+	// CacheVaryBySet reports whether WithCacheVaryBy overrode the default.
+	CacheVaryBySet bool
+	// InvalidateTags is the tag set for write presets (the read tags unless
+	// WithInvalidateTags overrode them).
+	InvalidateTags []cache.CacheTagSpec
+}
+
+// ResolvePreset applies opts over the preset defaults.
+func ResolvePreset(opts ...PresetOption) PresetSettings {
+	cfg := applyPresetOptions(opts...)
+	tags := cfg.invalidateTagCfg
+	if !cfg.invalidateTagSet {
+		tags = cfg.cacheTagSpecs
+	}
+	return PresetSettings{
+		AuthEngine:     cfg.authEngine,
+		AuthMode:       cfg.authMode,
+		Limiter:        cfg.limiter,
+		RateLimit:      cfg.rateLimitRule,
+		CacheManager:   cfg.cacheManager,
+		CacheTTL:       cfg.cacheTTL,
+		CacheTags:      append([]cache.CacheTagSpec(nil), cfg.cacheTagSpecs...),
+		CacheAllowAuth: cfg.cacheAllowAuth,
+		CacheVaryBy:    cfg.cacheVaryBy,
+		CacheVaryBySet: cfg.cacheVarySet,
+		InvalidateTags: append([]cache.CacheTagSpec(nil), tags...),
+	}
+}
+
+// Require panics with a route-config error when a dependency the named preset
+// needs was not supplied through its options.
+func (s PresetSettings) Require(name string, needAuth, needLimiter, needCache bool) {
+	if needAuth && s.AuthEngine == nil {
+		panicInvalidRouteConfigf("%s preset requires WithAuthEngine(engine, mode)", name)
+	}
+	if needLimiter && s.Limiter == nil {
+		panicInvalidRouteConfigf("%s preset requires WithLimiter(limiter)", name)
+	}
+	if needCache && s.CacheManager == nil {
+		panicInvalidRouteConfigf("%s preset requires WithCacheManager(manager)", name)
+	}
+}
+
+// MustValidatePreset validates a preset's chain against the built-in route
+// rules plus the given feature rules and panics if it is invalid.
+func MustValidatePreset(name, method, pattern string, rules []RouteRule, policies []Policy) {
+	metas, err := DescribePolicies(policies...)
+	if err != nil {
+		panicInvalidRouteConfigf("%s preset policies are invalid: %v", name, err)
+	}
+	if err := ValidateRouteMetadataWith(rules, method, pattern, metas); err != nil {
+		panicInvalidRouteConfigf("%s preset failed validator: %v", name, err)
 	}
 }

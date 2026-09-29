@@ -1,100 +1,80 @@
 # Removing Tenancy
 
-Tenancy in this template is optional and gated behind a single config flag. This
-page covers the two levels of "off": disabling it at runtime, and deleting it
-from the codebase entirely.
+Tenancy is an optional feature (see [architecture.md](architecture.md), section
+"Optional features"): all of its behavior lives in one directory,
+`internal/tenancy/`, and it is registered with one line. This page covers the
+two levels of "off": switching it off at runtime, and deleting it.
 
-## 1. Disable at runtime (no code changes)
+## 1. Switch it off at runtime (no code changes)
 
-Leave `TENANCY_ENABLED` unset or set it to `false` (this is the default):
+Leave `TENANCY_ENABLED` unset or `false` (the default). With tenancy off:
 
-```
-TENANCY_ENABLED=false
-```
+- no tenant middleware runs, so no tenant header is required and the `tenants`
+  table is never read;
+- goAuth's `MultiTenant.Enabled` stays `false`: user lookups are tenant-blind
+  and every token carries goAuth's default tenant `"0"` (so `whoami` still
+  reports `tenant_id: "0"`);
+- the tenant presets (`tenancy.TenantRead` / `TenantWrite`) vary cached
+  responses by user id instead of tenant id;
+- a `{tenant_id}` path parameter is an ordinary parameter and forces no policy,
+  although `TenantMatchFromPath` still requires `TenantRequired` wherever they
+  are used;
+- migration `000002_tenancy` is still applied by `make migrate-up`; it is inert
+  (every user has `tenant_id = '0'`).
 
-With tenancy disabled:
+`TENANCY_ENFORCE_ISOLATION` is deprecated and ignored; remove it from your
+environment.
 
-- Preset policy chains do not default to tenant scoping/keying. Authenticated
-  cache reads vary by user id instead of tenant id, which satisfies the
-  "authenticated cache routes must vary by user or tenant" safety rule.
-- The route validator treats a `{tenant_id}` path parameter as an ordinary
-  parameter; it does not force `TenantRequired` / `TenantMatchFromPath` onto the
-  route.
-- goAuth's `MultiTenant.Enabled` is set to `false`: user lookups are
-  tenant-blind and every token carries goAuth's default tenant `"0"`.
-- The tenant resolution middleware is not installed, so no tenant header is
-  required and the `tenants` table is never read.
-- Migrations `000002_tenants` and `000005_users_tenant` are still applied by
-  `make migrate-up`; they are inert (every user has `tenant_id = '0'`).
+## 2. Delete it from the codebase
 
-The tenant policies (`policy.TenantRequired()`, `policy.TenantMatchFromPath(...)`)
-remain available and enforce correctly if you attach them explicitly. The
-dependency rule "`TenantMatchFromPath` requires `TenantRequired`" holds
-regardless of the flag.
+On a fresh clone, **`make init flags=--no-tenancy` does exactly the steps below**
+and regenerates sqlc for you; CI proves the result builds, vets, lints,
+verifies, passes its tests and migrations, and that
+`git grep -n -i tenan -- . ':!CHANGELOG.md'` finds nothing.
 
-`TENANCY_ENFORCE_ISOLATION` is deprecated and ignored (goAuth v0.5.0 made the
-underlying setting a no-op); remove it from your environment.
+If you did not use `make init`, six steps:
 
-## 2. Delete tenancy from the codebase
+1. **Delete the package and its registration.** Remove `internal/tenancy/` and
+   `internal/features/tenancy.go`, and delete the `tenancyFeature(),` line (with
+   the two template marker comments around it) from
+   `internal/features/features.go`.
+2. **Delete the files named after tenancy:**
+   `internal/tools/validator/tenancy_rules.go`,
+   `internal/devx/modulegen/tenancy_extension.go` and its test,
+   `docs/multi-tenancy.md`, `docs/removing-tenancy.md`,
+   `.github/workflows/tenancy.yml`, `.github/tenancy-allowlist.txt`.
+3. **Delete the SQL:** `db/migrations/000002_tenancy.up.sql` and `.down.sql`,
+   `db/schema/tenancy.sql`, `db/queries/tenancy.sql` and
+   `internal/core/db/sqlcgen/tenancy.sql.go`, then run `make sqlc-generate`
+   (it drops the tenants model and `users.TenantID`). Only delete the migration
+   on a database that never applied it; otherwise add a new migration that drops
+   `users.tenant_id` and the `tenants` table (see section 3).
+4. **Delete the settings block:** the `TENANCY_*` block from `.env.example` and
+   from `docs/environment-variables.md` (each is wrapped in markers).
+5. **Tidy:** `go mod tidy`, and remove any leftover tenancy template marker
+   comments.
+6. **Check:** `go build ./... && go vet ./... && go test ./... &&
+   go run ./cmd/superapi-verify ./...`.
 
-<!-- template:begin init -->
-On a fresh clone, `make init flags=--no-tenancy` performs steps 1–4 below
-automatically and keeps the rest (they are harmless when tenancy is off).
-<!-- template:end init -->
+Core needs no change: nothing in `internal/core` knows tenancy exists, and the
+`make user flags=...` and `make module flags=...` passthroughs simply lose the
+`--tenant` options.
 
-If your project will never be multi-tenant, tenancy is a bounded, greppable
-deletion. Remove, in this order:
+## 3. After you have deployed with tenancy
 
-1. **HTTP tenant resolution:** `internal/core/tenant/resolver.go` and
-   `directory.go` (+ tests), the `tenantResolver` function and the
-   `httpx.WithTenantResolver(...)` option in `internal/core/app/app.go`.
-2. **Config:** the `TENANCY_*` loads, fields, resolver constants and lint block
-   in `internal/core/config/config.go` (keep `TenancyConfig.Enabled` if you keep
-   steps 5–7, it stays `false`), plus the tenancy sections of `.env.example` and
-   `docs/environment-variables.md`.
-3. **Tenants table:** `db/migrations/000002_tenants.*`, `db/schema/tenants.sql`,
-   `db/queries/tenants.sql`, then `make sqlc-generate` (delete the stale
-   `internal/core/db/sqlcgen/tenants.sql.go`). Only delete migrations on a
-   database that never applied them.
-4. **Tooling:** the `--tenant`/`--create-tenant` handling in
-   `cmd/createuser` (`tenant.go` and the marked blocks in `main.go`).
-5. **Policies:** `internal/core/policy/tenant.go` — the `TenantRequired` /
-   `TenantMatchFromPath` policies, the `TenantRead` / `TenantWrite` presets, and
-   the package tenancy flag (`SetTenancyEnabled` / `TenancyEnabled`); the tenant
-   plumbing in `internal/core/policy/options.go` (`tenantMatchParam`, the tenant
-   branch in `defaultPresetConfig`) and `validator_rules.go`
-   (`patternContainsTenantID` and its use in `validateTenantRules`), the tenant
-   `PolicyType*` constants in `metadata.go`, the token/tenant check in
-   `authRequiredWithEngine` (`internal/core/policy/auth.go`), and the matching
-   support in `internal/tools/validator`.
-6. **Tenant primitives:** `internal/core/tenant/` and
-   `internal/core/auth/tenant_context.go` (`WithRequestTenant`,
-   `RequestTenantFromContext`).
-7. **goAuth provider:** `TenancySettings` in `internal/core/auth/config.go` and
-   `goauth_provider.go` and the call site in `internal/core/app/deps.go`
-   (`policy.SetTenancyEnabled(...)`, `WithTenancy(...)`, the `TenancySettings`
-   argument); the `GetUserByIdentifierInTenant` / `GetUserByIDInTenant` provider
-   and repository methods and their queries in `db/queries/auth_users.sql`; the
-   tenant scoping (`scopeTenant`, the `tenant_id` argument) of the MFA queries.
-   The `users.tenant_id` column (migration 000005) can then be dropped with a
-   new migration.
-8. **Cache and rate-limit keying (optional):** `cache.CacheVaryBy.TenantID`, tag
-   `TenantID`, `ratelimit.ScopeTenant`, `KeyByTenant`, and the tenant branch of
-   `KeyByUserOrTenantOrTokenHash`. These degrade gracefully and are safe to
-   leave.
+Once a database has applied `000002_tenancy`, migrations are append-only. To
+remove tenancy from a deployed project, do steps 1, 2, 4, 5 and 6, keep
+`000002_tenancy` in your history, delete only the sqlc mirror lines for the
+tenant column and table (`db/schema/tenancy.sql`, `db/queries/tenancy.sql`),
+and add a new migration:
 
-After deletion, run the gates:
-
-```
-go build ./...
-go test ./...
-go run ./cmd/superapi-verify ./...
+```sql
+DROP INDEX IF EXISTS users_tenant_email_lower_idx;
+ALTER TABLE users DROP COLUMN IF EXISTS tenant_id;
+DROP TABLE IF EXISTS tenants;
 ```
 
 ## Related
 
-- docs/policies.md — tenant policy reference and the optionality note
-- docs/environment-variables.md — `TENANCY_*` variables
-<!-- template:begin tenancy -->
-- docs/multi-tenancy.md — what tenancy does when enabled
-<!-- template:end tenancy -->
+- [environment-variables.md](environment-variables.md) — the `TENANCY_*` variables
+- [multi-tenancy.md](multi-tenancy.md) — what tenancy does when enabled

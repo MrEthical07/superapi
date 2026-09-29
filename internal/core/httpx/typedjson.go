@@ -36,15 +36,18 @@ type Validatable interface {
 	Validate() error
 }
 
-// DecodeAndValidateJSON strictly decodes a JSON request body into dst, applies
-// the default body limit, rejects trailing values, and runs Validate when
-// available.
+// DecodeAndValidateJSON strictly decodes a JSON request body into dst, caps the
+// body, rejects trailing values, and runs Validate when available.
+//
+// The cap is the configured HTTP_MIDDLEWARE_MAX_BODY_BYTES when that middleware
+// ran, otherwise DefaultJSONBodyLimit (1 MiB), so disabling the middleware
+// never leaves the JSON path unbounded.
 //
 // Every error it returns is an *apperr.AppError with a stable client-facing
 // message. A Validate error that is not already an AppError is replaced by a
 // generic message (write DTO validation errors with apperr.New to control the
 // text).
-func DecodeAndValidateJSON(_ http.ResponseWriter, r *http.Request, dst any) error {
+func DecodeAndValidateJSON(w http.ResponseWriter, r *http.Request, dst any) error {
 	if r == nil {
 		return appBadRequest("request is required", errors.New("nil request"))
 	}
@@ -56,10 +59,13 @@ func DecodeAndValidateJSON(_ http.ResponseWriter, r *http.Request, dst any) erro
 	}
 	defer r.Body.Close()
 
-	// The body is read in full (it is already capped by the MaxBodyBytes
-	// middleware) so an unknown field can be located structurally instead of
-	// by parsing the decoder's error text.
-	body, err := io.ReadAll(r.Body)
+	// The body is read in full (after capping it) so an unknown field can be
+	// located structurally instead of by parsing the decoder's error text.
+	src := r.Body
+	if limit, capped := jsonBodyLimit(r); !capped {
+		src = http.MaxBytesReader(w, r.Body, limit)
+	}
+	body, err := io.ReadAll(src)
 	if err != nil {
 		return mapDecodeError(err, nil, dst)
 	}

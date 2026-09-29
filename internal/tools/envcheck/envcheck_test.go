@@ -48,3 +48,49 @@ func g() { _ = os.Getenv("TEST_ONLY") }
 		t.Fatalf("keys=%s", got)
 	}
 }
+
+// A feature keeps its settings in its own package and reads them with the
+// exported config.Env* helpers; the scanner must find those keys wherever the
+// package lives, and flag one missing from either document.
+func TestCheckFindsFeatureOwnedKeys(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/widget/config.go", `package widget
+import "example.com/x/config"
+func load() {
+	_ = config.EnvBool("WIDGET_ENABLED", false)
+	_ = config.EnvString("WIDGET_NAME", "")
+	_ = config.EnvDeprecated("WIDGET_OLD_KNOB")
+}
+`)
+	write(".env.example", "WIDGET_ENABLED=false\n")
+	write("docs/environment-variables.md", "| WIDGET_ENABLED | false |\n| WIDGET_OLD_KNOB | deprecated |\n")
+
+	res, err := Check(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(res.Keys, ","); got != "WIDGET_ENABLED,WIDGET_NAME,WIDGET_OLD_KNOB" {
+		t.Fatalf("keys=%s", got)
+	}
+	// WIDGET_NAME is undocumented everywhere; the deprecated key is exempt from
+	// .env.example but is documented.
+	if got := strings.Join(res.MissingExample, ","); got != "WIDGET_NAME" {
+		t.Fatalf("missing from .env.example: %s", got)
+	}
+	if got := strings.Join(res.MissingDocs, ","); got != "WIDGET_NAME" {
+		t.Fatalf("missing from docs: %s", got)
+	}
+	if got := strings.Join(res.Deprecated, ","); got != "WIDGET_OLD_KNOB" {
+		t.Fatalf("deprecated: %s", got)
+	}
+}

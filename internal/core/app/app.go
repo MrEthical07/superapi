@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -15,9 +16,6 @@ import (
 	"github.com/MrEthical07/superapi/internal/core/notify"
 	"github.com/MrEthical07/superapi/internal/core/requestid"
 	"github.com/MrEthical07/superapi/internal/core/response"
-	// template:begin tenancy
-	"github.com/MrEthical07/superapi/internal/core/tenant"
-	// template:end tenancy
 )
 
 // START HERE:
@@ -59,7 +57,7 @@ type App struct {
 // Notes:
 // - DependencyBinder modules receive initialized dependencies before Register
 // - Any registration failure aborts startup and closes allocated resources
-func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
+func New(cfg *config.Config, log *logx.Logger, modules []Module, features ...Feature) (*App, error) {
 	if cfg == nil {
 		return nil, errors.New("nil config")
 	}
@@ -68,9 +66,15 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 	}
 
 	router := httpx.NewMux()
-	deps, err := initDependencies(context.Background(), cfg)
+	deps, err := initDependencies(context.Background(), cfg, features)
 	if err != nil {
 		return nil, err
+	}
+	for _, warning := range deps.Deprecations() {
+		log.Warn().Msg(warning)
+	}
+	for _, lf := range deps.features {
+		router.UseRouteRules(lf.hooks.RouteRules...)
 	}
 	notifier, err := notify.New(cfg.Notify, cfg.Env, log)
 	if err != nil {
@@ -87,10 +91,14 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 		router.Handle(http.MethodGet, deps.Metrics.Path(), metricsHandler)
 	}
 
+	var featureMiddleware []func(http.Handler) http.Handler
+	for _, lf := range deps.features {
+		if lf.hooks.Middleware != nil {
+			featureMiddleware = append(featureMiddleware, lf.hooks.Middleware(deps))
+		}
+	}
 	handler := httpx.AssembleGlobalMiddleware(router, cfg.HTTP.Middleware, log, deps.Tracing,
-		// template:begin tenancy
-		httpx.WithTenantResolver(tenantResolver(cfg, deps)),
-		// template:end tenancy
+		httpx.WithFeatureMiddleware(featureMiddleware...),
 	)
 	if deps.Metrics != nil {
 		handler = deps.Metrics.InstrumentHTTP(handler)
@@ -130,34 +138,6 @@ func New(cfg *config.Config, log *logx.Logger, modules []Module) (*App, error) {
 
 	return a, nil
 }
-
-// template:begin tenancy
-// tenantResolver builds the tenant resolution middleware when tenancy is
-// enabled, or returns nil (no middleware) when it is off.
-func tenantResolver(cfg *config.Config, deps *Dependencies) func(http.Handler) http.Handler {
-	if cfg == nil || !cfg.Tenancy.Enabled {
-		return nil
-	}
-
-	exempt := append([]string(nil), cfg.Tenancy.ExemptPaths...)
-	if deps != nil && deps.Metrics != nil && deps.Metrics.Enabled() {
-		exempt = append(exempt, deps.Metrics.Path())
-	}
-
-	resolverCfg := tenant.ResolverConfig{
-		Resolver:    cfg.Tenancy.Resolver,
-		Header:      cfg.Tenancy.Header,
-		BaseDomain:  cfg.Tenancy.BaseDomain,
-		ExemptPaths: exempt,
-		CacheTTL:    cfg.Tenancy.ValidateCacheTTL,
-	}
-	if cfg.Tenancy.Validate && deps != nil && deps.DB != nil {
-		resolverCfg.Directory = tenant.NewRepository(deps.DB)
-	}
-	return tenant.Middleware(resolverCfg)
-}
-
-// template:end tenancy
 
 func requireBearerToken(next http.Handler, token string) http.Handler {
 	token = strings.TrimSpace(token)
@@ -203,7 +183,10 @@ func (a *App) Run(ctx context.Context) error {
 			Str("service", a.cfg.ServiceName).
 			Str("env", a.cfg.Env).
 			Msg("starting http server")
-		err := a.server.ListenAndServe()
+		ln, err := net.Listen("tcp", a.server.Addr)
+		if err == nil {
+			err = a.server.Serve(ln)
+		}
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return

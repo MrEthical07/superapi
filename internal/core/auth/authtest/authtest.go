@@ -1,7 +1,7 @@
 // Package authtest provides in-memory auth repositories and an engine builder
 // for tests. The repositories mirror the SQL contract of the relational
-// implementations (tenant scoping, not-found semantics) so tests exercise the
-// real auth.StoreUserProvider and goAuth engine without Postgres.
+// implementations (not-found semantics, global identifier uniqueness) so tests
+// exercise the real auth.StoreUserProvider and goAuth engine without Postgres.
 package authtest
 
 import (
@@ -10,7 +10,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 
@@ -26,14 +25,13 @@ var (
 	_ auth.MFARepository  = (*MFARepository)(nil)
 )
 
-// UserRepository is an in-memory UserRepository that mirrors the SQL
-// contract: *InTenant lookups only match rows in that tenant and treat an
-// empty tenant as not found.
+// UserRepository is an in-memory UserRepository that mirrors the SQL contract.
 type UserRepository struct {
 	mu    sync.Mutex
 	users map[string]auth.StoredUser
 }
 
+// NewUserRepository returns an empty repository.
 func NewUserRepository() *UserRepository {
 	return &UserRepository{users: make(map[string]auth.StoredUser)}
 }
@@ -58,32 +56,6 @@ func (r *UserRepository) GetByID(_ context.Context, userID string) (auth.StoredU
 	return auth.StoredUser{}, auth.ErrAuthUserNotFound
 }
 
-func (r *UserRepository) GetByIdentifierInTenant(_ context.Context, tenantID, identifier string) (auth.StoredUser, error) {
-	if tenantID == "" {
-		return auth.StoredUser{}, auth.ErrAuthUserNotFound
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, u := range r.users {
-		if u.TenantID == tenantID && u.Email == auth.NormalizeIdentifier(identifier) {
-			return u, nil
-		}
-	}
-	return auth.StoredUser{}, auth.ErrAuthUserNotFound
-}
-
-func (r *UserRepository) GetByIDInTenant(_ context.Context, tenantID, userID string) (auth.StoredUser, error) {
-	if tenantID == "" {
-		return auth.StoredUser{}, auth.ErrAuthUserNotFound
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if u, ok := r.users[userID]; ok && u.TenantID == tenantID {
-		return u, nil
-	}
-	return auth.StoredUser{}, auth.ErrAuthUserNotFound
-}
-
 func (r *UserRepository) UpdatePasswordHash(_ context.Context, userID, newHash string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -101,7 +73,6 @@ func (r *UserRepository) Create(_ context.Context, input auth.CreateStoredUserIn
 	_, _ = rand.Read(b[:])
 	u := auth.StoredUser{
 		ID:             hex.EncodeToString(b[:]),
-		TenantID:       tenantOrDefault(input.TenantID),
 		Email:          auth.NormalizeIdentifier(input.Identifier),
 		PasswordHash:   input.PasswordHash,
 		Role:           input.Role,
@@ -111,7 +82,7 @@ func (r *UserRepository) Create(_ context.Context, input auth.CreateStoredUserIn
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, existing := range r.users {
-		// Global identifier uniqueness, like users_email_unique_idx.
+		// Global identifier uniqueness, like users_email_lower_unique_idx.
 		if existing.Email == u.Email {
 			return auth.StoredUser{}, auth.ErrAuthUserExists
 		}
@@ -149,20 +120,16 @@ func NewMFARepository(repo auth.UserRepository) *MFARepository {
 	return &MFARepository{users: users, totp: map[string]auth.TOTPState{}, codes: map[string]map[[32]byte]bool{}}
 }
 
-// inScope reports whether userID exists (in tenantID when non-empty). Callers
-// hold the users lock.
-func (m *MFARepository) inScope(tenantID, userID string) (auth.StoredUser, bool) {
+// user returns the stored user. Callers hold the users lock.
+func (m *MFARepository) user(userID string) (auth.StoredUser, bool) {
 	u, ok := m.users.users[userID]
-	if !ok || (tenantID != "" && u.TenantID != tenantID) {
-		return auth.StoredUser{}, false
-	}
-	return u, true
+	return u, ok
 }
 
-func (m *MFARepository) GetTOTP(_ context.Context, tenantID, userID string) (auth.TOTPState, bool, error) {
+func (m *MFARepository) GetTOTP(_ context.Context, userID string) (auth.TOTPState, bool, error) {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	u, ok := m.inScope(tenantID, userID)
+	u, ok := m.user(userID)
 	if !ok {
 		return auth.TOTPState{}, false, nil
 	}
@@ -182,10 +149,10 @@ func (m *MFARepository) setEnabled(u auth.StoredUser, enabled bool) {
 	m.users.users[u.ID] = u
 }
 
-func (m *MFARepository) UpsertTOTPSecret(_ context.Context, tenantID, userID string, ciphertext []byte) error {
+func (m *MFARepository) UpsertTOTPSecret(_ context.Context, userID string, ciphertext []byte) error {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	u, ok := m.inScope(tenantID, userID)
+	u, ok := m.user(userID)
 	if !ok {
 		return auth.ErrAuthUserNotFound
 	}
@@ -196,10 +163,10 @@ func (m *MFARepository) UpsertTOTPSecret(_ context.Context, tenantID, userID str
 	return nil
 }
 
-func (m *MFARepository) MarkTOTPVerified(_ context.Context, tenantID, userID string) error {
+func (m *MFARepository) MarkTOTPVerified(_ context.Context, userID string) error {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	if _, ok := m.inScope(tenantID, userID); !ok {
+	if _, ok := m.user(userID); !ok {
 		return auth.ErrAuthUserNotFound
 	}
 	st, ok := m.totp[userID]
@@ -211,11 +178,11 @@ func (m *MFARepository) MarkTOTPVerified(_ context.Context, tenantID, userID str
 	return nil
 }
 
-func (m *MFARepository) AdvanceTOTPCounter(_ context.Context, tenantID, userID string, counter int64) error {
+func (m *MFARepository) AdvanceTOTPCounter(_ context.Context, userID string, counter int64) error {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
 	st, ok := m.totp[userID]
-	if _, in := m.inScope(tenantID, userID); !in || !ok || st.LastUsedCounter >= counter {
+	if _, in := m.user(userID); !in || !ok || st.LastUsedCounter >= counter {
 		return auth.ErrTOTPCounterNotAdvanced
 	}
 	st.LastUsedCounter = counter
@@ -223,10 +190,10 @@ func (m *MFARepository) AdvanceTOTPCounter(_ context.Context, tenantID, userID s
 	return nil
 }
 
-func (m *MFARepository) RotateTOTPSecret(_ context.Context, tenantID, userID string, prev, next []byte) (bool, error) {
+func (m *MFARepository) RotateTOTPSecret(_ context.Context, userID string, prev, next []byte) (bool, error) {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	if _, ok := m.inScope(tenantID, userID); !ok {
+	if _, ok := m.user(userID); !ok {
 		return false, auth.ErrAuthUserNotFound
 	}
 	st, ok := m.totp[userID]
@@ -258,10 +225,10 @@ func (m *MFARepository) ListTOTPSecrets(_ context.Context, afterUserID string, l
 	return out, nil
 }
 
-func (m *MFARepository) DisableTOTP(_ context.Context, tenantID, userID string) error {
+func (m *MFARepository) DisableTOTP(_ context.Context, userID string) error {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	u, ok := m.inScope(tenantID, userID)
+	u, ok := m.user(userID)
 	if !ok {
 		return auth.ErrAuthUserNotFound
 	}
@@ -271,10 +238,10 @@ func (m *MFARepository) DisableTOTP(_ context.Context, tenantID, userID string) 
 	return nil
 }
 
-func (m *MFARepository) ListUnusedBackupCodes(_ context.Context, tenantID, userID string) ([][32]byte, error) {
+func (m *MFARepository) ListUnusedBackupCodes(_ context.Context, userID string) ([][32]byte, error) {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	if _, ok := m.inScope(tenantID, userID); !ok {
+	if _, ok := m.user(userID); !ok {
 		return nil, nil
 	}
 	var out [][32]byte
@@ -286,10 +253,10 @@ func (m *MFARepository) ListUnusedBackupCodes(_ context.Context, tenantID, userI
 	return out, nil
 }
 
-func (m *MFARepository) ReplaceBackupCodes(_ context.Context, tenantID, userID string, hashes [][32]byte) error {
+func (m *MFARepository) ReplaceBackupCodes(_ context.Context, userID string, hashes [][32]byte) error {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	if _, ok := m.inScope(tenantID, userID); !ok {
+	if _, ok := m.user(userID); !ok {
 		return auth.ErrAuthUserNotFound
 	}
 	next := make(map[[32]byte]bool, len(hashes))
@@ -300,10 +267,10 @@ func (m *MFARepository) ReplaceBackupCodes(_ context.Context, tenantID, userID s
 	return nil
 }
 
-func (m *MFARepository) ConsumeBackupCode(_ context.Context, tenantID, userID string, hash [32]byte) (bool, error) {
+func (m *MFARepository) ConsumeBackupCode(_ context.Context, userID string, hash [32]byte) (bool, error) {
 	m.users.mu.Lock()
 	defer m.users.mu.Unlock()
-	if _, ok := m.inScope(tenantID, userID); !ok {
+	if _, ok := m.user(userID); !ok {
 		return false, nil
 	}
 	used, ok := m.codes[userID][hash]
@@ -325,17 +292,25 @@ func NewRedis(t testing.TB) redis.UniversalClient {
 
 // NewEngine builds a goAuth engine through the project config over the
 // in-memory repository.
-func NewEngine(t testing.TB, tenancy bool, repo auth.UserRepository) (*goauth.Engine, *auth.StoreUserProvider) {
+func NewEngine(t testing.TB, repo auth.UserRepository) (*goauth.Engine, *auth.StoreUserProvider) {
 	t.Helper()
-	return NewEngineWithFeatures(t, tenancy, repo, auth.Features{})
+	return NewEngineWithFeatures(t, repo, auth.Features{})
 }
 
 // NewEngineWithFeatures is NewEngine with explicit auth feature flags. When
 // features.TOTP is set, an in-memory MFA repository and a random-key cipher are
 // wired into the provider.
-func NewEngineWithFeatures(t testing.TB, tenancy bool, repo auth.UserRepository, features auth.Features) (*goauth.Engine, *auth.StoreUserProvider) {
+func NewEngineWithFeatures(t testing.TB, repo auth.UserRepository, features auth.Features) (*goauth.Engine, *auth.StoreUserProvider) {
 	t.Helper()
-	provider := auth.NewStoreUserProvider(repo).WithTenancy(tenancy)
+	return NewEngineWith(t, repo, features, nil)
+}
+
+// NewEngineWith is NewEngineWithFeatures for a feature under test: wrap
+// decorates the provider (as an app.Hooks.UserProvider hook does) and mutators
+// adjust the goAuth config (app.Hooks.GoAuthConfig). Either may be nil/empty.
+func NewEngineWith(t testing.TB, repo auth.UserRepository, features auth.Features, wrap func(*auth.StoreUserProvider) goauth.UserProvider, mutators ...auth.ConfigMutator) (*goauth.Engine, *auth.StoreUserProvider) {
+	t.Helper()
+	provider := auth.NewStoreUserProvider(repo)
 	if features.TOTP {
 		var key [32]byte
 		_, _ = rand.Read(key[:])
@@ -345,17 +320,14 @@ func NewEngineWithFeatures(t testing.TB, tenancy bool, repo auth.UserRepository,
 		}
 		provider = provider.WithMFA(NewMFARepository(repo), cipher)
 	}
-	engine, closeFn, err := auth.NewGoAuthEngine(NewRedis(t), auth.ModeStrict, auth.TenancySettings{Enabled: tenancy}, features, provider)
+	var userProvider goauth.UserProvider = provider
+	if wrap != nil {
+		userProvider = wrap(provider)
+	}
+	engine, closeFn, err := auth.NewGoAuthEngine(NewRedis(t), auth.ModeStrict, features, userProvider, mutators...)
 	if err != nil {
-		t.Fatalf("build engine (tenancy=%v): %v", tenancy, err)
+		t.Fatalf("build engine: %v", err)
 	}
 	t.Cleanup(closeFn)
 	return engine, provider
-}
-
-func tenantOrDefault(tenantID string) string {
-	if trimmed := strings.TrimSpace(tenantID); trimmed != "" {
-		return trimmed
-	}
-	return auth.DefaultTenantID
 }

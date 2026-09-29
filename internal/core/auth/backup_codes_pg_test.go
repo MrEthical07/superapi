@@ -26,7 +26,7 @@ func newBackupFixture(t *testing.T) backupFixture {
 	t.Helper()
 	pg := dbtest.NewPostgres(t)
 	user, err := NewRelationalUserRepository(pg).Create(context.Background(), CreateStoredUserInput{
-		TenantID: "tenant-a", Identifier: "codes@example.com", PasswordHash: "h", Status: "active",
+		Identifier: "codes@example.com", PasswordHash: "h", Status: "active",
 	})
 	if err != nil {
 		t.Fatalf("create user: %v", err)
@@ -34,16 +34,21 @@ func newBackupFixture(t *testing.T) backupFixture {
 	return backupFixture{pg: pg, mfa: NewMFARepository(pg), userID: user.ID}
 }
 
-func (f backupFixture) replace(t *testing.T, tenantID string, hashes ...[32]byte) error {
+func (f backupFixture) replace(t *testing.T, hashes ...[32]byte) error {
+	t.Helper()
+	return f.replaceFor(t, f.userID, hashes...)
+}
+
+func (f backupFixture) replaceFor(t *testing.T, userID string, hashes ...[32]byte) error {
 	t.Helper()
 	return f.pg.WithTx(context.Background(), func(ctx context.Context) error {
-		return f.mfa.ReplaceBackupCodes(ctx, tenantID, f.userID, hashes)
+		return f.mfa.ReplaceBackupCodes(ctx, userID, hashes)
 	})
 }
 
 func (f backupFixture) unused(t *testing.T) map[[32]byte]bool {
 	t.Helper()
-	list, err := f.mfa.ListUnusedBackupCodes(context.Background(), "tenant-a", f.userID)
+	list, err := f.mfa.ListUnusedBackupCodes(context.Background(), f.userID)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -62,15 +67,15 @@ func TestReplaceBackupCodesWithAnOverlappingSet(t *testing.T) {
 	ctx := context.Background()
 	a, b, c, d := hashOf("a"), hashOf("b"), hashOf("c"), hashOf("d")
 
-	if err := f.replace(t, "tenant-a", a, b, c); err != nil {
+	if err := f.replace(t, a, b, c); err != nil {
 		t.Fatalf("first replace: %v", err)
 	}
-	if ok, err := f.mfa.ConsumeBackupCode(ctx, "tenant-a", f.userID, a); err != nil || !ok {
+	if ok, err := f.mfa.ConsumeBackupCode(ctx, f.userID, a); err != nil || !ok {
 		t.Fatalf("consume a: ok=%v err=%v", ok, err)
 	}
 
 	// {b, c} are kept from the old set, d is new, a is dropped.
-	if err := f.replace(t, "tenant-a", b, c, d); err != nil {
+	if err := f.replace(t, b, c, d); err != nil {
 		t.Fatalf("overlapping replace: %v", err)
 	}
 	got := f.unused(t)
@@ -80,28 +85,28 @@ func TestReplaceBackupCodesWithAnOverlappingSet(t *testing.T) {
 
 	// Re-including a hash that had been consumed makes it usable again (it is
 	// a fresh row), once.
-	if err := f.replace(t, "tenant-a", a, b); err != nil {
+	if err := f.replace(t, a, b); err != nil {
 		t.Fatalf("replace with a previously consumed hash: %v", err)
 	}
 	if got := f.unused(t); len(got) != 2 || !got[a] || !got[b] {
 		t.Fatalf("unused = %v, want {a,b}", got)
 	}
-	if ok, _ := f.mfa.ConsumeBackupCode(ctx, "tenant-a", f.userID, a); !ok {
+	if ok, _ := f.mfa.ConsumeBackupCode(ctx, f.userID, a); !ok {
 		t.Fatal("a fresh row must be consumable")
 	}
-	if ok, _ := f.mfa.ConsumeBackupCode(ctx, "tenant-a", f.userID, a); ok {
+	if ok, _ := f.mfa.ConsumeBackupCode(ctx, f.userID, a); ok {
 		t.Fatal("a code must not be consumable twice")
 	}
 
 	// Replacing with the identical set works too.
-	if err := f.replace(t, "tenant-a", a, b); err != nil {
+	if err := f.replace(t, a, b); err != nil {
 		t.Fatalf("replace with the same set: %v", err)
 	}
 	if got := f.unused(t); len(got) != 2 {
 		t.Fatalf("unused = %v", got)
 	}
 	// And with an empty set: every code removed.
-	if err := f.replace(t, "tenant-a"); err != nil {
+	if err := f.replace(t); err != nil {
 		t.Fatalf("replace with an empty set: %v", err)
 	}
 	if got := f.unused(t); len(got) != 0 {
@@ -112,7 +117,7 @@ func TestReplaceBackupCodesWithAnOverlappingSet(t *testing.T) {
 func TestReplaceBackupCodesDeduplicatesTheNewSet(t *testing.T) {
 	f := newBackupFixture(t)
 	a, b := hashOf("a"), hashOf("b")
-	if err := f.replace(t, "tenant-a", a, b, a, a); err != nil {
+	if err := f.replace(t, a, b, a, a); err != nil {
 		t.Fatalf("replace with repeated hashes: %v", err)
 	}
 	if got := f.unused(t); len(got) != 2 {
@@ -125,7 +130,7 @@ func TestBackupCodeCannotBeConsumedTwice(t *testing.T) {
 	f := newBackupFixture(t)
 	ctx := context.Background()
 	a := hashOf("only")
-	if err := f.replace(t, "tenant-a", a); err != nil {
+	if err := f.replace(t, a); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 
@@ -135,7 +140,7 @@ func TestBackupCodeCannotBeConsumedTwice(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ok, err := f.mfa.ConsumeBackupCode(ctx, "tenant-a", f.userID, a)
+			ok, err := f.mfa.ConsumeBackupCode(ctx, f.userID, a)
 			if err != nil {
 				t.Errorf("consume: %v", err)
 			}
@@ -148,7 +153,7 @@ func TestBackupCodeCannotBeConsumedTwice(t *testing.T) {
 	if wins.Load() != 1 {
 		t.Fatalf("consumed %d times, want exactly 1", wins.Load())
 	}
-	if ok, _ := f.mfa.ConsumeBackupCode(ctx, "tenant-a", f.userID, a); ok {
+	if ok, _ := f.mfa.ConsumeBackupCode(ctx, f.userID, a); ok {
 		t.Fatal("consumed again after the race")
 	}
 }
@@ -158,11 +163,11 @@ func TestBackupCodeCannotBeConsumedTwice(t *testing.T) {
 func TestReplaceBackupCodesRequiresATransaction(t *testing.T) {
 	f := newBackupFixture(t)
 	a, b := hashOf("a"), hashOf("b")
-	if err := f.replace(t, "tenant-a", a); err != nil {
+	if err := f.replace(t, a); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
-	err := f.mfa.ReplaceBackupCodes(context.Background(), "tenant-a", f.userID, [][32]byte{b})
+	err := f.mfa.ReplaceBackupCodes(context.Background(), f.userID, [][32]byte{b})
 	if !errors.Is(err, ErrTransactionRequired) {
 		t.Fatalf("err = %v, want ErrTransactionRequired", err)
 	}
@@ -176,13 +181,13 @@ func TestReplaceBackupCodesRequiresATransaction(t *testing.T) {
 func TestReplaceBackupCodesRollsBackAsOne(t *testing.T) {
 	f := newBackupFixture(t)
 	a, b := hashOf("a"), hashOf("b")
-	if err := f.replace(t, "tenant-a", a); err != nil {
+	if err := f.replace(t, a); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	boom := errors.New("boom")
 	err := f.pg.WithTx(context.Background(), func(ctx context.Context) error {
-		if err := f.mfa.ReplaceBackupCodes(ctx, "tenant-a", f.userID, [][32]byte{b}); err != nil {
+		if err := f.mfa.ReplaceBackupCodes(ctx, f.userID, [][32]byte{b}); err != nil {
 			return err
 		}
 		return boom // something later in the same unit of work fails
@@ -194,14 +199,14 @@ func TestReplaceBackupCodesRollsBackAsOne(t *testing.T) {
 		t.Fatalf("after rollback unused = %v, want the original {a}", got)
 	}
 
-	// A user that is not in scope: nothing inserted, error returned, and the
+	// A user that does not exist: nothing inserted, error returned, and the
 	// transaction rolls the delete back.
-	err = f.replace(t, "tenant-b", b)
+	err = f.replaceFor(t, "00000000-0000-0000-0000-000000000000", b)
 	if !errors.Is(err, ErrAuthUserNotFound) {
-		t.Fatalf("cross-tenant err = %v", err)
+		t.Fatalf("missing-user err = %v", err)
 	}
 	if got := f.unused(t); len(got) != 1 || !got[a] {
-		t.Fatalf("after failed cross-tenant replace unused = %v, want {a}", got)
+		t.Fatalf("after failed missing-user replace unused = %v, want {a}", got)
 	}
 }
 

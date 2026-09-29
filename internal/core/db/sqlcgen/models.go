@@ -26,9 +26,9 @@ type User struct {
 	Status         string             `json:"status"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	TenantID       string             `json:"tenant_id"`
 	AccountVersion int32              `json:"account_version"`
 	TotpEnabled    bool               `json:"totp_enabled"`
+	TenantID       string             `json:"tenant_id"`
 }
 
 type UserBackupCode struct {

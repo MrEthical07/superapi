@@ -166,8 +166,8 @@ Good repository interface:
 Examples:
 
 - CreateOrder(ctx, input) (Order, error)
-- GetOrderByID(ctx, tenantID, orderID) (Order, error)
-- ListOrders(ctx, tenantID, filter) ([]Order, error)
+- GetOrderByID(ctx, ownerID, orderID) (Order, error)
+- ListOrders(ctx, ownerID, filter) ([]Order, error)
 
 Bad examples:
 

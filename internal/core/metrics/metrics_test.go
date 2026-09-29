@@ -20,12 +20,12 @@ func TestInstrumentHTTPRecordsRouteMetrics(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Use(svc.CaptureRoutePattern)
-	r.Get("/api/v1/tenants/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get("/api/v1/things/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	})
 
 	h := svc.InstrumentHTTP(r)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants/123", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/things/123", nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
@@ -34,7 +34,7 @@ func TestInstrumentHTTPRecordsRouteMetrics(t *testing.T) {
 	}
 
 	assertMetricValue(t, svc, "superapi_http_requests_total",
-		map[string]string{"method": http.MethodGet, "route": "/api/v1/tenants/{id}", "status": "201"},
+		map[string]string{"method": http.MethodGet, "route": "/api/v1/things/{id}", "status": "201"},
 		1,
 	)
 }
@@ -168,15 +168,15 @@ func TestObserveCacheIncrementsCounter(t *testing.T) {
 		t.Fatalf("new metrics service: %v", err)
 	}
 
-	svc.ObserveCache("/api/v1/tenants/{id}", "hit")
-	svc.ObserveCache("/api/v1/tenants/{id}", "miss")
+	svc.ObserveCache("/api/v1/things/{id}", "hit")
+	svc.ObserveCache("/api/v1/things/{id}", "miss")
 
 	assertMetricValue(t, svc, "superapi_cache_operations_total",
-		map[string]string{"route": "/api/v1/tenants/{id}", "outcome": "hit"},
+		map[string]string{"route": "/api/v1/things/{id}", "outcome": "hit"},
 		1,
 	)
 	assertMetricValue(t, svc, "superapi_cache_operations_total",
-		map[string]string{"route": "/api/v1/tenants/{id}", "outcome": "miss"},
+		map[string]string{"route": "/api/v1/things/{id}", "outcome": "miss"},
 		1,
 	)
 }

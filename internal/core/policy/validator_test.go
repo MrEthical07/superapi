@@ -45,23 +45,12 @@ func TestMustValidateRoutePanicsOnUnsafeAuthenticatedCache(t *testing.T) {
 	mr := miniredis.RunT(t)
 	mgr := newCacheManagerForPolicyTests(t, mr.Addr(), true)
 
-	assertRouteConfigPanic(t, "VaryBy.UserID or VaryBy.TenantID", func() {
+	assertRouteConfigPanic(t, "VaryBy.UserID or an identity-bearing VaryBy.Parts entry", func() {
 		MustValidateRoute(
 			http.MethodGet,
 			"/api/v1/system/whoami",
 			AuthRequired(nil, auth.ModeHybrid),
 			CacheRead(mgr, cache.CacheReadConfig{TTL: time.Minute}),
-		)
-	})
-}
-
-func TestMustValidateRoutePanicsOnTenantPathWithoutMatchPolicy(t *testing.T) {
-	assertRouteConfigPanic(t, string(PolicyTypeTenantMatchFromPath), func() {
-		MustValidateRoute(
-			http.MethodGet,
-			"/api/v1/tenants/{tenant_id}/projects",
-			AuthRequired(nil, auth.ModeHybrid),
-			TenantRequired(),
 		)
 	})
 }
@@ -73,16 +62,14 @@ func TestMustValidateRoutePassesOnStrictValidConfiguration(t *testing.T) {
 	assertRouteConfigDoesNotPanic(t, func() {
 		MustValidateRoute(
 			http.MethodGet,
-			"/api/v1/tenants/{tenant_id}/projects/{id}",
+			"/api/v1/projects/{id}",
 			AuthRequired(nil, auth.ModeHybrid),
-			TenantRequired(),
-			TenantMatchFromPath("tenant_id"),
 			RequirePerm("project.read"),
-			RateLimit(allowLimiter{}, ratelimit.Rule{Limit: 10, Window: time.Minute, Scope: ratelimit.ScopeTenant}),
+			RateLimit(allowLimiter{}, ratelimit.Rule{Limit: 10, Window: time.Minute, Scope: ratelimit.ScopeUser}),
 			CacheRead(mgr, cache.CacheReadConfig{
 				TTL: time.Minute,
 				VaryBy: cache.CacheVaryBy{
-					TenantID: true,
+					UserID: true,
 				},
 			}),
 		)

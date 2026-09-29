@@ -1,0 +1,3 @@
+# Files (git pathspecs) allowed to keep mentioning tenancy in a project created
+# with `make init --no-tenancy`, one per line: "<pathspec>  # why it cannot be
+# removed". The template CI reads this file; the target is an empty list.
