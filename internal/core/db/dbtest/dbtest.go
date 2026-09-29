@@ -38,6 +38,49 @@ const EnvDatabaseURL = "SUPERAPI_TEST_DATABASE_URL"
 func NewPostgres(t testing.TB) *storage.Postgres {
 	t.Helper()
 
+	testURL, sourceURL := NewDatabase(t)
+
+	runner, err := db.NewMigrationRunner(testURL, sourceURL)
+	if err != nil {
+		t.Fatalf("migration runner: %v", err)
+	}
+	if _, err := runner.Up(); err != nil {
+		_ = runner.Close()
+		t.Fatalf("migrate up: %v", err)
+	}
+	_ = runner.Close()
+
+	return OpenPostgres(t, testURL)
+}
+
+// OpenPostgres opens the storage boundary over an existing database URL (as
+// returned by NewDatabase). The pool is closed when the test finishes.
+func OpenPostgres(t testing.TB, databaseURL string) *storage.Postgres {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open test pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	pg, err := storage.NewPostgres(pool)
+	if err != nil {
+		t.Fatalf("storage boundary: %v", err)
+	}
+	return pg
+}
+
+// NewDatabase creates a fresh, empty database (no migrations applied) and
+// returns its connection URL and the golang-migrate source URL for
+// db/migrations. Use it to test migrations themselves. The database is dropped
+// when the test finishes.
+func NewDatabase(t testing.TB) (databaseURL, migrationSourceURL string) {
+	t.Helper()
+
 	adminURL := strings.TrimSpace(os.Getenv(EnvDatabaseURL))
 	if adminURL == "" {
 		t.Skipf("%s not set; skipping Postgres integration test", EnvDatabaseURL)
@@ -74,32 +117,11 @@ func NewPostgres(t testing.TB) *storage.Postgres {
 	if err != nil {
 		t.Fatalf("build test database url: %v", err)
 	}
-
 	sourceURL, err := db.MigrationSourceURL(migrationsDir(t))
 	if err != nil {
 		t.Fatalf("migration source: %v", err)
 	}
-	runner, err := db.NewMigrationRunner(testURL, sourceURL)
-	if err != nil {
-		t.Fatalf("migration runner: %v", err)
-	}
-	if _, err := runner.Up(); err != nil {
-		_ = runner.Close()
-		t.Fatalf("migrate up: %v", err)
-	}
-	_ = runner.Close()
-
-	pool, err := pgxpool.New(ctx, testURL)
-	if err != nil {
-		t.Fatalf("open test pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	pg, err := storage.NewPostgres(pool)
-	if err != nil {
-		t.Fatalf("storage boundary: %v", err)
-	}
-	return pg
+	return testURL, sourceURL
 }
 
 func withDatabase(rawURL, name string) (string, error) {

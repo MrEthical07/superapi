@@ -17,6 +17,13 @@ enumeration-safety guarantees.
 - With `TENANCY_ENABLED=true` every request (except `/healthz`, `/readyz`,
   `/metrics`) needs a tenant (default header `X-Tenant-ID`); see
   [multi-tenancy.md](multi-tenancy.md).
+- Identifiers are **case-insensitive**. The module trims and lower-cases every
+  identifier (register, login, password-reset and email-verification requests,
+  and `make user`) before it reaches goAuth, so `Alice@Example.com` and
+  `alice@example.com` are one account and share goAuth's per-identifier
+  limiters. Migration 000007 lower-cases stored emails and adds a unique index
+  on `lower(email)`; it refuses to run if two existing accounts differ only by
+  case (see the comment at the top of the migration for how to resolve them).
 - Endpoint groups that are disabled are **not registered**: they return 404
   like any unknown route. With `AUTH_ENABLED=false` no auth route exists.
 - Public endpoints are protected by goAuth's built-in abuse limiters (per

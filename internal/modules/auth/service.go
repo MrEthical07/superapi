@@ -8,6 +8,7 @@ import (
 
 	goauth "github.com/MrEthical07/goAuth"
 
+	coreauth "github.com/MrEthical07/superapi/internal/core/auth"
 	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 )
 
@@ -79,7 +80,7 @@ func (s *service) login(ctx context.Context, identifier, password string, rememb
 	if err != nil {
 		return loginOutcome{}, err
 	}
-	result, err := engine.LoginWithOptions(ctx, strings.TrimSpace(identifier), password, goauth.LoginOptions{RememberMe: rememberMe})
+	result, err := engine.LoginWithOptions(ctx, coreauth.NormalizeIdentifier(identifier), password, goauth.LoginOptions{RememberMe: rememberMe})
 	if err != nil {
 		return loginOutcome{}, mapAuthEndpointError(err, "invalid credentials")
 	}
@@ -179,7 +180,7 @@ func (s *service) register(ctx context.Context, identifier, password string, rem
 	if err != nil {
 		return registerOutcome{}, err
 	}
-	identifier = strings.TrimSpace(identifier)
+	identifier = coreauth.NormalizeIdentifier(identifier)
 
 	result, err := engine.CreateAccount(ctx, goauth.CreateAccountRequest{
 		Identifier: identifier,
@@ -214,7 +215,7 @@ func (s *service) requestPasswordReset(ctx context.Context, identifier string) e
 	if err != nil {
 		return err
 	}
-	identifier = strings.TrimSpace(identifier)
+	identifier = coreauth.NormalizeIdentifier(identifier)
 	challenge, err := engine.RequestPasswordReset(ctx, identifier)
 	if err != nil {
 		return mapFlowError(err)
@@ -251,7 +252,7 @@ func (s *service) requestEmailVerification(ctx context.Context, identifier strin
 	if _, err := s.requireEngine(); err != nil {
 		return err
 	}
-	return s.sendEmailVerification(ctx, strings.TrimSpace(identifier))
+	return s.sendEmailVerification(ctx, coreauth.NormalizeIdentifier(identifier))
 }
 
 // sendEmailVerification requests a verification challenge and delivers it only

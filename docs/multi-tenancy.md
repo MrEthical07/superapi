@@ -103,11 +103,19 @@ across tenants, so it **cannot** enforce either rule; only the schema can.
 To allow the same email in different tenants:
 
 ```sql
--- new migration, e.g. 000007_users_email_per_tenant.up.sql
+-- new migration, e.g. 0000NN_users_email_per_tenant.up.sql
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
 DROP INDEX IF EXISTS users_email_unique_idx;
-CREATE UNIQUE INDEX users_tenant_email_unique_idx ON users (tenant_id, email);
+DROP INDEX IF EXISTS users_email_lower_unique_idx;   -- added by 000007
+CREATE UNIQUE INDEX users_tenant_email_lower_unique_idx ON users (tenant_id, lower(email));
 ```
+
+Identifiers are compared case-insensitively (migration 000007 lower-cases the
+stored emails and the queries filter on `lower(email)`), so the per-tenant
+variant is `UNIQUE (tenant_id, lower(email))`, never `(tenant_id, email)`.
+The auth module lower-cases every identifier before it reaches goAuth
+(`auth.NormalizeIdentifier`), so the two spellings of one mailbox share
+goAuth's per-identifier login and reset limiters.
 
 Then mirror it in `db/schema/auth_users.sql`, and in
 `internal/core/auth/config.go` set

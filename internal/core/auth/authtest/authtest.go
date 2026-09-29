@@ -40,7 +40,7 @@ func (r *UserRepository) GetByIdentifier(_ context.Context, identifier string) (
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, u := range r.users {
-		if u.Email == strings.TrimSpace(identifier) {
+		if u.Email == auth.NormalizeIdentifier(identifier) {
 			return u, nil
 		}
 	}
@@ -63,7 +63,7 @@ func (r *UserRepository) GetByIdentifierInTenant(_ context.Context, tenantID, id
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, u := range r.users {
-		if u.TenantID == tenantID && u.Email == strings.TrimSpace(identifier) {
+		if u.TenantID == tenantID && u.Email == auth.NormalizeIdentifier(identifier) {
 			return u, nil
 		}
 	}
@@ -100,7 +100,7 @@ func (r *UserRepository) Create(_ context.Context, input auth.CreateStoredUserIn
 	u := auth.StoredUser{
 		ID:             hex.EncodeToString(b[:]),
 		TenantID:       tenantOrDefault(input.TenantID),
-		Email:          strings.TrimSpace(input.Identifier),
+		Email:          auth.NormalizeIdentifier(input.Identifier),
 		PasswordHash:   input.PasswordHash,
 		Role:           input.Role,
 		Status:         input.Status,

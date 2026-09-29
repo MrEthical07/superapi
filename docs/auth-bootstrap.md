@@ -31,13 +31,14 @@ Direct invocation: `go run ./cmd/createuser --help`. Container image:
 
 ## 2. The users schema
 
-Migrations `000003_auth_users`, `000005_users_tenant` and `000006_auth_mfa`
+Migrations `000003_auth_users`, `000005_users_tenant`, `000006_auth_mfa` and
+`000007_users_email_ci`
 (mirrored in `db/schema/auth_users.sql` and `db/schema/auth_mfa.sql`):
 
 | Column | Purpose |
 |---|---|
 | `id UUID` | user id (goAuth `UserID`) |
-| `email TEXT UNIQUE` | login identifier (globally unique by default; see [multi-tenancy.md](multi-tenancy.md#6-identifier-uniqueness-a-schema-decision)) |
+| `email TEXT UNIQUE` | login identifier, stored lower-case (unique on `lower(email)`; globally unique by default; see [multi-tenancy.md](multi-tenancy.md#6-identifier-uniqueness-a-schema-decision)) |
 | `password_hash TEXT` | Argon2id hash produced by goAuth |
 | `role TEXT` | role name from `roles.go` |
 | `permissions BIGINT` | reserved (permissions come from the role registry) |

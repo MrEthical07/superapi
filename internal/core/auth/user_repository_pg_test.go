@@ -64,3 +64,36 @@ func TestRelationalUserRepositoryTenantScoping(t *testing.T) {
 		t.Fatal("expected global unique violation for duplicate identifier across tenants")
 	}
 }
+
+// Identifiers are case-insensitive in SQL: lookups match any case, the stored
+// value is lower-cased, and a case-variant duplicate is "already exists".
+func TestRelationalUserRepositoryIdentifiersAreCaseInsensitive(t *testing.T) {
+	repo := NewRelationalUserRepository(dbtest.NewPostgres(t))
+	ctx := context.Background()
+
+	created, err := repo.Create(ctx, CreateStoredUserInput{TenantID: "tenant-a", Identifier: "  Alice@Example.COM ", PasswordHash: "h", Status: "active"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if created.Email != "alice@example.com" {
+		t.Fatalf("stored email = %q, want lower-cased and trimmed", created.Email)
+	}
+
+	for _, id := range []string{"alice@example.com", "ALICE@EXAMPLE.COM", "Alice@Example.com", "  aLiCe@example.com  "} {
+		if got, err := repo.GetByIdentifier(ctx, id); err != nil || got.ID != created.ID {
+			t.Fatalf("GetByIdentifier(%q): got=%+v err=%v", id, got, err)
+		}
+		if got, err := repo.GetByIdentifierInTenant(ctx, "tenant-a", id); err != nil || got.ID != created.ID {
+			t.Fatalf("GetByIdentifierInTenant(%q): got=%+v err=%v", id, got, err)
+		}
+		if _, err := repo.GetByIdentifierInTenant(ctx, "tenant-b", id); !errors.Is(err, ErrAuthUserNotFound) {
+			t.Fatalf("GetByIdentifierInTenant(other tenant, %q) err=%v, want not found", id, err)
+		}
+	}
+
+	for _, dup := range []string{"alice@example.com", "ALICE@example.com", "Alice@Example.Com"} {
+		if _, err := repo.Create(ctx, CreateStoredUserInput{TenantID: "tenant-b", Identifier: dup, PasswordHash: "h", Status: "active"}); !errors.Is(err, ErrAuthUserExists) {
+			t.Fatalf("Create(%q) err=%v, want ErrAuthUserExists", dup, err)
+		}
+	}
+}

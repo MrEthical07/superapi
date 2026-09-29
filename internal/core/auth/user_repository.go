@@ -75,7 +75,7 @@ func NewRelationalUserRepository(pg *storage.Postgres) UserRepository {
 }
 
 func (r *sqlcUserRepository) GetByIdentifier(ctx context.Context, identifier string) (StoredUser, error) {
-	row, err := r.pg.Queries(ctx).GetAuthUserByLogin(ctx, strings.TrimSpace(identifier))
+	row, err := r.pg.Queries(ctx).GetAuthUserByLogin(ctx, NormalizeIdentifier(identifier))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return StoredUser{}, ErrAuthUserNotFound
@@ -109,7 +109,7 @@ func (r *sqlcUserRepository) GetByIdentifierInTenant(ctx context.Context, tenant
 
 	row, err := r.pg.Queries(ctx).GetAuthUserByLoginInTenant(ctx, sqlcgen.GetAuthUserByLoginInTenantParams{
 		TenantID: tenantID,
-		Email:    strings.TrimSpace(identifier),
+		Email:    NormalizeIdentifier(identifier),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -166,7 +166,7 @@ func (r *sqlcUserRepository) UpdatePasswordHash(ctx context.Context, userID, new
 
 func (r *sqlcUserRepository) Create(ctx context.Context, input CreateStoredUserInput) (StoredUser, error) {
 	row, err := r.pg.Queries(ctx).CreateAuthUser(ctx, sqlcgen.CreateAuthUserParams{
-		Email:        strings.TrimSpace(input.Identifier),
+		Email:        NormalizeIdentifier(input.Identifier),
 		PasswordHash: input.PasswordHash,
 		Role:         roleToText(input.Role),
 		Permissions:  0,

@@ -112,9 +112,12 @@ func (q *Queries) GetAuthUserByIDInTenant(ctx context.Context, arg GetAuthUserBy
 const getAuthUserByLogin = `-- name: GetAuthUserByLogin :one
 SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
-WHERE email = $1
+WHERE lower(email) = lower($1)
 `
 
+// Identifiers are compared case-insensitively (lower(email), backed by
+// users_email_lower_unique_idx). Callers pass a NormalizeIdentifier value;
+// lower($1) keeps the match correct for any caller.
 func (q *Queries) GetAuthUserByLogin(ctx context.Context, email string) (User, error) {
 	row := q.db.QueryRow(ctx, getAuthUserByLogin, email)
 	var i User
@@ -137,7 +140,7 @@ func (q *Queries) GetAuthUserByLogin(ctx context.Context, email string) (User, e
 const getAuthUserByLoginInTenant = `-- name: GetAuthUserByLoginInTenant :one
 SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
-WHERE tenant_id = $1 AND email = $2
+WHERE tenant_id = $1 AND lower(email) = lower($2)
 `
 
 type GetAuthUserByLoginInTenantParams struct {

@@ -9,9 +9,12 @@ FROM users
 WHERE id = $1;
 
 -- name: GetAuthUserByLogin :one
+-- Identifiers are compared case-insensitively (lower(email), backed by
+-- users_email_lower_unique_idx). Callers pass a NormalizeIdentifier value;
+-- lower($1) keeps the match correct for any caller.
 SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
-WHERE email = $1;
+WHERE lower(email) = lower(sqlc.arg(email));
 
 -- name: GetAuthUserByIDInTenant :one
 -- Tenant-scoped lookup for goauth.TenantAwareUserProvider. The tenant
@@ -25,7 +28,7 @@ WHERE tenant_id = $1 AND id = $2;
 -- predicate is enforced in SQL; an identifier in another tenant is not found.
 SELECT id, email, password_hash, role, permissions, status, created_at, updated_at, tenant_id, account_version, totp_enabled
 FROM users
-WHERE tenant_id = $1 AND email = $2;
+WHERE tenant_id = $1 AND lower(email) = lower(sqlc.arg(email));
 
 -- name: UpdateAuthUserPasswordHash :one
 UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1
