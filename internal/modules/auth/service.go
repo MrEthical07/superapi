@@ -323,7 +323,7 @@ func (s *service) setupTOTP(ctx context.Context, userID string) (totpSetup, erro
 		return totpSetup{}, mapFlowError(goauth.ErrUserNotFound)
 	}
 	if alreadyEnabled {
-		return totpSetup{}, apperr.New(apperr.CodeConflict, http.StatusConflict, "totp is already enabled; disable it before enrolling again")
+		return totpSetup{}, totpAlreadyEnabledErr()
 	}
 	setup, err := engine.GenerateTOTPSetup(ctx, userID)
 	if err != nil {

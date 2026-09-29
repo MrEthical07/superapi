@@ -1,10 +1,15 @@
 package auth
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"testing"
 
+	goauth "github.com/MrEthical07/goAuth"
+
 	"github.com/MrEthical07/superapi/internal/core/config"
+	apperr "github.com/MrEthical07/superapi/internal/core/errors"
 )
 
 func enrollTOTP(t *testing.T, h *harness, token string) (secret string, backupCodes []string) {
@@ -130,4 +135,43 @@ func TestTOTPDisable(t *testing.T) {
 	}
 	// Login no longer requires a second factor.
 	h.login("off@example.com", testPassword)
+}
+
+// stubAccounts lets a test make the service's own pre-check pass so the
+// request reaches goAuth's ErrTOTPAlreadyEnabled guard.
+type stubAccounts struct{ totpEnabled bool }
+
+func (s stubAccounts) FindRecipient(context.Context, string) (recipient, bool, error) {
+	return recipient{}, false, nil
+}
+
+func (s stubAccounts) TOTPEnabled(context.Context, string) (bool, error) { return s.totpEnabled, nil }
+
+func TestSetupTOTPAlreadyEnabledPreCheckAndEngineGuardMatch(t *testing.T) {
+	h := newHarness(t, harnessOptions{auth: config.AuthConfig{TOTPEnabled: true}})
+	userID := h.createUser("both@example.com")
+	enrollTOTP(t, h, h.login("both@example.com", testPassword))
+
+	// Pre-check path: the repository reports TOTP as enabled.
+	_, preErr := newService(h.engine, stubAccounts{totpEnabled: true}, nil, features{TOTP: true}).setupTOTP(context.Background(), userID)
+	// Engine path: the repository is stale, so only goAuth's guard fires.
+	_, engineErr := newService(h.engine, stubAccounts{totpEnabled: false}, nil, features{TOTP: true}).setupTOTP(context.Background(), userID)
+
+	pre, ok := apperr.AsAppError(preErr)
+	if !ok {
+		t.Fatalf("pre-check error %v is not an AppError", preErr)
+	}
+	engine, ok := apperr.AsAppError(engineErr)
+	if !ok {
+		t.Fatalf("engine-path error %v is not an AppError", engineErr)
+	}
+	if !errors.Is(engineErr, goauth.ErrTOTPAlreadyEnabled) {
+		t.Fatalf("engine path did not reach goAuth's guard: %v", engineErr)
+	}
+	if pre.StatusCode != http.StatusConflict || engine.StatusCode != http.StatusConflict {
+		t.Fatalf("status pre=%d engine=%d, want 409 both", pre.StatusCode, engine.StatusCode)
+	}
+	if pre.Code != engine.Code || pre.Message != engine.Message {
+		t.Fatalf("responses differ: pre=%s/%q engine=%s/%q", pre.Code, pre.Message, engine.Code, engine.Message)
+	}
 }

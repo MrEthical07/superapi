@@ -144,7 +144,7 @@ Runtime sequence:
 
 - app wiring creates the auth repository over the `storage.Postgres` boundary
 - app wiring creates the sqlc-backed `StoreUserProvider` from the repository
-- the goAuth engine (v0.5.0) is built with Redis + provider + tenancy settings
+- the goAuth engine (v0.6.0) is built with Redis + provider + tenancy settings
   + auth feature flags
 
 Create a user first: `make user email=you@example.com`.

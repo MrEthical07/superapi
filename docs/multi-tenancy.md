@@ -6,8 +6,8 @@ request is resolved to a validated tenant, goAuth scopes every user lookup,
 session and reset/verification record to it, and tokens only work in the
 tenant that issued them.
 
-Requires goAuth **v0.5.0** (pinned in `go.mod`). goAuth's own contract is
-documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.5.0/docs/multi_tenancy.md).
+Requires goAuth **v0.6.0** (pinned in `go.mod`). goAuth's own contract is
+documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/multi_tenancy.md).
 
 ## 1. Tenant model
 

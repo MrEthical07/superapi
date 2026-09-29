@@ -110,7 +110,7 @@ Order:
 	 - create the sqlc-backed `StoreUserProvider` (tenancy flag, WebAuthn
 	   credential repository, and — with AUTH_TOTP_ENABLED — the MFA repository
 	   and TOTP secret cipher)
-	 - create the goAuth engine (v0.5.0) with Redis + provider + tenancy
+	 - create the goAuth engine (v0.6.0) with Redis + provider + tenancy
 	   settings + auth feature flags
 7. If rate-limit enabled:
 	 - create redis limiter
@@ -282,7 +282,7 @@ Always thread the context through. See [docs/transactions.md](transactions.md).
 
 ## 8. Auth Architecture With goAuth
 
-SuperAPI is on goAuth **v0.5.0**. The engine is built in
+SuperAPI is on goAuth **v0.6.0**. The engine is built in
 internal/core/auth/goauth_provider.go and receives a `goauth.UserProvider`.
 
 Current provider implementation: internal/core/auth/provider_store.go

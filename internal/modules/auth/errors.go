@@ -63,6 +63,10 @@ func mapFlowError(err error) error {
 		return apperr.WithCause(badRequestErr("invalid code"), err)
 	case errors.Is(err, goauth.ErrTOTPRequired), errors.Is(err, goauth.ErrMFALoginRequired):
 		return apperr.WithCause(badRequestErr("a second-factor code is required"), err)
+	case errors.Is(err, goauth.ErrTOTPAlreadyEnabled):
+		return apperr.WithCause(totpAlreadyEnabledErr(), err)
+	case errors.Is(err, goauth.ErrPasswordVerifyRateLimited):
+		return apperr.WithCause(apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "authentication temporarily limited"), err)
 	case errors.Is(err, goauth.ErrTOTPNotConfigured),
 		errors.Is(err, goauth.ErrBackupCodesNotConfigured),
 		errors.Is(err, goauth.ErrBackupCodeRegenerationRequiresTOTP):
@@ -78,6 +82,13 @@ func mapFlowError(err error) error {
 		return apperr.WithCause(apperr.New(apperr.CodeUnauthorized, http.StatusUnauthorized, "authentication required"), err)
 	}
 	return mapAuthEndpointError(err, "request rejected")
+}
+
+// totpAlreadyEnabledErr is the single response for "TOTP is already enabled".
+// Both the service's own pre-check and goAuth's ErrTOTPAlreadyEnabled (v0.5.1+)
+// return it, so the two paths cannot drift apart.
+func totpAlreadyEnabledErr() *apperr.AppError {
+	return apperr.New(apperr.CodeConflict, http.StatusConflict, "totp is already enabled; disable it before enrolling again")
 }
 
 func badRequestErr(msg string) *apperr.AppError {

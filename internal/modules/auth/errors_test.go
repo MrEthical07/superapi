@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -102,5 +103,78 @@ func TestMapAuthEndpointErrorLegacyRateLimitFallback(t *testing.T) {
 	}
 	if appErr.Code != apperr.CodeTooManyRequests {
 		t.Fatalf("code=%s want=%s", appErr.Code, apperr.CodeTooManyRequests)
+	}
+}
+
+func TestMapFlowErrorGoAuthV06Sentinels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   apperr.Code
+		wantMsg    string
+	}{
+		{
+			name:       "totp already enabled maps to conflict",
+			err:        goauth.ErrTOTPAlreadyEnabled,
+			wantStatus: http.StatusConflict,
+			wantCode:   apperr.CodeConflict,
+			wantMsg:    "totp is already enabled; disable it before enrolling again",
+		},
+		{
+			name:       "totp already enabled through a wrapped error",
+			err:        fmt.Errorf("setup: %w", goauth.ErrTOTPAlreadyEnabled),
+			wantStatus: http.StatusConflict,
+			wantCode:   apperr.CodeConflict,
+			wantMsg:    "totp is already enabled; disable it before enrolling again",
+		},
+		{
+			name:       "password verify rate limit maps to too many requests",
+			err:        goauth.ErrPasswordVerifyRateLimited,
+			wantStatus: http.StatusTooManyRequests,
+			wantCode:   apperr.CodeTooManyRequests,
+			wantMsg:    "authentication temporarily limited",
+		},
+		{
+			name:       "password verify rate limit through a wrapped error",
+			err:        fmt.Errorf("verify: %w", goauth.ErrPasswordVerifyRateLimited),
+			wantStatus: http.StatusTooManyRequests,
+			wantCode:   apperr.CodeTooManyRequests,
+			wantMsg:    "authentication temporarily limited",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			appErr, ok := apperr.AsAppError(mapFlowError(tc.err))
+			if !ok {
+				t.Fatalf("expected AppError")
+			}
+			if appErr.StatusCode != tc.wantStatus || appErr.Code != tc.wantCode || appErr.Message != tc.wantMsg {
+				t.Fatalf("got %d/%s/%q want %d/%s/%q", appErr.StatusCode, appErr.Code, appErr.Message, tc.wantStatus, tc.wantCode, tc.wantMsg)
+			}
+			if appErr.Cause == nil {
+				t.Fatalf("expected the goAuth error kept as the cause")
+			}
+		})
+	}
+}
+
+// The service's own pre-check and goAuth's sentinel must produce the same
+// response, so a client cannot tell which layer refused.
+func TestTOTPAlreadyEnabledResponsesAreIdentical(t *testing.T) {
+	t.Parallel()
+
+	pre := totpAlreadyEnabledErr()
+	mapped, ok := apperr.AsAppError(mapFlowError(goauth.ErrTOTPAlreadyEnabled))
+	if !ok {
+		t.Fatalf("expected AppError")
+	}
+	if pre.StatusCode != mapped.StatusCode || pre.Code != mapped.Code || pre.Message != mapped.Message {
+		t.Fatalf("pre-check %d/%s/%q != mapped %d/%s/%q", pre.StatusCode, pre.Code, pre.Message, mapped.StatusCode, mapped.Code, mapped.Message)
 	}
 }

@@ -2,6 +2,27 @@
 
 All notable changes to this template are documented in this file.
 
+## Unreleased (v0.10.0)
+
+goAuth v0.6.0 on Go 1.27.
+
+- **Go 1.27 is now required** (`go.mod` is `go 1.27.0`, toolchain `go1.27.1`).
+  CI, the Dockerfile, the README badge and the issue template follow, and
+  `make doctor` fails when the installed Go is older than `go.mod`.
+- **goAuth v0.5.0 -> v0.6.0** (also moves `go-webauthn/webauthn` to v0.18.2,
+  `go-webauthn/x` to v0.3.1 and `fxamacker/cbor` to v2.9.4).
+- **`WEBAUTHN_RP_ID` is validated at config load.** goAuth v0.6.0 rejects an
+  RP ID that is not a bare domain (an IP address, a URL, a host with a port, a
+  single-label name other than `localhost`) at `Build()`. Lint now reports the
+  same cases with the variable name. Use `WEBAUTHN_RP_ID=localhost` for local
+  development instead of `127.0.0.1`. A test keeps the lint in step with goAuth.
+- **Auth error mapping:** goAuth's `ErrTOTPAlreadyEnabled` maps to the same 409
+  the service's own pre-check returns, and `ErrPasswordVerifyRateLimited` maps
+  to 429 instead of falling through to a generic 401.
+- **Fixed:** `make migrate-*` and the migration runner failed on Windows with a
+  syntax error because the migration source URL was `file:///D:/...`; it is now
+  `file://D:/...` there (other platforms unchanged).
+
 ## v0.9.0 (2026-09-25)
 
 goAuth v0.5.0, the full auth lifecycle, and a clone-ready template. Tenancy now

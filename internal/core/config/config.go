@@ -613,6 +613,11 @@ func (c *Config) Lint() error {
 	if err := c.lintAuthFeatures(); err != nil {
 		return err
 	}
+	// template:begin webauthn
+	if err := c.lintWebAuthn(); err != nil {
+		return err
+	}
+	// template:end webauthn
 	switch c.Notify.Driver {
 	case NotifyDriverNoop, NotifyDriverLog:
 	default:
