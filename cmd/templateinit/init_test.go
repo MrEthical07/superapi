@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -370,4 +371,25 @@ func copyRepo(t *testing.T, root string) string {
 		}
 	}
 	return dst
+}
+
+// A prune whose leftover generated sqlc code would break at run time fails
+// loudly when sqlc cannot regenerate it; one that only leaves stale models
+// just notes it.
+func TestRunFailsWhenSQLCIsRequiredButMissing(t *testing.T) {
+	saved := sqlcFinder
+	t.Cleanup(func() { sqlcFinder = saved })
+	sqlcFinder = func() string { return "" }
+
+	res, err := Run(Options{Root: newFixture(t), Module: "github.com/acme/foo", Prune: map[string]bool{"tenancy": true}})
+	if !errors.Is(err, errSQLCRequired) {
+		t.Fatalf("err = %v, want errSQLCRequired", err)
+	}
+	if len(res.Notes) == 0 {
+		t.Fatal("the note about sqlc must still be reported")
+	}
+
+	if _, err := Run(Options{Root: newFixture(t), Module: "github.com/acme/foo", Prune: map[string]bool{"webauthn": true}}); err != nil {
+		t.Fatalf("a prune that leaves only stale models must not fail: %v", err)
+	}
 }

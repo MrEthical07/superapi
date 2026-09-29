@@ -73,3 +73,28 @@ func TestDecodeAndValidateJSON_UsesConfiguredLimit(t *testing.T) {
 		t.Fatalf("512 B over a 256 B limit: status=%d body=%.120s", rr.Code, rr.Body.String())
 	}
 }
+
+// A request that carries a body of unknown length under a method that does not
+// normally have one (HTTP/2 DELETE, ContentLength -1) is capped by the
+// middleware with the configured limit, not just by the decoder default.
+func TestMaxBodyBytesCapsUnknownLengthBodies(t *testing.T) {
+	h := jsonCapHandler(t, 4<<20)
+
+	body := `{"data":"` + strings.Repeat("a", 2<<20) + `"}`
+	req := httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(body))
+	req.ContentLength = -1
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("2 MiB under a 4 MiB limit on an unknown-length DELETE: status=%d body=%.120s", rr.Code, rr.Body.String())
+	}
+
+	big := `{"data":"` + strings.Repeat("a", 5<<20) + `"}`
+	req = httptest.NewRequest(http.MethodDelete, "/", strings.NewReader(big))
+	req.ContentLength = -1
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "request body too large") {
+		t.Fatalf("5 MiB over a 4 MiB limit: status=%d body=%.120s", rr.Code, rr.Body.String())
+	}
+}

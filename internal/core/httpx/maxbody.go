@@ -41,6 +41,9 @@ func shouldLimitBody(r *http.Request) bool {
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
 		return true
 	default:
-		return r.ContentLength > 0 || len(r.TransferEncoding) > 0
+		// Any other request that carries a body, including one of unknown
+		// length (HTTP/2), whose ContentLength is -1 and has no
+		// Transfer-Encoding.
+		return r.ContentLength > 0 || len(r.TransferEncoding) > 0 || (r.Body != nil && r.Body != http.NoBody)
 	}
 }

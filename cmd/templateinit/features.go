@@ -16,6 +16,10 @@ type feature struct {
 	NameContains string
 	// TouchesSQL means pruning changes db/ and sqlc output must be regenerated.
 	TouchesSQL bool
+	// SQLRegenRequired means the checked-in generated code selects columns the
+	// pruned schema no longer has, so the project compiles but fails at run
+	// time until sqlc is regenerated. Init fails loudly when it cannot do it.
+	SQLRegenRequired bool
 }
 
 // features lists every optional part of the template, in the order they are
@@ -31,8 +35,9 @@ var features = []feature{
 		// Every file or directory whose name contains this is deleted too: the
 		// migration, sqlc schema, queries and generated code, the analyzer and
 		// scaffolder extensions, the registration file, docs and workflows.
-		NameContains: "tenancy",
-		TouchesSQL:   true,
+		NameContains:     "tenancy",
+		TouchesSQL:       true,
+		SQLRegenRequired: true,
 	},
 	{
 		Flag:   "no-webauthn",

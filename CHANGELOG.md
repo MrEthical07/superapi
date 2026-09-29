@@ -139,7 +139,17 @@ Runtime behavior is otherwise unchanged; the exceptions are listed first.
   this was not reachable over HTTP, but the provider now scopes those calls to the
   request tenant (the WebAuthn queries had no tenant predicate before).
 - JSON bodies were unbounded when `HTTP_MIDDLEWARE_MAX_BODY_BYTES=0` (see
-  Behavior changes).
+  Behavior changes). The body-size middleware also now covers a body of unknown
+  length under a method that does not normally carry one (an HTTP/2 `DELETE`
+  with `ContentLength` -1), which it used to let through unbounded.
+- `make init --no-tenancy` fails loudly (non-zero exit, with the fix) when sqlc
+  is missing or fails, instead of leaving generated code that still selects the
+  removed `tenant_id` column and breaks at run time.
+- `cmd/perftoken` builds its goAuth engine with the registered features, like the
+  server and `createuser`, so it matches a tenancy-enabled server.
+- Cache key parts: a value is escaped like a tag value (so a part value cannot
+  forge another key dimension; tenant ids are unaffected) and a part without an
+  extractor is ignored by `BuildReadKey` instead of panicking.
 
 ### Documentation
 

@@ -7,7 +7,9 @@ import (
 
 // The Env* readers let an optional feature load its own settings the same way
 // Load reads the core ones: empty or unparsable values fall back to the given
-// default, and APP_PROFILE defaults apply while Load runs. A feature keeps its
+// default. APP_PROFILE defaults are only active while Load runs, and a feature
+// loads after it, so feature settings see the process environment only; give
+// them defaults in code. A feature keeps its
 // settings in its own package and reads them here; superapi-verify discovers
 // the keys from these calls, so a key missing from .env.example or
 // docs/environment-variables.md is still reported.

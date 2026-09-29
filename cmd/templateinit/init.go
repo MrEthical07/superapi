@@ -80,6 +80,7 @@ func Run(opts Options) (Result, error) {
 	// 1. Delete pruned features (and the init tool itself).
 	var toDelete []string
 	sqlTouched := false
+	regenRequired := false
 	for _, f := range features {
 		if opts.Prune[f.Marker] {
 			toDelete = append(toDelete, f.Paths...)
@@ -91,6 +92,7 @@ func Run(opts Options) (Result, error) {
 				toDelete = append(toDelete, named...)
 			}
 			sqlTouched = sqlTouched || f.TouchesSQL
+			regenRequired = regenRequired || f.SQLRegenRequired
 		}
 	}
 	if !opts.KeepInit {
@@ -169,6 +171,7 @@ func Run(opts Options) (Result, error) {
 		res.Notes = append(res.Notes, "LICENSE copyright holder left as a TODO (pass --copyright)")
 	}
 	res.Notes = append(res.Notes, "SECURITY.md contact left as a TODO: add your security contact")
+	regenFailed := false
 
 	if !opts.DryRun && !opts.SkipPostSteps {
 		if newModule != oldModule || len(res.Deleted) > 0 {
@@ -177,12 +180,14 @@ func Run(opts Options) (Result, error) {
 			}
 		}
 		if sqlTouched {
-			if sqlc := findSQLC(); sqlc != "" {
+			if sqlc := sqlcFinder(); sqlc != "" {
 				if err := runCmd(opts, root, sqlc, "generate"); err != nil {
 					res.Notes = append(res.Notes, "sqlc generate failed: "+err.Error()+" (run make sqlc-generate)")
+					regenFailed = true
 				}
 			} else {
 				res.Notes = append(res.Notes, "sqlc not found: run `make sqlc-generate` to drop generated models for pruned tables")
+				regenFailed = true
 			}
 		}
 	}
@@ -191,8 +196,18 @@ func Run(opts Options) (Result, error) {
 		fmt.Fprintf(opts.Out, "note    %s\n", n)
 	}
 	sort.Strings(res.Modified)
+	if regenFailed && regenRequired {
+		return res, errSQLCRequired
+	}
 	return res, nil
 }
+
+// errSQLCRequired is returned when a pruned feature leaves generated sqlc code
+// that no longer matches the schema and sqlc could not regenerate it.
+var errSQLCRequired = errors.New("the generated sqlc code still refers to pruned columns and sqlc could not regenerate it: the project builds but fails at run time until you install sqlc (go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1) and run `make sqlc-generate`")
+
+// sqlcFinder locates sqlc; tests replace it.
+var sqlcFinder = findSQLC
 
 type transformContext struct {
 	opts      Options

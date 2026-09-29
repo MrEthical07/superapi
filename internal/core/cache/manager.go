@@ -59,6 +59,23 @@ func (p KeyPart) Validate() error {
 	return nil
 }
 
+// usableKeyParts drops parts that cannot contribute (no name or no extractor).
+// policy.CacheRead reports such a part as a configuration error; this keeps a
+// direct BuildReadKey caller from panicking on one.
+func usableKeyParts(parts []KeyPart) []KeyPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]KeyPart, 0, len(parts))
+	for _, p := range parts {
+		if strings.TrimSpace(p.Name) == "" || p.Extract == nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // HasIdentityPart reports whether any part is identity-bearing.
 func HasIdentityPart(parts []KeyPart) bool {
 	for _, p := range parts {
@@ -233,7 +250,7 @@ func PrepareReadKeyTemplate(cfg CacheReadConfig) ReadKeyTemplate {
 		Method:             cfg.VaryBy.Method,
 		UserID:             cfg.VaryBy.UserID,
 		Role:               cfg.VaryBy.Role,
-		Parts:              append([]KeyPart(nil), cfg.VaryBy.Parts...),
+		Parts:              usableKeyParts(cfg.VaryBy.Parts),
 		PathParams:         normalizedNames(cfg.VaryBy.PathParams),
 		QueryParams:        normalizedNames(cfg.VaryBy.QueryParams),
 		Headers:            normalizedNames(cfg.VaryBy.Headers),
@@ -323,7 +340,7 @@ func (m *Manager) BuildReadKeyWithTemplate(ctx context.Context, r *http.Request,
 
 	principal, hasPrincipal := auth.FromContext(r.Context())
 	for _, part := range template.Parts {
-		values = append(values, strings.TrimSpace(part.Name)+"="+strings.TrimSpace(part.Extract(r, principal)))
+		values = append(values, strings.TrimSpace(part.Name)+"="+escapeTagValue(part.Extract(r, principal)))
 	}
 	if template.UserID {
 		values = append(values, "user="+strings.TrimSpace(principal.UserID))

@@ -92,3 +92,27 @@ func TestKeyPartValidateAndIdentity(t *testing.T) {
 		t.Fatal("HasIdentityPart must report only identity-bearing parts")
 	}
 }
+
+// A part value cannot forge another key dimension, and a part without an
+// extractor (which policy.CacheRead reports as a configuration error) does not
+// panic a direct BuildReadKey caller.
+func TestReadKeyPartValuesAreEscapedAndBrokenPartsIgnored(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	ctx := context.Background()
+	cfg := CacheReadConfig{TTL: time.Minute, VaryBy: CacheVaryBy{Parts: []KeyPart{orgPart()}}}
+
+	forged, err := mgr.BuildReadKey(ctx, requestAs("acme|user=u1"), "/api/v1/things", cfg)
+	if err != nil {
+		t.Fatalf("BuildReadKey: %v", err)
+	}
+	plain, _ := mgr.BuildReadKey(ctx, requestAs("acme"), "/api/v1/things", cfg)
+	withUser, _ := mgr.BuildReadKey(ctx, requestAs("acme"), "/api/v1/things", CacheReadConfig{TTL: time.Minute, VaryBy: CacheVaryBy{Parts: []KeyPart{orgPart()}, UserID: true}})
+	if forged == plain || forged == withUser {
+		t.Fatal("an org value containing separators must not collide with another key")
+	}
+
+	broken := CacheReadConfig{TTL: time.Minute, VaryBy: CacheVaryBy{Parts: []KeyPart{{Name: "org"}, {Extract: orgPart().Extract}}}}
+	if _, err := mgr.BuildReadKey(ctx, requestAs("acme"), "/api/v1/things", broken); err != nil {
+		t.Fatalf("a part without an extractor must be ignored, got %v", err)
+	}
+}
