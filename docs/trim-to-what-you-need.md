@@ -26,7 +26,7 @@ If it builds, tests pass, and verify is green, the removal is complete.
 ## Prune at init (fresh clones)
 
 On a fresh clone, `make init` can delete whole features for you and leaves a
-project that passes the gate (CI checks the default and `--no-all`):
+project that passes the gate (the template's CI checks the default and `--no-all`):
 
 ```bash
 make init module=github.com/acme/foo name="Foo API" flags="--no-webauthn --no-perf"

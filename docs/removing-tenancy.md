@@ -28,9 +28,13 @@ environment.
 ## 2. Delete it from the codebase
 
 On a fresh clone, **`make init flags=--no-tenancy` does exactly the steps below**
-and regenerates sqlc for you; CI proves the result builds, vets, lints,
-verifies, passes its tests and migrations, and that
-`git grep -n -i tenan -- . ':!CHANGELOG.md'` finds nothing.
+and regenerates sqlc for you; the template's CI proves the result builds, vets,
+lints, verifies, passes its tests and migrations, and that
+`git grep -n -i -E 'tenan(t|cy)' -- . ':!CHANGELOG.md'` finds nothing. That
+pattern matches `tenant`, `tenants`, `tenant_id`, `TenantID`, `tenancy` and
+`TENANCY_`, and not unrelated words that merely contain the letters (such as
+`ListenAndServe`). The same CI run checks that the pattern does find tenancy in
+the unpruned template, so the check cannot go blind.
 
 If you did not use `make init`, six steps:
 
@@ -42,7 +46,10 @@ If you did not use `make init`, six steps:
    `internal/tools/validator/tenancy_rules.go`,
    `internal/devx/modulegen/tenancy_extension.go` and its test,
    `docs/multi-tenancy.md`, `docs/removing-tenancy.md`,
-   `.github/workflows/tenancy.yml`, `.github/tenancy-allowlist.txt`.
+   `.github/workflows/tenancy.yml` (the workflow that runs the suite with
+   tenancy on). Template-only files (`.github/workflows/template-*`,
+   `.github/template-*`) are not part of your project; delete them too if you
+   did not start from `make init`.
 3. **Delete the SQL:** `db/migrations/000002_tenancy.up.sql` and `.down.sql`,
    `db/schema/tenancy.sql`, `db/queries/tenancy.sql` and
    `internal/core/db/sqlcgen/tenancy.sql.go`, then run `make sqlc-generate`

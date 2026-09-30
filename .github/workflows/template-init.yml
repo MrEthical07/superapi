@@ -1,0 +1,72 @@
+name: template-init
+
+# Template maintenance only: proves `make init` turns this repository into a
+# working project. `make init` deletes every .github/workflows/template-* file
+# (and .github/template-*), so a project created from the template never runs it.
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# A new push to a pull request cancels the run it made stale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs `make init` against a copy of the template for the default, the
+  # no-tenancy and the everything-pruned combinations, then that project's own
+  # gate. The template-tenancy workflow checks that nothing of tenancy is left.
+  templateinit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flags: ["", "--no-tenancy", "--no-all"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+
+      - name: Dry run
+        run: go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }} --dry-run
+
+      - name: Initialize a copy and run its gate
+        run: |
+          dst="$RUNNER_TEMP/project"
+          mkdir -p "$dst"
+          git ls-files -z | xargs -0 cp --parents -t "$dst"
+          cd "$dst"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }}
+          if grep -rl "MrEthical07/superapi" .; then echo "old module path still referenced"; exit 1; fi
+          if grep -rlE "template:(begin|end) " .; then echo "template markers left behind"; exit 1; fi
+          # Template-only CI is gone; the CI a project needs stays.
+          if ls .github/workflows/template-* .github/template-* 2>/dev/null; then echo "template-only CI left behind (see above)"; exit 1; fi
+          test -f .github/workflows/ci.yml || { echo "ci.yml must stay"; exit 1; }
+          case "${{ matrix.flags }}" in
+            *no-tenancy*|*no-all*)
+              if ls .github/workflows/tenancy.yml 2>/dev/null; then echo "tenancy's own workflow left behind"; exit 1; fi
+              test "$(ls db/migrations/*.up.sql | wc -l)" = 1 || { echo "expected only 000001_init"; exit 1; }
+              ;;
+            *)
+              test -f .github/workflows/tenancy.yml || { echo "tenancy.yml must stay when tenancy is kept"; exit 1; }
+              ;;
+          esac
+          git init -q && git add -A && git -c user.email=ci@example.com -c user.name=ci commit -qm init
+          make sqlc-generate && git diff --exit-code
+          go build ./...
+          go vet ./...
+          go run ./cmd/superapi-verify ./...
+          go test ./... -race

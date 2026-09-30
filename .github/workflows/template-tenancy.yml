@@ -1,0 +1,54 @@
+name: template-tenancy
+
+# Template maintenance only (deleted by `make init`): proves the check that a
+# project without tenancy mentions it nowhere is neither blind nor noisy.
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# A new push to a pull request cancels the run it made stale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  removal-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.1"
+
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+
+      # tenan(t|cy) matches tenant, tenants, tenant_id, TenantID, tenancy and
+      # TENANCY_, but not ListenAndServe. Exceptions for a project without
+      # tenancy go in .github/template-tenancy-allowlist.txt (the target is an
+      # empty list).
+      - name: The check finds tenancy in the default project
+        run: |
+          n=$(git grep -n -i -E 'tenan(t|cy)' -- . ':!CHANGELOG.md' | wc -l)
+          echo "matches in the default project: $n"
+          test "$n" -gt 0 || { echo "the check is blind: it found no tenancy code"; exit 1; }
+
+      - name: The check finds nothing after make init --no-tenancy
+        run: |
+          dst="$RUNNER_TEMP/project"
+          mkdir -p "$dst"
+          git ls-files -z | xargs -0 cp --parents -t "$dst"
+          allow=$(grep -vE '^[[:space:]]*(#|$)' .github/template-tenancy-allowlist.txt | awk '{print ":!"$1}')
+          cd "$dst"
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" --no-tenancy
+          git init -q && git add -A && git -c user.email=ci@example.com -c user.name=ci commit -qm init
+          if git grep -n -i -E 'tenan(t|cy)' -- . ':!CHANGELOG.md' $allow; then echo "tenancy left behind (see above)"; exit 1; fi
