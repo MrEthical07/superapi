@@ -1,9 +1,15 @@
 name: ci
 
 on:
-  push:
-    branches: [ "**" ]
   pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# A new push to a pull request cancels the run it made stale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
