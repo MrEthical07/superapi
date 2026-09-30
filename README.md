@@ -1,7 +1,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.27+-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 <!-- template:begin maintainer -->
-[![Release](https://img.shields.io/badge/release-v0.11.0-brightgreen)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.11.1-brightgreen)](CHANGELOG.md)
 <!-- template:end maintainer -->
 
 # SuperAPI
@@ -169,7 +169,7 @@ an open-source authentication engine.
   receive automatic upstream updates.
 - Upgrades are manual: compare changes, port intentionally, and validate with
   tests and the verifier. The CHANGELOG lists behavior changes per release.
-- Current public template baseline: v0.11.0 (pre-1.0 by intent).
+- Current public template baseline: v0.11.1 (pre-1.0 by intent).
 
 ## Release Hygiene
 

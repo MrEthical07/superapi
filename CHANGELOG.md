@@ -2,6 +2,107 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.11.1 (2026-09-30)
+
+A patch release. It requires goAuth v0.6.2, which completes goAuth's tenant
+scoping and lets SuperAPI drop the duplicate check its tenancy provider carried,
+puts back `ListenAndServe`, tightens the check that proves tenancy was fully
+removed, and restructures the template's CI: fewer duplicate runs, and the jobs
+that only test the template are deleted by `make init`.
+
+**Behavior:** unchanged, with or without tenancy. No HTTP, config, schema or
+migration change.
+
+### Security
+
+- **Requires goAuth v0.6.2**, which completes goAuth's tenant scoping:
+  `VerifyBackupCode` / `VerifyBackupCodeInTenant`, `ListWebAuthnCredentials` and
+  `RemoveWebAuthnCredential` now resolve the user through the tenant-scoped
+  lookup before they reach the user provider (with `MultiTenant.Enabled`
+  true). SuperAPI was already protected by its tenancy provider, which scoped
+  those three calls itself; that duplicate check is removed.
+  `TestCrossTenantMFAIsRejected` and
+  `TestCrossTenantWebAuthnListAndRemoveAreRejected` pass with the provider's
+  scoping removed and fail on goAuth v0.6.0, so they prove goAuth now enforces
+  the scope. goAuth
+  v0.6.1 was tagged in error on the v0.6.0 commit and is retracted; do not use
+  it.
+- **Advice for other goAuth consumers:** if you run goAuth in multi-tenant mode
+  with a user provider whose SQL does not scope by tenant, upgrade to goAuth
+  v0.6.2. On v0.6.0 a user id from another tenant could have its backup code
+  consumed, or its WebAuthn credentials listed or removed, by code that passes
+  the id straight to those three methods.
+
+### Changed
+
+- `internal/tenancy`: `Provider` no longer overrides `ConsumeBackupCode`,
+  `GetWebAuthnCredentials` or `RemoveWebAuthnCredential`. It keeps the
+  tenant-scoped lookups, `CreateUser` in the request tenant, the
+  `UpdateAccountStatus` tenant stamp and the compile-time interface assertions.
+  `UserStore.InTenant`, its `AuthUserInTenant` query and the `scopeTenant`
+  helper existed only for that scoping and are removed, as is the wrapper-only
+  `TestProviderConsumeBackupCodeIsTenantScopedInSQL`. One assertion in
+  `TestCrossTenantMFAIsRejected` that called the wrapper's `ConsumeBackupCode`
+  directly tested the removed behavior and is dropped; the engine-level
+  assertions are unchanged.
+- `App.Run` starts the server with `http.Server.ListenAndServe` again (v0.11.0
+  used `net.Listen` and `Serve` only to avoid a false match in the tenancy
+  removal check). The startup log line, shutdown and `http.ErrServerClosed`
+  handling are unchanged.
+- The tenancy-removal check matches `tenan(t|cy)` instead of `tenan`:
+  `git grep -n -i -E 'tenan(t|cy)' -- . ':!CHANGELOG.md'`. It still finds
+  `tenant`, `tenants`, `tenant_id`, `TenantID`, `tenancy` and `TENANCY_`, and
+  no longer matches unrelated words such as `ListenAndServe`. It is now checked
+  both ways: it finds tenancy in the default project and nothing after
+  `make init --no-tenancy`. `cmd/templateinit`'s end-to-end test uses the same
+  pattern.
+- **CI triggers:** every workflow runs on `pull_request`, on `push` to `main`
+  and on `workflow_dispatch`. Pushes to other branches no longer start a run, so
+  a pull request gets one run instead of two, and `main` is still tested after
+  every merge. Each workflow has a `concurrency` group per workflow and ref with
+  `cancel-in-progress: true`, so a new push to a pull request cancels the stale
+  run.
+- **Template-only CI:** the `templateinit` matrix and the tenancy-removal check
+  moved out of `ci.yml` into `.github/workflows/template-init.yml` and
+  `template-tenancy.yml`, and the allowlist file is now
+  `.github/template-tenancy-allowlist.txt`. `ci.yml` keeps what a real project
+  needs: build, vet, gofmt, lint, tests with Postgres and Redis, sqlc drift,
+  migrations up/down/up, `superapi-verify`, `govulncheck`, the docker job and the
+  SBOM.
+- **`make init` prunes the template-only CI automatically:** it deletes every
+  `.github/workflows/template-*` and `.github/template-*` file (kept with
+  `--keep-init`), `--no-tenancy` still deletes the workflow that runs the suite
+  with tenancy on, and the init job asserts in the generated project that the
+  template files are gone and `ci.yml` remains.
+
+### Documentation
+
+- `docs/getting-started.md`: "What happens to CI" says what `make init` removes,
+  what stays and why, and a short "Continuous integration" section describes the
+  workflow a project keeps.
+- `docs/removing-tenancy.md`: the `tenan(t|cy)` check and why it is safe.
+  `docs/multi-tenancy.md` ("What goAuth enforces"): goAuth v0.6.2 scopes these
+  calls and SuperAPI no longer duplicates the check. Every goAuth v0.6.0 pin
+  (`README.md`, `AGENTS.md`, `docs/architecture.md`, `docs/auth-goauth.md`,
+  `docs/enabling-webauthn.md`, `docs/overview.md`, `docs/workflows.md`) now says
+  v0.6.2; `internal/tenancy/AGENTS.md` and `docs/architecture.md` match.
+
+### Verification
+
+- One uninterrupted final gate on the release commit: `docker compose ps`
+  healthy; `go mod tidy`, `make sqlc-generate` (twice) and `gofmt -l .` leave no
+  diff; `go build`, `go vet`, `golangci-lint run`,
+  `go run ./cmd/superapi-verify ./...`, `govulncheck ./...`.
+- `go test ./... -race -count=1` with tenancy off and with
+  `TENANCY_ENABLED=true`, and `make test-integration` against Postgres 18 and
+  Redis, both ways.
+- Migrations apply, roll back fully, and re-apply.
+- `make init` default, `--no-tenancy` and `--no-all` projects pass build, vet,
+  verify, tests and sqlc drift and contain no `template-*` workflow; the
+  `--no-tenancy` project has only `000001_init` and the new grep returns
+  nothing, while the same grep finds tenancy in the default project;
+  `docker build` and `docker compose config` pass.
+
 ## v0.11.0 (2026-09-29)
 
 Two structural changes and one hardening fix. A fresh clone now starts from a
