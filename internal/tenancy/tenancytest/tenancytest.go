@@ -99,16 +99,6 @@ func (s *Store) CreateInTenant(ctx context.Context, tenantID string, input auth.
 	return tenancy.TenantUser{StoredUser: u, TenantID: tenantID}, nil
 }
 
-func (s *Store) InTenant(ctx context.Context, tenantID, userID string) (bool, error) {
-	if strings.TrimSpace(tenantID) == "" {
-		return false, nil
-	}
-	if _, err := s.users.GetByID(ctx, userID); err != nil {
-		return false, nil
-	}
-	return s.tenant(userID) == tenantID, nil
-}
-
 func (s *Store) TenantOf(ctx context.Context, userID string) (string, error) {
 	if _, err := s.users.GetByID(ctx, userID); err != nil {
 		return "", err

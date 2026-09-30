@@ -135,3 +135,11 @@ const (
 var initPaths = []string{
 	"cmd/templateinit",
 }
+
+// initGlobs are path patterns (relative, slash separated) deleted with the init
+// tooling unless --keep-init: the CI that only matters for developing the
+// template itself. Every such file is named template-*.
+var initGlobs = []string{
+	".github/workflows/template-*",
+	".github/template-*",
+}

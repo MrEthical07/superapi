@@ -115,7 +115,7 @@ Order:
 	 - create the sqlc-backed `StoreUserProvider` (WebAuthn credential
 	   repository, and — with AUTH_TOTP_ENABLED — the MFA repository and TOTP
 	   secret cipher); a feature may wrap it and the user repository
-	 - create the goAuth engine (v0.6.0) with Redis + provider + auth feature
+	 - create the goAuth engine (v0.6.2) with Redis + provider + auth feature
 	   flags + the features' goAuth config mutators
 	 - register the features' auth extensions on the engine
 7. If rate-limit enabled:
@@ -291,7 +291,7 @@ Always thread the context through. See [docs/transactions.md](transactions.md).
 
 ## 8. Auth Architecture With goAuth
 
-SuperAPI is on goAuth **v0.6.0**. The engine is built in
+SuperAPI is on goAuth **v0.6.2**. The engine is built in
 internal/core/auth/goauth_provider.go and receives a `goauth.UserProvider`.
 
 Current provider implementation: internal/core/auth/provider_store.go
@@ -512,9 +512,10 @@ A feature owns everything that mentions it, so removing it is mechanical:
   wrapped in the feature's template marker comments (see `cmd/templateinit`).
 
 `cmd/templateinit` prunes a feature by deleting the directory and every file
-named after it (`feature.NameContains`) and stripping the marked blocks. CI runs
-that on a copy and requires the pruned project to build, vet, lint, verify and
-pass its tests with no mention of the feature left. Core code, docs and tests
+named after it (`feature.NameContains`) and stripping the marked blocks. The
+template's own CI (`.github/workflows/template-*`, which `make init` deletes)
+runs that on a copy and requires the pruned project to build, vet, lint, verify
+and pass its tests with no mention of the feature left. Core code, docs and tests
 outside those files must therefore never name a feature; describe the generic
 mechanism and let the feature's own docs describe the feature.
 

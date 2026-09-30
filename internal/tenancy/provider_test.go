@@ -205,14 +205,13 @@ func totpCode(t *testing.T, secretBase32 string) string {
 	return fmt.Sprintf("%06d", value%1_000_000)
 }
 
-// Core MFA SQL no longer filters by tenant, on the strength of goAuth
-// resolving the user through the tenant-scoped lookup before every id-keyed
-// provider call. That holds for every path SuperAPI uses except the ones the
-// provider wrapper covers itself (bare backup-code consumption, WebAuthn
-// list/remove). This test proves the end result: a user id from tenant A, used
-// under a tenant B request context, is rejected for TOTP setup, confirm and
-// disable and for backup-code generate, regenerate and consume, and tenant A's
-// state is untouched afterwards. (WebAuthn list/remove: provider_webauthn_test.go.)
+// Core MFA SQL does not filter by tenant, on the strength of goAuth (v0.6.2 and
+// later) resolving the user through the tenant-scoped lookup before every
+// id-keyed provider call; the provider wrapper adds no scoping of its own. This
+// test proves the end result: a user id from tenant A, used under a tenant B
+// request context, is rejected for TOTP setup, confirm and disable and for
+// backup-code generate, regenerate and consume, and tenant A's state is
+// untouched afterwards. (WebAuthn list/remove: provider_webauthn_test.go.)
 func TestCrossTenantMFAIsRejected(t *testing.T) {
 	e := tenancytest.NewEngine(t, auth.Features{TOTP: true, TOTPIssuer: "SuperAPI Test"})
 	userA := createTestAccount(t, e.Engine, "tenant-a", "erin@example.com")
@@ -248,11 +247,6 @@ func TestCrossTenantMFAIsRejected(t *testing.T) {
 	rejected("backup codes regenerate", err)
 	rejected("backup code consume", e.VerifyBackupCode(ctxB, userA, codes[0]))
 	rejected("backup code consume (explicit tenant)", e.VerifyBackupCodeInTenant(ctxB, "tenant-b", userA, codes[0]))
-
-	// The provider itself refuses too, whatever reached it.
-	if ok, err := e.Provider.ConsumeBackupCode(ctxB, userA, [32]byte{1}); err != nil || ok {
-		t.Errorf("provider.ConsumeBackupCode across tenants = %v, %v; want false, nil", ok, err)
-	}
 
 	// Nothing of tenant A's changed: TOTP is still on and the first backup
 	// code is still unused, so it can be consumed in its own tenant.

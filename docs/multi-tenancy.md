@@ -7,8 +7,8 @@ a validated tenant, goAuth scopes every user lookup, session and
 reset/verification record to it, and tokens only work in the tenant that issued
 them.
 
-Requires goAuth **v0.6.0** (pinned in `go.mod`). goAuth's own contract is
-documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/multi_tenancy.md).
+Requires goAuth **v0.6.2** (pinned in `go.mod`). goAuth's own contract is
+documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/multi_tenancy.md).
 
 Where things live: everything tenancy owns is in `internal/tenancy/` or in a
 file whose name contains `tenancy` (migration `000002_tenancy`,
@@ -144,20 +144,21 @@ SuperAPI adds:
   never load the tenant-keyed session, so this is the only check there). It is
   the `Check` of the feature's `policy.AuthExtension`.
 - **No tenant filter in core MFA SQL, on purpose.** TOTP and backup-code queries
-  are keyed by the globally unique user id. goAuth v0.6.0 resolves the user
-  through the tenant-scoped lookup (with a record-tenant backstop) before every
-  id-keyed provider call SuperAPI makes: TOTP setup/confirm/verify/disable,
-  backup-code generate/regenerate, WebAuthn registration and login, status and
-  password changes. SuperAPI endpoints only ever pass the authenticated
-  principal's own user id. Three engine entry points reach the provider **without**
-  that lookup: `Engine.VerifyBackupCode`/`VerifyBackupCodeInTenant`,
-  `Engine.ListWebAuthnCredentials` and `Engine.RemoveWebAuthnCredential`.
-  `tenancy.Provider` therefore scopes `ConsumeBackupCode` and the WebAuthn
-  list/remove calls to the request tenant itself (a user id from another tenant
-  is not found). `TestCrossTenantMFAIsRejected` and
+  are keyed by the globally unique user id. goAuth **v0.6.2 and later** resolves
+  the user through the tenant-scoped lookup (with a record-tenant backstop)
+  before every id-keyed provider call: TOTP setup/confirm/verify/disable,
+  backup-code generate/regenerate/verify (`Engine.VerifyBackupCode`,
+  `VerifyBackupCodeInTenant`), WebAuthn registration, login, list and remove
+  (`Engine.ListWebAuthnCredentials`, `RemoveWebAuthnCredential`), status and
+  password changes. SuperAPI no longer duplicates that check: `tenancy.Provider`
+  adds no scoping of its own to `ConsumeBackupCode` or the WebAuthn calls.
+  goAuth v0.6.0 skipped the lookup for those three engine entry points (v0.6.1
+  was tagged in error and is retracted), which is why v0.6.2 is the minimum.
+  `TestCrossTenantMFAIsRejected` and
   `TestCrossTenantWebAuthnListAndRemoveAreRejected` prove a tenant A user id
   used under a tenant B request is rejected for TOTP setup/confirm/disable,
-  backup-code regenerate/consume and WebAuthn list/remove.
+  backup-code regenerate/consume and WebAuthn list/remove; they fail on goAuth
+  v0.6.0.
 - **Provider decorator.** `tenancy.Provider` embeds the core
   `auth.StoreUserProvider`, so every optional goAuth interface the core provider
   implements (WebAuthn, TOTP, backup codes) is preserved; each one is asserted

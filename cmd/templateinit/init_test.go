@@ -135,6 +135,12 @@ func newFixture(t *testing.T) string {
 		"LICENSE":                  "Copyright 2026 SuperAPI contributors\n",
 		"SECURITY.md":              "- security@projectbook.dev\n",
 		".github/ISSUE_TEMPLATE/c": "url: https://github.com/MrEthical07/superapi/security\n",
+		// Template-only CI is named template-*; the CI a project needs is not.
+		".github/workflows/template-init.yml":    "name: template-init\n",
+		".github/workflows/template-x.yml":       "name: template-x\n",
+		".github/workflows/ci.yml":               "name: ci\n",
+		".github/template-tenancy-allowlist.txt": "# allowlist\n",
+		".github/DISCUSSION_TEMPLATE/ideas.yml":  "title: x\n",
 	}
 	for rel, body := range files {
 		p := filepath.Join(dir, filepath.FromSlash(rel))
@@ -177,6 +183,16 @@ func TestRunIsIdempotent(t *testing.T) {
 			t.Errorf("missing %q after init", want)
 		}
 	}
+	for _, kept := range []string{".github/workflows/ci.yml", ".github/DISCUSSION_TEMPLATE/ideas.yml"} {
+		if !strings.Contains(first, kept) {
+			t.Errorf("%s must survive init", kept)
+		}
+	}
+	for _, gone := range []string{"template-init.yml", "template-x.yml", "template-tenancy-allowlist.txt"} {
+		if strings.Contains(first, gone) {
+			t.Errorf("template-only CI %s survived init", gone)
+		}
+	}
 	for _, gone := range []string{"MrEthical07/superapi", "const Perf", "performance/README.md", "template:", "badge", "make init", "cmd/templateinit", "v0.9.0"} {
 		if strings.Contains(first, gone) {
 			t.Errorf("%q still present after init", gone)
@@ -204,6 +220,9 @@ func TestRunKeepInit(t *testing.T) {
 	snap := snapshot(t, dir)
 	if !strings.Contains(snap, "cmd/templateinit/doc.go") || !strings.Contains(snap, "template:begin perf") {
 		t.Fatal("--keep-init must keep the tool and the markers")
+	}
+	if !strings.Contains(snap, ".github/workflows/template-init.yml") {
+		t.Fatal("--keep-init must keep the template-only CI")
 	}
 	if strings.Contains(snap, "badge") {
 		t.Fatal("maintainer content is removed even with --keep-init")
@@ -288,7 +307,7 @@ func snapshot(t *testing.T, dir string) string {
 
 // TestTemplateInitEndToEnd runs init against a copy of this repository and then
 // the project's quality gate. It is slow, so it only runs when
-// SUPERAPI_TEMPLATEINIT_E2E is set (CI runs it; see .github/workflows/ci.yml).
+// SUPERAPI_TEMPLATEINIT_E2E is set (.github/workflows/template-init.yml is the CI equivalent).
 func TestTemplateInitEndToEnd(t *testing.T) {
 	if os.Getenv("SUPERAPI_TEMPLATEINIT_E2E") == "" {
 		t.Skip("set SUPERAPI_TEMPLATEINIT_E2E=1 to run")
@@ -321,10 +340,18 @@ func TestTemplateInitEndToEnd(t *testing.T) {
 					t.Fatalf("%s: %v\n%s", strings.Join(args, " "), err, out)
 				}
 			}
+			for _, pattern := range []string{".github/workflows/template-*", ".github/template-*"} {
+				if left, _ := filepath.Glob(filepath.Join(dir, filepath.FromSlash(pattern))); len(left) > 0 {
+					t.Fatalf("template-only CI left behind: %v", left)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(dir, ".github", "workflows", "ci.yml")); err != nil {
+				t.Fatalf("ci.yml must stay: %v", err)
+			}
 			if prune["tenancy"] {
 				// A project without tenancy mentions it nowhere but the CHANGELOG
 				// (CI proves the same with git grep).
-				mention := exec.Command("grep", "-rli", "--exclude=CHANGELOG.md", "--exclude-dir=.git", "tenan", ".")
+				mention := exec.Command("grep", "-rliE", "--exclude=CHANGELOG.md", "--exclude-dir=.git", "tenan(t|cy)", ".")
 				mention.Dir = dir
 				if out, _ := mention.Output(); len(bytes.TrimSpace(out)) > 0 {
 					t.Fatalf("tenancy still referenced in:\n%s", out)

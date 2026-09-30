@@ -1,65 +1,20 @@
 name: ci
 
 on:
-  push:
-    branches: [ "**" ]
   pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# A new push to a pull request cancels the run it made stale.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  # template:begin init
-  # Runs `make init` against a copy of the template for the default, the
-  # no-tenancy and the everything-pruned combinations, then that project's own
-  # gate. A project without tenancy must not mention it anywhere but the
-  # CHANGELOG; .github/tenancy-allowlist.txt lists any justified exception (the
-  # target is an empty list).
-  templateinit:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        flags: ["", "--no-tenancy", "--no-all"]
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27.1"
-
-      - name: Install sqlc
-        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
-
-      - name: Dry run
-        run: go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }} --dry-run
-
-      - name: Initialize a copy and run its gate
-        run: |
-          dst="$RUNNER_TEMP/project"
-          mkdir -p "$dst"
-          git ls-files -z | xargs -0 cp --parents -t "$dst"
-          cd "$dst"
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          go run ./cmd/templateinit --module github.com/acme/foo --name "Foo API" ${{ matrix.flags }}
-          if grep -rl "MrEthical07/superapi" .; then echo "old module path still referenced"; exit 1; fi
-          if grep -rlE "template:(begin|end) " .; then echo "template markers left behind"; exit 1; fi
-          git init -q && git add -A && git -c user.email=ci@example.com -c user.name=ci commit -qm init
-          case "${{ matrix.flags }}" in
-            *no-tenancy*|*no-all*)
-              allow=$(grep -vE '^[[:space:]]*(#|$)' "$GITHUB_WORKSPACE/.github/tenancy-allowlist.txt" | awk '{print ":!"$1}')
-              if git grep -n -i "tenan" -- . ':!CHANGELOG.md' $allow; then echo "tenancy left behind (see above)"; exit 1; fi
-              test "$(ls db/migrations/*.up.sql | wc -l)" = 1 || { echo "expected only 000001_init"; exit 1; }
-              ;;
-          esac
-          make sqlc-generate && git diff --exit-code
-          go build ./...
-          go vet ./...
-          go run ./cmd/superapi-verify ./...
-          go test ./... -race
-  # template:end init
-
   # Builds the production image and exercises docker-compose.yml, which are
   # otherwise untested: compose validation, image build, a non-root and
   # liveness smoke test, and migrations run by the image against the compose

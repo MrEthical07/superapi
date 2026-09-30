@@ -25,7 +25,8 @@ make init module=github.com/acme/foo name="Foo API"
 - rewrites the Go module path everywhere and runs `go mod tidy`;
 - resets README title, CHANGELOG, LICENSE holder and SECURITY contact
   (add `flags="--copyright 'Acme Inc'"` to set the holder);
-- removes template-maintainer content, then deletes itself.
+- removes template-maintainer content and the template's own CI (see
+  [What happens to CI](#what-happens-to-ci)), then deletes itself.
 
 Preview first with `make init module=... flags=--dry-run`. Optional pruning:
 
@@ -42,9 +43,29 @@ Preview first with `make init module=... flags=--dry-run`. Optional pruning:
 | `--no-all` | all of the above |
 
 Example: `make init module=github.com/acme/foo name="Foo API" flags="--no-perf --no-webauthn"`.
-Every combination leaves a project that passes its own gate (CI checks the
-default, `--no-tenancy` and `--no-all`). `--no-webauthn` strips the marked
-WebAuthn blocks from `000001_init` instead of deleting a numbered migration.
+Every combination leaves a project that passes its own gate (the template's CI
+checks the default, `--no-tenancy` and `--no-all`). `--no-webauthn` strips the
+marked WebAuthn blocks from `000001_init` instead of deleting a numbered
+migration.
+
+### What happens to CI
+
+The template's CI has two halves, told apart by file name:
+
+| Kept: the CI your project needs | Removed by `make init`: the CI that only tests the template |
+|---|---|
+| `.github/workflows/ci.yml`: build, vet, gofmt, golangci-lint, tests with Postgres and Redis (`-race`), sqlc drift, migrations up/down/up, `superapi-verify`, `govulncheck`, the Docker image and compose smoke test, and a CycloneDX SBOM | every `.github/workflows/template-*` file: `template-init.yml` (runs `make init` against a copy of the template for several flag combinations and runs each result's gate) and `template-tenancy.yml` (proves the tenancy-removal check is neither blind nor noisy) |
+| the workflow of each feature you keep (for example the one that runs the suite with that feature switched on); `--no-<feature>` deletes that feature's workflow together with the feature | every `.github/template-*` file, such as the allowlist the template's removal check reads |
+
+Why: `make init` has already run in your repository, so the jobs that exercise
+it could only ever test the template, not your code, and a project that keeps
+them pays for runs that prove nothing about it. Anything else you add to
+`.github/workflows` is yours and untouched; name it anything but `template-*`.
+
+The kept workflows run on every pull request, on pushes to `main` (so `main` is
+tested after each merge), and on demand (`workflow_dispatch`). Pushes to other
+branches do not start a run, and a new push to a pull request cancels the run it
+made stale. Protect `main` by requiring the `ci` checks before merge.
 <!-- template:end init -->
 
 ## Start dependencies and configure
@@ -135,6 +156,15 @@ BSD-3-Clause-licensed Redis fork: switch the image, command and healthcheck
 lines and nothing else changes (`REDIS_ADDR` and the app code stay the same).
 Managed offerings (ElastiCache/Memorystore for Valkey or Redis) are another
 option.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` is your project's gate: build, vet, gofmt, lint, tests
+with Postgres and Redis, sqlc drift, migrations up/down/up, `superapi-verify`,
+`govulncheck`, the Docker image and an SBOM. It runs on pull requests, on pushes
+to `main` and on demand; pushes to other branches do not start it, and a new
+push to a pull request cancels the stale run. Require its checks before merging
+into `main`. Add your own workflows next to it.
 
 ## Ship it
 

@@ -97,6 +97,17 @@ func Run(opts Options) (Result, error) {
 	}
 	if !opts.KeepInit {
 		toDelete = append(toDelete, initPaths...)
+		for _, pattern := range initGlobs {
+			matches, err := filepath.Glob(filepath.Join(root, filepath.FromSlash(pattern)))
+			if err != nil {
+				return res, err
+			}
+			sort.Strings(matches)
+			for _, m := range matches {
+				rel, _ := filepath.Rel(root, m)
+				toDelete = append(toDelete, filepath.ToSlash(rel))
+			}
+		}
 	}
 	for _, rel := range toDelete {
 		abs := filepath.Join(root, filepath.FromSlash(rel))

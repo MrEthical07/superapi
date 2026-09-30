@@ -11,24 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const authUserInTenant = `-- name: AuthUserInTenant :one
-SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2)
-`
-
-type AuthUserInTenantParams struct {
-	ID       pgtype.UUID `json:"id"`
-	TenantID string      `json:"tenant_id"`
-}
-
-// Reports whether the user exists in the tenant. The wrapper uses it to
-// scope goAuth calls that reach the provider with a bare user id.
-func (q *Queries) AuthUserInTenant(ctx context.Context, arg AuthUserInTenantParams) (bool, error) {
-	row := q.db.QueryRow(ctx, authUserInTenant, arg.ID, arg.TenantID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const createAuthUserInTenant = `-- name: CreateAuthUserInTenant :one
 INSERT INTO users (email, password_hash, role, permissions, status, tenant_id)
 VALUES ($1, $2, $3, $4, $5, $6)

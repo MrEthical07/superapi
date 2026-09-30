@@ -45,10 +45,5 @@ INSERT INTO users (email, password_hash, role, permissions, status, tenant_id)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
--- name: AuthUserInTenant :one
--- Reports whether the user exists in the tenant. The wrapper uses it to
--- scope goAuth calls that reach the provider with a bare user id.
-SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2);
-
 -- name: GetAuthUserTenant :one
 SELECT tenant_id FROM users WHERE id = $1;

@@ -47,13 +47,3 @@ func RequestTenantFromContext(ctx context.Context) (string, bool) {
 	}
 	return tenantID, true
 }
-
-// scopeTenant is the tenant a bare-user-id provider call is restricted to: the
-// request tenant, or goAuth's default tenant when none is attached. goAuth
-// resolves the same tenant from the context before it calls the provider.
-func scopeTenant(ctx context.Context) string {
-	if tenantID, ok := RequestTenantFromContext(ctx); ok {
-		return tenantID
-	}
-	return DefaultTenantID
-}

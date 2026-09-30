@@ -1,7 +1,7 @@
 # Auth and goAuth Integration
 
 SuperAPI's authentication engine is **[goAuth](https://github.com/MrEthical07/goAuth)
-v0.6.0** (the version pinned in `go.mod`). This page explains how the template
+v0.6.2** (the version pinned in `go.mod`). This page explains how the template
 wires it. goAuth's own reference docs are linked, pinned to that exact
 version, rather than copied into this repository.
 
@@ -10,26 +10,26 @@ version, rather than copied into this repository.
 - Optional features and the hooks they use: [docs/architecture.md](architecture.md#13-optional-features)
 - WebAuthn: [docs/enabling-webauthn.md](enabling-webauthn.md)
 
-## 1. goAuth reference (pinned to v0.6.0)
+## 1. goAuth reference (pinned to v0.6.2)
 
-Base: <https://github.com/MrEthical07/goAuth/tree/v0.6.0/docs>
+Base: <https://github.com/MrEthical07/goAuth/tree/v0.6.2/docs>
 
 | Topic | goAuth page | Why you would read it |
 |---|---|---|
-| Config reference | [config.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/config.md) | every field set in `internal/core/auth/config.go` |
-| Config lint codes | [config_lint.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/config_lint.md) | startup `goauth config lint` warnings |
-| Engine API | [api-reference.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/api-reference.md) | method signatures the auth module calls |
-| Flows | [flows.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/flows.md) | login, refresh, MFA, reset, verification sequences |
-| MFA / TOTP / backup codes | [mfa.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/mfa.md) | TOTP setup, replay protection, backup codes |
-| Password reset | [password_reset.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/password_reset.md) | strategies (token/OTP/UUID), limits |
-| Email verification | [email_verification.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/email_verification.md) | challenge format, enumeration resistance |
-| Sessions | [session.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/session.md) | remember-me, ceilings |
-| JWT and key rotation | [jwt.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/jwt.md) | `AUTH_KEY_ID` / `AUTH_VERIFY_KEYS` |
-| Rate limiting | [rate_limiting.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/rate_limiting.md) | the abuse limiters that protect public auth routes |
-| WebAuthn | [webauthn.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/webauthn.md) | ceremonies and the credential provider |
-| Error model | [error-model.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/error-model.md) | error categories mapped to HTTP statuses |
-| Audit | [audit.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/audit.md) | audit events (never show them to end users) |
-| Migrations | [migrations.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/migrations.md) | upgrade notes between goAuth versions |
+| Config reference | [config.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/config.md) | every field set in `internal/core/auth/config.go` |
+| Config lint codes | [config_lint.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/config_lint.md) | startup `goauth config lint` warnings |
+| Engine API | [api-reference.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/api-reference.md) | method signatures the auth module calls |
+| Flows | [flows.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/flows.md) | login, refresh, MFA, reset, verification sequences |
+| MFA / TOTP / backup codes | [mfa.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/mfa.md) | TOTP setup, replay protection, backup codes |
+| Password reset | [password_reset.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/password_reset.md) | strategies (token/OTP/UUID), limits |
+| Email verification | [email_verification.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/email_verification.md) | challenge format, enumeration resistance |
+| Sessions | [session.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/session.md) | remember-me, ceilings |
+| JWT and key rotation | [jwt.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/jwt.md) | `AUTH_KEY_ID` / `AUTH_VERIFY_KEYS` |
+| Rate limiting | [rate_limiting.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/rate_limiting.md) | the abuse limiters that protect public auth routes |
+| WebAuthn | [webauthn.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/webauthn.md) | ceremonies and the credential provider |
+| Error model | [error-model.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/error-model.md) | error categories mapped to HTTP statuses |
+| Audit | [audit.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/audit.md) | audit events (never show them to end users) |
+| Migrations | [migrations.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/migrations.md) | upgrade notes between goAuth versions |
 
 When you bump goAuth, update the version in these links together with `go.mod`.
 
@@ -162,4 +162,4 @@ post-authentication check that rejects the request with the same 401. See
 | Login 401 for a user that exists | wrong password, or a scope an optional feature requires is missing or wrong |
 | Login 403 `authentication state rejected` | account pending verification, disabled or locked |
 | Every protected route 401 | token sent as `Authorization: Bearer …`? expired? a feature's auth extension rejecting it? |
-| `goauth config lint` warnings at startup | see goAuth [config_lint.md](https://github.com/MrEthical07/goAuth/blob/v0.6.0/docs/config_lint.md); only high severity fails startup |
+| `goauth config lint` warnings at startup | see goAuth [config_lint.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/config_lint.md); only high severity fails startup |
