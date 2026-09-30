@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -183,11 +182,7 @@ func (a *App) Run(ctx context.Context) error {
 			Str("service", a.cfg.ServiceName).
 			Str("env", a.cfg.Env).
 			Msg("starting http server")
-		ln, err := net.Listen("tcp", a.server.Addr)
-		if err == nil {
-			err = a.server.Serve(ln)
-		}
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 			return
 		}

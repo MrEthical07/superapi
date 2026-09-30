@@ -96,7 +96,7 @@ func runUntilShutdown(t *testing.T, a *App) (time.Duration, error) {
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
 
-	time.Sleep(100 * time.Millisecond) // let the server start
+	time.Sleep(100 * time.Millisecond) // let ListenAndServe start
 	start := time.Now()
 	cancel()
 	select {
