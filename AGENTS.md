@@ -60,7 +60,7 @@ Do not bypass policy.MustValidateRoute / validator-backed route checks.
 
 ## 6. Auth Integration Rules
 
-- Use goAuth (v0.6.0) integration in internal/core/auth; goAuth config lives in internal/core/auth/config.go and roles in roles.go.
+- Use goAuth (v0.6.2) integration in internal/core/auth; goAuth config lives in internal/core/auth/config.go and roles in roles.go.
 - Auth HTTP endpoints live in internal/modules/auth (handler -> service -> goAuth engine). The service is the only code that calls *goauth.Engine.
 - Optional endpoint groups are gated by AUTH_*_ENABLED flags and are not registered when off.
 - Keep goAuth user provider data-store independent from service/module layers.

@@ -53,15 +53,7 @@ func TestUserStoreTenantScoping(t *testing.T) {
 		})
 	}
 
-	// InTenant and TenantOf.
-	if ok, err := store.InTenant(ctx, "tenant-a", alice.ID); err != nil || !ok {
-		t.Fatalf("InTenant same tenant = %v, %v", ok, err)
-	}
-	for _, tenantID := range []string{"tenant-b", ""} {
-		if ok, err := store.InTenant(ctx, tenantID, alice.ID); err != nil || ok {
-			t.Fatalf("InTenant(%q) = %v, %v; want false", tenantID, ok, err)
-		}
-	}
+	// TenantOf.
 	if tenantID, err := store.TenantOf(ctx, alice.ID); err != nil || tenantID != "tenant-a" {
 		t.Fatalf("TenantOf = %q, %v", tenantID, err)
 	}
@@ -88,44 +80,5 @@ func TestUserStoreTenantScoping(t *testing.T) {
 	}
 	if got, err := store.GetByIdentifier(ctx, "alice@example.com"); err != nil || got.TenantID != "tenant-a" {
 		t.Fatalf("tenant-blind identifier lookup: %+v err=%v", got, err)
-	}
-}
-
-// Through the real repositories, the provider wrapper's scope holds: another
-// tenant's backup codes cannot be consumed, and the user's own can.
-func TestProviderConsumeBackupCodeIsTenantScopedInSQL(t *testing.T) {
-	pg := dbtest.NewPostgres(t)
-	ctx := context.Background()
-	store := tenancy.NewUserStore(pg)
-
-	user, err := store.CreateInTenant(ctx, "tenant-a", auth.CreateStoredUserInput{Identifier: "frank@example.com", PasswordHash: "h", Status: "active"})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	mfa := auth.NewMFARepository(pg)
-	hash := [32]byte{7}
-	if err := pg.WithTx(ctx, func(ctx context.Context) error {
-		return mfa.ReplaceBackupCodes(ctx, user.ID, [][32]byte{hash})
-	}); err != nil {
-		t.Fatalf("replace codes: %v", err)
-	}
-
-	cipher, err := auth.NewAESGCMCipher(make([]byte, 32))
-	if err != nil {
-		t.Fatalf("cipher: %v", err)
-	}
-	base := auth.NewStoreUserProvider(auth.NewRelationalUserRepository(pg)).WithMFA(mfa, cipher).WithTx(pg)
-	provider := tenancy.NewProvider(base, store)
-
-	ctxA := tenancy.WithRequestTenant(ctx, "tenant-a")
-	ctxB := tenancy.WithRequestTenant(ctx, "tenant-b")
-	if ok, err := provider.ConsumeBackupCode(ctxB, user.ID, hash); err != nil || ok {
-		t.Fatalf("other tenant consumed the code: ok=%v err=%v", ok, err)
-	}
-	if ok, err := provider.ConsumeBackupCode(ctxA, user.ID, hash); err != nil || !ok {
-		t.Fatalf("own tenant could not consume its code: ok=%v err=%v", ok, err)
-	}
-	if ok, _ := provider.ConsumeBackupCode(ctxA, user.ID, hash); ok {
-		t.Fatal("a backup code is single use")
 	}
 }

@@ -76,10 +76,11 @@ func TestProviderKeepsEveryOptionalInterface(t *testing.T) {
 	}
 }
 
-// Engine.ListWebAuthnCredentials and Engine.RemoveWebAuthnCredential call the
-// provider without resolving the user in the request tenant first (goAuth
-// v0.6.0), so the wrapper scopes them. A user id from tenant A used under a
-// tenant B request context is rejected, and nothing of tenant A's is touched.
+// Engine.ListWebAuthnCredentials and Engine.RemoveWebAuthnCredential resolve
+// the user in the request tenant before they reach the provider (goAuth v0.6.2
+// and later; v0.6.0 did not), and the wrapper adds no scoping of its own. A user
+// id from tenant A used under a tenant B request context is rejected, and
+// nothing of tenant A's is touched.
 func TestCrossTenantWebAuthnListAndRemoveAreRejected(t *testing.T) {
 	t.Setenv("WEBAUTHN_ENABLED", "true")
 	t.Setenv("WEBAUTHN_RP_ID", "localhost")

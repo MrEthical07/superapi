@@ -20,12 +20,11 @@ import (
 //   - tenant-blind lookups and CreateUser / UpdateAccountStatus, so the
 //     returned goauth.UserRecord carries the stored tenant id and new users are
 //     created in the request tenant;
-//   - the tenant-scoped lookups goAuth uses in multi-tenant mode;
-//   - the id-keyed calls goAuth can reach without first resolving the user in
-//     the request tenant (see docs/multi-tenancy.md, "What goAuth enforces"):
-//     ConsumeBackupCode here and the WebAuthn list/remove calls in
-//     provider_webauthn.go. They are restricted to users of the request
-//     tenant, so a user id from another tenant is not found.
+//   - the tenant-scoped lookups goAuth uses in multi-tenant mode.
+//
+// Every other call keeps the core provider's behavior: since goAuth v0.6.2 the
+// engine resolves the user in the request tenant before any id-keyed provider
+// call (see docs/multi-tenancy.md, "What goAuth enforces").
 //
 // goAuth detects capabilities by type assertion on the provider it is given, so
 // every interface the core provider satisfies is asserted below: a wrapper that
@@ -156,21 +155,4 @@ func (p *Provider) UpdateAccountStatus(ctx context.Context, userID string, statu
 	}
 	rec.TenantID = tenantID
 	return rec, nil
-}
-
-// ConsumeBackupCode marks a matching unused code as used, for a user of the
-// request tenant only. goAuth can reach it (Engine.VerifyBackupCode) without
-// resolving the user first, so the scope is enforced here; another tenant's
-// user id behaves like a wrong code.
-func (p *Provider) ConsumeBackupCode(ctx context.Context, userID string, codeHash [32]byte) (bool, error) {
-	inScope, err := p.userInScope(ctx, userID)
-	if err != nil || !inScope {
-		return false, err
-	}
-	return p.StoreUserProvider.ConsumeBackupCode(ctx, userID, codeHash)
-}
-
-// userInScope reports whether userID belongs to the request tenant.
-func (p *Provider) userInScope(ctx context.Context, userID string) (bool, error) {
-	return p.store.InTenant(ctx, scopeTenant(ctx), userID)
 }

@@ -38,8 +38,6 @@ type UserStore interface {
 	// CreateInTenant inserts the user into the tenant. It returns
 	// auth.ErrAuthUserExists when the identifier is already taken.
 	CreateInTenant(ctx context.Context, tenantID string, input auth.CreateStoredUserInput) (TenantUser, error)
-	// InTenant reports whether the user exists in the tenant.
-	InTenant(ctx context.Context, tenantID, userID string) (bool, error)
 	// TenantOf returns the tenant the user belongs to, or
 	// auth.ErrAuthUserNotFound.
 	TenantOf(ctx context.Context, userID string) (string, error)
@@ -129,19 +127,6 @@ func (s *sqlcUserStore) CreateInTenant(ctx context.Context, tenantID string, inp
 		return TenantUser{}, fmt.Errorf("create user in tenant: %w", err)
 	}
 	return mapUser(row), nil
-}
-
-func (s *sqlcUserStore) InTenant(ctx context.Context, tenantID, userID string) (bool, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	id, err := parseUserID(userID)
-	if tenantID == "" || err != nil {
-		return false, nil
-	}
-	ok, err := s.pg.Queries(ctx).AuthUserInTenant(ctx, sqlcgen.AuthUserInTenantParams{ID: id, TenantID: tenantID})
-	if err != nil {
-		return false, fmt.Errorf("check user tenant: %w", err)
-	}
-	return ok, nil
 }
 
 func (s *sqlcUserStore) TenantOf(ctx context.Context, userID string) (string, error) {

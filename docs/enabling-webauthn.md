@@ -42,7 +42,7 @@ WEBAUTHN_RP_ORIGINS=https://app.example.com
 `WEBAUTHN_RP_ID` must be a bare domain: no scheme, port, path or IP address
 (the single-label name `localhost` is the one exception). Config lint rejects
 anything else at startup with the variable's name in the error, mirroring what
-goAuth v0.6.0 enforces at `Build()`. **For local development use
+goAuth v0.6.2 enforces at `Build()`. **For local development use
 `WEBAUTHN_RP_ID=localhost` and `WEBAUTHN_RP_ORIGINS=http://localhost:3000`**,
 never `127.0.0.1` or a container IP.
 

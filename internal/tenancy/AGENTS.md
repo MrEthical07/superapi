@@ -32,11 +32,12 @@ docs/multi-tenancy.md; removal in docs/removing-tenancy.md.
 - Scope tenant-owned queries by `tenant_id` in SQL (db/queries/tenancy.sql).
   Core queries never mention `tenant_id`; the column default covers inserts.
 - `Provider` decorates `auth.StoreUserProvider`. Keep every optional goAuth
-  interface the core provider implements (assert each at compile time), and keep
-  the scoped id-keyed calls goAuth can reach without a tenant-scoped lookup
-  (ConsumeBackupCode, WebAuthn list/remove). `TestCrossTenantMFAIsRejected` and
-  `TestCrossTenantWebAuthnListAndRemoveAreRejected` must keep failing if that
-  scoping is removed.
+  interface the core provider implements (assert each at compile time). It adds
+  no scoping to id-keyed calls (ConsumeBackupCode, WebAuthn list/remove): goAuth
+  v0.6.2 and later resolves the user in the request tenant first, and
+  `TestCrossTenantMFAIsRejected` and `TestCrossTenantWebAuthnListAndRemoveAreRejected`
+  prove it. Do not downgrade goAuth below v0.6.2; if a goAuth method stops
+  scoping, those tests fail and the scoping must come back here.
 - Tenant tests use `tenancytest` (in-memory store and a multi-tenant engine
   built the way the app builds it), not fakes of goAuth.
 - Do not expose goAuth audit events to tenant users or tenant admins.
