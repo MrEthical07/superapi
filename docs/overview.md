@@ -23,7 +23,7 @@ In short: it gives you a "production-ready skeleton" where architecture rules ar
 Standing up a production Go SaaS backend means solving the same easy-to-get-wrong
 problems every time. SuperAPI solves them and enforces the solution:
 
-- **Auth is a lifecycle, not a login handler.** goAuth v0.6.2 gives you login, refresh, logout, sessions, password change, and opt-in registration, password reset, email verification, TOTP + backup codes and WebAuthn, all wired as feature-flagged endpoints — not a JWT snippet you grow yourself.
+- **Auth is a lifecycle, not a login handler.** goAuth v0.7.0 gives you login, refresh, logout, sessions, password change, and opt-in registration, password reset, email verification, TOTP + backup codes and WebAuthn, all wired as feature-flagged endpoints — not a JWT snippet you grow yourself.
 - **Cache/rate-limit keys are a footgun.** Keying is declared per route (explicit `VaryBy`/scope + tag invalidation), so you don't leak one user's cached response to another.
 - **Optional capabilities tangle the core.** Optional features live in their own packages and plug in through generic core hooks (auth extensions, route rules, cache key parts, middleware), so a feature you do not need is deleted rather than worked around.
 - **Data-access discipline erodes.** One enforced flow (Service → Repository → sqlc → pgx) is checked by a static verifier that fails the build on violations — there is no second pattern to drift toward.

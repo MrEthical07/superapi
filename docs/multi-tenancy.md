@@ -7,8 +7,8 @@ a validated tenant, goAuth scopes every user lookup, session and
 reset/verification record to it, and tokens only work in the tenant that issued
 them.
 
-Requires goAuth **v0.6.2** (pinned in `go.mod`). goAuth's own contract is
-documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.6.2/docs/multi_tenancy.md).
+Requires goAuth **v0.7.0** (pinned in `go.mod`). goAuth's own contract is
+documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.7.0/docs/multi_tenancy.md).
 
 Where things live: everything tenancy owns is in `internal/tenancy/` or in a
 file whose name contains `tenancy` (migration `000002_tenancy`,
@@ -163,6 +163,19 @@ SuperAPI adds:
   `auth.StoreUserProvider`, so every optional goAuth interface the core provider
   implements (WebAuthn, TOTP, backup codes) is preserved; each one is asserted
   at compile time.
+- **Tenant-scoped password writes.** `tenancy.Provider` implements
+  `goauth.TenantAwarePasswordUpdater` (goAuth v0.7.0). With tenancy on, change
+  password, password-reset confirm and rehash-on-login call
+  `UpdatePasswordHashInTenant` with the tenant goAuth resolved, and the write is
+  `UPDATE users ... WHERE id = $1 AND tenant_id = $2`
+  (`UpdateAuthUserPasswordHashInTenant` in `db/queries/tenancy.sql`) instead of
+  the by-id `UpdatePasswordHash`. A user id from another tenant matches no row
+  and returns `goauth.ErrUserNotFound`, so nothing is written. goAuth already
+  resolved the user in the request tenant before it got that far; the scoped
+  write is a second guard in SQL on the write itself. With tenancy off the core
+  provider is used and `UpdatePasswordHash` is unchanged.
+  `TestPasswordWritesAreTenantScoped` and `TestCrossTenantPasswordWriteIsRejected`
+  prove it.
 
 ## 7. Identifier uniqueness (a schema decision)
 
