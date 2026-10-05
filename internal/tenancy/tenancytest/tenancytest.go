@@ -106,6 +106,13 @@ func (s *Store) TenantOf(ctx context.Context, userID string) (string, error) {
 	return s.tenant(userID), nil
 }
 
+func (s *Store) UpdatePasswordHashInTenant(ctx context.Context, tenantID, userID, newHash string) error {
+	if _, err := s.GetByIDInTenant(ctx, tenantID, userID); err != nil {
+		return err
+	}
+	return s.users.UpdatePasswordHash(ctx, userID, newHash)
+}
+
 // Engine bundles what a multi-tenant test needs.
 type Engine struct {
 	*goauth.Engine
@@ -120,11 +127,23 @@ type Engine struct {
 // tenancy.EnableMultiTenant.
 func NewEngine(t testing.TB, features auth.Features) *Engine {
 	t.Helper()
+	return NewEngineWith(t, features, nil)
+}
+
+// NewEngineWith is NewEngine with a decorator over the tenancy provider, for
+// tests that observe the calls goAuth makes (the way app.Hooks.UserProvider
+// decorators stack). wrap may be nil; Engine.Provider is always the tenancy
+// provider itself.
+func NewEngineWith(t testing.TB, features auth.Features, wrap func(*tenancy.Provider) goauth.UserProvider) *Engine {
+	t.Helper()
 	users := authtest.NewUserRepository()
 	store := NewStore(users)
 	var provider *tenancy.Provider
 	engine, _ := authtest.NewEngineWith(t, users, features, func(base *auth.StoreUserProvider) goauth.UserProvider {
 		provider = tenancy.NewProvider(base, store)
+		if wrap != nil {
+			return wrap(provider)
+		}
 		return provider
 	}, tenancy.EnableMultiTenant)
 	return &Engine{Engine: engine, Provider: provider, Users: users, Store: store}

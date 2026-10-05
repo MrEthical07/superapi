@@ -82,3 +82,51 @@ func TestUserStoreTenantScoping(t *testing.T) {
 		t.Fatalf("tenant-blind identifier lookup: %+v err=%v", got, err)
 	}
 }
+
+// The tenant predicate of the password write lives in SQL too: a user of
+// another tenant matches no row, so nothing is written and the result is a
+// not-found, never a silent success.
+func TestUserStorePasswordWriteIsTenantScoped(t *testing.T) {
+	pg := dbtest.NewPostgres(t)
+	store := tenancy.NewUserStore(pg)
+	ctx := context.Background()
+
+	alice, err := store.CreateInTenant(ctx, "tenant-a", auth.CreateStoredUserInput{Identifier: "pw-alice@example.com", PasswordHash: "old", Role: "user", Status: "active"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	hash := func() string {
+		t.Helper()
+		got, err := store.GetByIDInTenant(ctx, "tenant-a", alice.ID)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return got.PasswordHash
+	}
+
+	for _, tc := range []struct {
+		name             string
+		tenantID, userID string
+	}{
+		{"other tenant", "tenant-b", alice.ID},
+		{"empty tenant", "", alice.ID},
+		{"unknown user", "tenant-a", "00000000-0000-0000-0000-000000000000"},
+		{"malformed id", "tenant-a", "not-a-uuid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := store.UpdatePasswordHashInTenant(ctx, tc.tenantID, tc.userID, "forged"); !errors.Is(err, auth.ErrAuthUserNotFound) {
+				t.Fatalf("err = %v, want ErrAuthUserNotFound", err)
+			}
+			if got := hash(); got != "old" {
+				t.Fatalf("hash = %q after a rejected write, want it untouched", got)
+			}
+		})
+	}
+
+	if err := store.UpdatePasswordHashInTenant(ctx, "tenant-a", alice.ID, "new"); err != nil {
+		t.Fatalf("write in own tenant: %v", err)
+	}
+	if got := hash(); got != "new" {
+		t.Fatalf("hash = %q, want %q", got, "new")
+	}
+}

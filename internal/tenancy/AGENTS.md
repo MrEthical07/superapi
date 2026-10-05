@@ -38,6 +38,12 @@ docs/multi-tenancy.md; removal in docs/removing-tenancy.md.
   `TestCrossTenantMFAIsRejected` and `TestCrossTenantWebAuthnListAndRemoveAreRejected`
   prove it. Do not downgrade goAuth below v0.6.2; if a goAuth method stops
   scoping, those tests fail and the scoping must come back here.
+- Password writes are the exception: `Provider` implements
+  `goauth.TenantAwarePasswordUpdater` (goAuth v0.7.0), so ChangePassword, reset
+  confirm and rehash-on-login write `WHERE id = $1 AND tenant_id = $2` for the
+  tenant goAuth resolved. Keep that assertion, and keep the not-found result
+  for a user of another tenant; `TestPasswordWritesAreTenantScoped` and
+  `TestCrossTenantPasswordWriteIsRejected` prove both.
 - Tenant tests use `tenancytest` (in-memory store and a multi-tenant engine
   built the way the app builds it), not fakes of goAuth.
 - Do not expose goAuth audit events to tenant users or tenant admins.
