@@ -239,3 +239,25 @@ func (q *Queries) ListTenants(ctx context.Context, limit int32) ([]Tenant, error
 	}
 	return items, nil
 }
+
+const updateAuthUserPasswordHashInTenant = `-- name: UpdateAuthUserPasswordHashInTenant :one
+UPDATE users SET password_hash = $3, updated_at = NOW()
+WHERE id = $1 AND tenant_id = $2
+RETURNING id
+`
+
+type UpdateAuthUserPasswordHashInTenantParams struct {
+	ID           pgtype.UUID `json:"id"`
+	TenantID     string      `json:"tenant_id"`
+	PasswordHash string      `json:"password_hash"`
+}
+
+// Tenant-scoped password write (goauth.TenantAwarePasswordUpdater). The tenant
+// predicate is enforced in SQL; a user in another tenant matches no row, so
+// the write is a not-found rather than a silent update.
+func (q *Queries) UpdateAuthUserPasswordHashInTenant(ctx context.Context, arg UpdateAuthUserPasswordHashInTenantParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, updateAuthUserPasswordHashInTenant, arg.ID, arg.TenantID, arg.PasswordHash)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}

@@ -20,7 +20,10 @@ import (
 //   - tenant-blind lookups and CreateUser / UpdateAccountStatus, so the
 //     returned goauth.UserRecord carries the stored tenant id and new users are
 //     created in the request tenant;
-//   - the tenant-scoped lookups goAuth uses in multi-tenant mode.
+//   - the tenant-scoped lookups goAuth uses in multi-tenant mode;
+//   - goauth.TenantAwarePasswordUpdater, so ChangePassword, password-reset
+//     confirm and rehash-on-login write the hash for the tenant goAuth resolved
+//     instead of by user id alone.
 //
 // Every other call keeps the core provider's behavior: since goAuth v0.6.2 the
 // engine resolves the user in the request tenant before any id-keyed provider
@@ -37,6 +40,9 @@ type Provider struct {
 var (
 	_ goauth.UserProvider            = (*Provider)(nil)
 	_ goauth.TenantAwareUserProvider = (*Provider)(nil)
+	// goAuth detects this one by type assertion too, and only consults it in
+	// multi-tenant mode.
+	_ goauth.TenantAwarePasswordUpdater = (*Provider)(nil)
 )
 
 const defaultLookupTimeout = 3 * time.Second
@@ -120,6 +126,19 @@ func (p *Provider) GetUserByIDInTenant(ctx context.Context, tenantID, userID str
 		return goauth.UserRecord{}, mapNotFound(err, "get user by id in tenant")
 	}
 	return record(u), nil
+}
+
+// UpdatePasswordHashInTenant stores a new password hash for a user of tenantID
+// (goauth.TenantAwarePasswordUpdater). The tenant predicate is applied in SQL;
+// a user in another tenant, or an empty tenant, is reported as not found and
+// nothing is written.
+func (p *Provider) UpdatePasswordHashInTenant(ctx context.Context, tenantID, userID, newHash string) error {
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+	if err := p.store.UpdatePasswordHashInTenant(ctx, tenantID, userID, newHash); err != nil {
+		return mapNotFound(err, "update password hash in tenant")
+	}
+	return nil
 }
 
 // CreateUser inserts a new user into the tenant goAuth passes (the request

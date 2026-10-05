@@ -1,7 +1,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.27+-00ADD8?logo=go)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 <!-- template:begin maintainer -->
-[![Release](https://img.shields.io/badge/release-v0.11.1-brightgreen)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.11.2-brightgreen)](CHANGELOG.md)
 <!-- template:end maintainer -->
 
 # SuperAPI
@@ -54,7 +54,7 @@ API with Postgres, Redis, auth, cache and rate limiting disabled (values in
 - **Policy-ordered routes**: auth, isolation, RBAC, rate limit, cache and
   cache-control are declared per route and validated statically.
 - **A complete auth lifecycle** on [goAuth](https://github.com/MrEthical07/goAuth)
-  v0.6.2: login with remember-me, refresh, logout, logout-everywhere, sessions,
+  v0.7.0: login with remember-me, refresh, logout, logout-everywhere, sessions,
   password change, and opt-in registration, password reset, email
   verification, TOTP with backup codes, and WebAuthn. Enumeration-safe
   responses; secrets are delivered out-of-band, never in HTTP responses. See
@@ -75,7 +75,7 @@ API with Postgres, Redis, auth, cache and rate limiting disabled (values in
 
 | The problem you'd otherwise solve yourself | How SuperAPI solves it |
 |---|---|
-| **Auth lifecycle is more than login.** Registration, reset, verification, MFA, sessions, key rotation, abuse limiting — hand-rolling these is where security bugs live. | goAuth v0.6.2 wired end to end: every lifecycle endpoint, feature-flagged, enumeration-safe, with TOTP secrets encrypted at rest. |
+| **Auth lifecycle is more than login.** Registration, reset, verification, MFA, sessions, key rotation, abuse limiting — hand-rolling these is where security bugs live. | goAuth v0.7.0 wired end to end: every lifecycle endpoint, feature-flagged, enumeration-safe, with TOTP secrets encrypted at rest. |
 | **Cache and rate-limit keys are a footgun.** | Policy-driven caching and rate limiting with explicit `VaryBy`/scope keying and tag-based invalidation. |
 | **Optional capabilities tangle the core.** | Optional features plug in through generic core hooks (auth extensions, route rules, cache key parts, middleware) and live in their own packages, so a feature you do not need is deleted, not worked around. |
 | **Data-access discipline erodes.** | One enforced flow checked by `superapi-verify`. |
@@ -169,7 +169,7 @@ an open-source authentication engine.
   receive automatic upstream updates.
 - Upgrades are manual: compare changes, port intentionally, and validate with
   tests and the verifier. The CHANGELOG lists behavior changes per release.
-- Current public template baseline: v0.11.1 (pre-1.0 by intent).
+- Current public template baseline: v0.11.2 (pre-1.0 by intent).
 
 ## Release Hygiene
 

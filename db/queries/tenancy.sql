@@ -47,3 +47,11 @@ RETURNING *;
 
 -- name: GetAuthUserTenant :one
 SELECT tenant_id FROM users WHERE id = $1;
+
+-- name: UpdateAuthUserPasswordHashInTenant :one
+-- Tenant-scoped password write (goauth.TenantAwarePasswordUpdater). The tenant
+-- predicate is enforced in SQL; a user in another tenant matches no row, so
+-- the write is a not-found rather than a silent update.
+UPDATE users SET password_hash = $3, updated_at = NOW()
+WHERE id = $1 AND tenant_id = $2
+RETURNING id;

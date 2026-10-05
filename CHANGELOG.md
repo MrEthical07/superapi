@@ -2,6 +2,50 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.11.2 (2026-10-05)
+
+A patch release. It moves to goAuth v0.7.0 and uses one of its new optional
+capabilities so the tenancy feature's password writes are scoped to the tenant.
+
+**Behavior:** unchanged for single-tenant clones (tenancy off, the default): no
+HTTP, config, schema or migration change. goAuth v0.7.0 is byte-for-byte
+identical to v0.6.2 while role switching is unused, and SuperAPI does not enable
+it. With tenancy on, the only difference is the SQL of the three password
+writes below.
+
+### Dependencies
+
+- goAuth v0.6.2 to v0.7.0 (additive; `gorelease` reports no incompatible
+  changes). goAuth's own dependencies are not pinned.
+
+### Changed
+
+- `internal/tenancy`: `Provider` implements `goauth.TenantAwarePasswordUpdater`.
+  With tenancy on, change password, password-reset confirm and rehash-on-login
+  write the new hash through `UpdatePasswordHashInTenant` with the tenant goAuth
+  resolved, running `UPDATE users ... WHERE id = $1 AND tenant_id = $2` (new
+  query `UpdateAuthUserPasswordHashInTenant` in `db/queries/tenancy.sql`),
+  instead of the by-id `UpdatePasswordHash`. A user id from another tenant
+  matches no row, writes nothing and returns `goauth.ErrUserNotFound`. Core code
+  is unchanged: with tenancy off the core provider still uses
+  `UpdatePasswordHash`, and `make init --no-tenancy` still leaves no trace of the
+  feature.
+- Tests: `TestPasswordWritesAreTenantScoped` (all three flows write through
+  `UpdatePasswordHashInTenant` with the resolved tenant),
+  `TestCrossTenantPasswordWriteIsRejected`, `TestPasswordWriteWithMultiTenantOff`
+  and, against Postgres, `TestUserStorePasswordWriteIsTenantScoped`.
+
+### Documentation
+
+- Every goAuth pin and pinned docs link (README, AGENTS.md, `docs/auth-goauth.md`,
+  `docs/architecture.md`, `docs/overview.md`, `docs/workflows.md`,
+  `docs/enabling-webauthn.md`, `docs/multi-tenancy.md`) now points at v0.7.0.
+- `docs/multi-tenancy.md`: the tenant-scoped password writes.
+- `docs/auth-goauth.md`: new "Available in goAuth, not wired in the template"
+  section on role switching (`Engine.SwitchRole`, `RoleSwitchProvider`), with the
+  warning that it is only safe on `ModeStrict` routes and that a project adopting
+  it must run role-gated routes in strict mode.
+
 ## v0.11.1 (2026-09-30)
 
 A patch release. It requires goAuth v0.6.2, which completes goAuth's tenant

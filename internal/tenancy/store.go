@@ -41,6 +41,10 @@ type UserStore interface {
 	// TenantOf returns the tenant the user belongs to, or
 	// auth.ErrAuthUserNotFound.
 	TenantOf(ctx context.Context, userID string) (string, error)
+	// UpdatePasswordHashInTenant stores a new password hash for a user of the
+	// tenant. A user that exists only in another tenant, or an empty tenant,
+	// writes nothing and yields auth.ErrAuthUserNotFound.
+	UpdatePasswordHashInTenant(ctx context.Context, tenantID, userID, newHash string) error
 }
 
 // pgUniqueViolation is the Postgres SQLSTATE for unique_violation.
@@ -139,6 +143,27 @@ func (s *sqlcUserStore) TenantOf(ctx context.Context, userID string) (string, er
 		return "", notFoundOr(err, "get user tenant")
 	}
 	return tenantID, nil
+}
+
+func (s *sqlcUserStore) UpdatePasswordHashInTenant(ctx context.Context, tenantID, userID, newHash string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return auth.ErrAuthUserNotFound
+	}
+	id, err := parseUserID(userID)
+	if err != nil {
+		return err
+	}
+	// :one ... RETURNING id, so a user outside the tenant yields ErrNoRows
+	// instead of a silent no-op.
+	if _, err := s.pg.Queries(ctx).UpdateAuthUserPasswordHashInTenant(ctx, sqlcgen.UpdateAuthUserPasswordHashInTenantParams{
+		ID:           id,
+		TenantID:     tenantID,
+		PasswordHash: newHash,
+	}); err != nil {
+		return notFoundOr(err, "update password hash in tenant")
+	}
+	return nil
 }
 
 // --- mapping helpers (sqlc row -> domain) ---
