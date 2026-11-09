@@ -61,8 +61,8 @@ Related: `AUTH_REGISTRATION_AUTO_LOGIN`, `AUTH_EMAIL_VERIFICATION_REQUIRED`,
 | 401 | `unauthorized` | bad credentials (including a wrong step-up `password`), bad refresh/access token |
 | 403 | `forbidden` `authentication state rejected` | account pending verification, disabled, locked |
 | 404 | `not_found` | feature disabled |
-| 409 | `conflict` | TOTP already enabled (setup) or not enabled (disable/regenerate) |
-| 429 | `too_many_requests` | goAuth abuse limiter (including the password-verify limiter behind step-up and `password/change`) or route rate limiter |
+| 409 | `conflict` | TOTP already enabled (setup), not enabled (disable/regenerate), or backup codes that must be regenerated with a current TOTP code |
+| 429 | `too_many_requests` | goAuth abuse limiter (including the password-verify limiter behind step-up and `password/change`, the per-account TOTP budget, and with `AUTH_LOGIN_IP_LIMITER_ENABLED` the per-IP login budget) or route rate limiter |
 | 503 | `dependency_unavailable` | Redis/Postgres/goAuth backend unavailable |
 
 ## Credentials
@@ -206,7 +206,12 @@ enroll are challenged at every login; users who do not are unaffected.
 | `POST /api/v1/auth/mfa/totp/setup` | `{"password"}` | step-up: the account password is required. `{"secret_base32","otpauth_uri"}`. Render the URI as a QR code. 409 if TOTP is already enabled (disable first; replacing an active secret would break the user's authenticator) |
 | `POST /api/v1/auth/mfa/totp/confirm` | `{"code"}` | `{"enabled": true, "backup_codes": [...]}`. Backup codes are shown once; only hashes are stored. goAuth revokes the user's sessions, so log in again |
 | `POST /api/v1/auth/mfa/totp/disable` | `{"code"}` | requires a current TOTP code; removes the secret and all backup codes. 409 if not enabled |
-| `POST /api/v1/auth/mfa/backup-codes/regenerate` | `{"code"}` | requires a current TOTP code; returns a fresh set and invalidates the old one |
+| `POST /api/v1/auth/mfa/backup-codes/regenerate` | `{"code"}` | requires a current TOTP code; returns a fresh set and invalidates the old one. 409 `backup codes must be regenerated with a current TOTP code` if goAuth refuses the call without one; 409 `totp is not enabled for this account` if the user has no TOTP |
+
+goAuth v0.8 issues backup codes only right after TOTP setup: `totp/confirm` is
+the one place a first set is generated, and every later set comes from
+`backup-codes/regenerate` with a current TOTP code. Disabling TOTP removes the
+codes. See [auth-goauth.md](auth-goauth.md#7-goauth-v08x).
 
 ## WebAuthn
 

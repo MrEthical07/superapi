@@ -114,6 +114,10 @@ Explicit env vars override profile values.
 | AUTH_LIMITER_WINDOW_MODE | fixed | goAuth's internal auth-abuse limiter algorithm: `fixed` or `sliding` |
 | AUTH_KEY_ID | unset | active JWT signing key id (kid). Required when AUTH_VERIFY_KEYS is set |
 | AUTH_VERIFY_KEYS | unset | comma-separated `kid=<ed25519-pem>` entries for zero-downtime key rotation. PEM may use literal newlines or `\n` |
+| AUTH_LOGIN_IP_LIMITER_ENABLED | false | opt-in per-client-IP failure budget on password login, counted across accounts (goAuth `Security.LoginIPLimiter`). The address is only as trustworthy as `HTTP_TRUSTED_PROXIES`, and users behind one NAT share a budget; see [auth-goauth.md](auth-goauth.md#7-goauth-v08x). Must be a boolean; anything else fails startup |
+| AUTH_LOGIN_IP_LIMITER_MAX_ATTEMPTS | 20 | failed logins per client IP within the cooldown before further attempts get 429. Integer > 0; used only with `AUTH_LOGIN_IP_LIMITER_ENABLED=true` (a warning is logged if set while it is off) |
+| AUTH_LOGIN_IP_LIMITER_COOLDOWN | 15m | window the per-IP failures are counted in. Go duration > 0; used only with `AUTH_LOGIN_IP_LIMITER_ENABLED=true` |
+| AUTH_REFRESH_RECHECK_USER | false | opt-in: every refresh re-reads the user from Postgres (goAuth `Security.RecheckUserOnRefresh`). A disabled, locked or deleted account, or a changed `account_version`, ends the session at its next refresh; a Postgres outage makes refresh fail with 503. One extra read per refresh. Must be a boolean; anything else fails startup |
 
 Lint dependency rules:
 

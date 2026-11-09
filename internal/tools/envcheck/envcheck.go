@@ -3,10 +3,10 @@
 //
 // It parses Go source (not text, so commented-out examples do not count) and
 // collects the string-literal first argument of known env readers such as
-// getenv/getBool (config), envBool/envCSV (auth), the exported config.Env*
-// readers optional features use for their own settings, and
-// os.Getenv/os.LookupEnv. superapi-verify runs it so an undocumented variable
-// fails CI.
+// getenv/getBool (config), envBool/envCSV/envStrictBool/envPositiveInt (auth),
+// the exported config.Env* readers optional features use for their own
+// settings, and os.Getenv/os.LookupEnv. superapi-verify runs it so an
+// undocumented variable fails CI.
 package envcheck
 
 import (
@@ -28,7 +28,7 @@ import (
 var readers = map[string]bool{
 	"getenv": true, "getBool": true, "getInt": true, "getInt32": true, "getInt64": true,
 	"getDuration": true, "getFloat64": true, "getCSV": true,
-	"envBool": true, "envCSV": true, "envDuration": true,
+	"envBool": true, "envCSV": true, "envDuration": true, "envStrictBool": true, "envPositiveInt": true,
 	"EnvString": true, "EnvBool": true, "EnvInt": true, "EnvDuration": true, "EnvCSV": true,
 	"Getenv": true, "LookupEnv": true,
 }

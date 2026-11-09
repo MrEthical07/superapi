@@ -55,3 +55,18 @@ SELECT tenant_id FROM users WHERE id = $1;
 UPDATE users SET password_hash = $3, updated_at = NOW()
 WHERE id = $1 AND tenant_id = $2
 RETURNING id;
+
+-- name: CompareAndSwapAuthUserPasswordHashInTenant :execrows
+-- Tenant-scoped compare-and-swap password write (goauth.PasswordHashCASUpdater).
+-- Both the tenant and the expected hash are enforced in SQL: a user of another
+-- tenant, or a hash that changed, matches no row and nothing is written.
+UPDATE users SET password_hash = sqlc.arg(new_hash), updated_at = NOW()
+WHERE id = sqlc.arg(id) AND tenant_id = sqlc.arg(tenant_id) AND password_hash = sqlc.arg(expected_hash);
+
+-- name: UpdateAuthUserStatusIfInTenant :execrows
+-- Tenant-scoped compare-and-swap status transition
+-- (goauth.AccountStatusCASUpdater), with the side effects of
+-- UpdateAuthUserStatus. A user of another tenant, or a status that differs,
+-- matches no row.
+UPDATE users SET status = sqlc.arg(next_status), account_version = account_version + 1, updated_at = NOW()
+WHERE id = sqlc.arg(id) AND tenant_id = sqlc.arg(tenant_id) AND status = sqlc.arg(expected_status);

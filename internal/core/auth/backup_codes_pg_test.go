@@ -248,6 +248,29 @@ func TestProviderReplaceBackupCodesIsTransactional(t *testing.T) {
 	}
 }
 
+// goAuth v0.8's DisableTOTP clears the backup codes by calling
+// ReplaceBackupCodes with no codes, so an empty replacement must succeed
+// through the provider and leave the user with none.
+func TestProviderReplaceBackupCodesWithNoneClearsTheSet(t *testing.T) {
+	f := newBackupFixture(t)
+	cipher, err := NewAESGCMCipher(make([]byte, 32))
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	provider := NewStoreUserProvider(NewRelationalUserRepository(f.pg)).WithMFA(f.mfa, cipher).WithTx(f.pg)
+	ctx := context.Background()
+
+	if err := provider.ReplaceBackupCodes(ctx, f.userID, []goauth.BackupCodeRecord{{Hash: hashOf("a")}, {Hash: hashOf("b")}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := provider.ReplaceBackupCodes(ctx, f.userID, nil); err != nil {
+		t.Fatalf("replace with no codes: %v", err)
+	}
+	if got, err := provider.GetBackupCodes(ctx, f.userID); err != nil || len(got) != 0 {
+		t.Fatalf("codes after clearing = %v err=%v, want none", got, err)
+	}
+}
+
 // Without a transaction runner the relational repository fails loudly rather
 // than silently doing a non-atomic replacement.
 func TestProviderWithoutATransactionRunnerFailsLoudly(t *testing.T) {

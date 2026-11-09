@@ -103,8 +103,10 @@ func tenantCtx(tenantID string) context.Context {
 
 // With tenancy on, goAuth writes every new hash through
 // UpdatePasswordHashInTenant with the tenant it resolved, never through the
-// by-id UpdatePasswordHash: change password, password-reset confirm and
-// rehash-on-login.
+// by-id UpdatePasswordHash: change password and password-reset confirm.
+// Rehash-on-login is the exception since goAuth v0.8: the provider implements
+// goauth.PasswordHashCASUpdater, so the upgrade is a tenant-scoped
+// compare-and-swap instead (TestRehashOnLoginIsATenantScopedCompareAndSwap).
 func TestPasswordWritesAreTenantScoped(t *testing.T) {
 	t.Run("change password", func(t *testing.T) {
 		e, log := recordedEngine(t, auth.Features{})
@@ -140,7 +142,7 @@ func TestPasswordWritesAreTenantScoped(t *testing.T) {
 		}
 	})
 
-	t.Run("rehash on login", func(t *testing.T) {
+	t.Run("rehash on login is not an unconditional write", func(t *testing.T) {
 		e, log := recordedEngine(t, auth.Features{})
 		userID := createTestAccount(t, e.Engine, "tenant-c", "ivy@example.com")
 
@@ -163,7 +165,9 @@ func TestPasswordWritesAreTenantScoped(t *testing.T) {
 		if _, _, err := e.Login(ctx, "ivy@example.com", password); err != nil {
 			t.Fatalf("login: %v", err)
 		}
-		expectWrites(t, log, "rehash on login", passwordWrite{inTenant: true, tenant: "tenant-c", userID: userID})
+		// goAuth v0.8 upgrades the hash with CompareAndSwapPasswordHash when the
+		// provider offers it, so neither unconditional write happens.
+		expectWrites(t, log, "rehash on login")
 		stored, err := e.Users.GetByID(context.Background(), userID)
 		if err != nil || stored.PasswordHash == weakHash {
 			t.Fatalf("hash was not upgraded: err=%v unchanged=%v", err, stored.PasswordHash == weakHash)

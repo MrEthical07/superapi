@@ -7,8 +7,8 @@ a validated tenant, goAuth scopes every user lookup, session and
 reset/verification record to it, and tokens only work in the tenant that issued
 them.
 
-Requires goAuth **v0.7.0** (pinned in `go.mod`). goAuth's own contract is
-documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.7.0/docs/multi_tenancy.md).
+Requires goAuth **v0.8.2** (pinned in `go.mod`). goAuth's own contract is
+documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.8.2/docs/multi_tenancy.md).
 
 Where things live: everything tenancy owns is in `internal/tenancy/` or in a
 file whose name contains `tenancy` (migration `000002_tenancy`,
@@ -165,7 +165,7 @@ SuperAPI adds:
   at compile time.
 - **Tenant-scoped password writes.** `tenancy.Provider` implements
   `goauth.TenantAwarePasswordUpdater` (goAuth v0.7.0). With tenancy on, change
-  password, password-reset confirm and rehash-on-login call
+  password and password-reset confirm call
   `UpdatePasswordHashInTenant` with the tenant goAuth resolved, and the write is
   `UPDATE users ... WHERE id = $1 AND tenant_id = $2`
   (`UpdateAuthUserPasswordHashInTenant` in `db/queries/tenancy.sql`) instead of
@@ -176,6 +176,22 @@ SuperAPI adds:
   provider is used and `UpdatePasswordHash` is unchanged.
   `TestPasswordWritesAreTenantScoped` and `TestCrossTenantPasswordWriteIsRejected`
   prove it.
+- **Tenant-scoped compare-and-swap writes.** `tenancy.Provider` overrides the
+  core provider's `goauth.PasswordHashCASUpdater` and
+  `goauth.AccountStatusCASUpdater` (goAuth v0.8) with tenant-scoped versions.
+  Rehash-on-login now uses `CompareAndSwapPasswordHash` (instead of
+  `UpdatePasswordHashInTenant`), and email-verification activation and
+  automatic lockout use `UpdateAccountStatusIf` (Pending to Active, Active to
+  Locked). The queries are `CompareAndSwapAuthUserPasswordHashInTenant`
+  (`WHERE id = $ AND tenant_id = $ AND password_hash = $`) and
+  `UpdateAuthUserStatusIfInTenant` (`WHERE id = $ AND tenant_id = $ AND status = $`,
+  with the account-version bump of a plain status update) in
+  `db/queries/tenancy.sql`. A user of another tenant, an empty tenant, a changed
+  hash or a changed status matches no row and the call returns
+  `(false, nil)`. `TestUserStoreCompareAndSwapIsTenantScoped` (Postgres),
+  `TestProviderCompareAndSwapAcrossTenants`,
+  `TestRehashOnLoginIsATenantScopedCompareAndSwap` and
+  `TestEmailVerificationUsesTenantScopedStatusCompareAndSwap` prove it.
 
 ## 7. Identifier uniqueness (a schema decision)
 

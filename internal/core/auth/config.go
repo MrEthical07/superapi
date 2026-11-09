@@ -31,6 +31,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -172,6 +173,17 @@ func ProjectGoAuthConfig(mode Mode, features Features, mutators ...ConfigMutator
 	}
 
 	// ------------------------------------------------------------
+	// Opt-in hardening (goAuth v0.8)
+	// ------------------------------------------------------------
+	//
+	// A per-client-IP login failure budget (AUTH_LOGIN_IP_LIMITER_*) and a user
+	// re-read on every refresh (AUTH_REFRESH_RECHECK_USER). Both are off by
+	// default; see docs/auth-goauth.md for what each costs.
+	if err := applyOptInSecurity(&cfg); err != nil {
+		return goauth.Config{}, err
+	}
+
+	// ------------------------------------------------------------
 	// Ed25519 Key Rotation (goAuth v0.4.0)
 	// ------------------------------------------------------------
 	//
@@ -261,21 +273,35 @@ func ProjectGoAuthConfig(mode Mode, features Features, mutators ...ConfigMutator
 	// Lint warnings help identify risky or unusual configurations.
 	// High-severity findings are treated as startup failures.
 	warnings := cfg.Lint()
-
-	for _, w := range warnings {
-		slog.Warn(
-			"goauth config lint",
-			"code", w.Code,
-			"severity", w.Severity.String(),
-			"msg", w.Message,
-		)
-	}
+	logLintResults(slog.Default(), warnings)
 
 	// Fail startup on high-severity security/configuration issues.
 	if err := warnings.AsError(goauth.LintHigh); err != nil {
 		return goauth.Config{}, err
 	}
 	return cfg, nil
+}
+
+// logLintResults writes each goAuth lint finding at the level its severity
+// asks for: advisory notes (LintInfo) at info, risky settings (LintWarn) at
+// warn, and dangerous or contradictory ones (LintHigh) at error. A default
+// configuration raises only advisory notes, so a clean start logs no warnings.
+func logLintResults(logger *slog.Logger, results goauth.LintResult) {
+	ctx := context.Background()
+	for _, w := range results {
+		level := slog.LevelWarn
+		switch w.Severity {
+		case goauth.LintInfo:
+			level = slog.LevelInfo
+		case goauth.LintHigh:
+			level = slog.LevelError
+		}
+		logger.Log(ctx, level, "goauth config lint",
+			"code", w.Code,
+			"severity", w.Severity.String(),
+			"detail", w.Message,
+		)
+	}
 }
 
 // Common project customizations:

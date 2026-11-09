@@ -2,10 +2,10 @@ module github.com/MrEthical07/superapi
 
 go 1.27.0
 
-toolchain go1.27.1
+toolchain go1.27.3
 
 require (
-	github.com/MrEthical07/goAuth v0.7.0
+	github.com/MrEthical07/goAuth v0.8.2
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -54,7 +54,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect

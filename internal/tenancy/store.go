@@ -45,6 +45,15 @@ type UserStore interface {
 	// tenant. A user that exists only in another tenant, or an empty tenant,
 	// writes nothing and yields auth.ErrAuthUserNotFound.
 	UpdatePasswordHashInTenant(ctx context.Context, tenantID, userID, newHash string) error
+	// CompareAndSwapPasswordHashInTenant stores newHash only while the stored
+	// hash is expectedOldHash and the user belongs to the tenant. A changed
+	// hash, a user of another tenant, an empty tenant, an unknown user and a
+	// malformed id all write nothing and yield (false, nil).
+	CompareAndSwapPasswordHashInTenant(ctx context.Context, tenantID, userID, expectedOldHash, newHash string) (applied bool, err error)
+	// UpdateStatusIfInTenant moves the account from expected to next only while
+	// it is in expected and belongs to the tenant, advancing the account
+	// version like a plain status update. Anything else is (false, nil).
+	UpdateStatusIfInTenant(ctx context.Context, tenantID, userID, expected, next string) (applied bool, err error)
 }
 
 // pgUniqueViolation is the Postgres SQLSTATE for unique_violation.
@@ -164,6 +173,42 @@ func (s *sqlcUserStore) UpdatePasswordHashInTenant(ctx context.Context, tenantID
 		return notFoundOr(err, "update password hash in tenant")
 	}
 	return nil
+}
+
+func (s *sqlcUserStore) CompareAndSwapPasswordHashInTenant(ctx context.Context, tenantID, userID, expectedOldHash, newHash string) (bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	id, err := parseUserID(userID)
+	if tenantID == "" || err != nil {
+		return false, nil
+	}
+	n, err := s.pg.Queries(ctx).CompareAndSwapAuthUserPasswordHashInTenant(ctx, sqlcgen.CompareAndSwapAuthUserPasswordHashInTenantParams{
+		ID:           id,
+		TenantID:     tenantID,
+		ExpectedHash: expectedOldHash,
+		NewHash:      newHash,
+	})
+	if err != nil {
+		return false, fmt.Errorf("compare and swap password hash in tenant: %w", err)
+	}
+	return n == 1, nil
+}
+
+func (s *sqlcUserStore) UpdateStatusIfInTenant(ctx context.Context, tenantID, userID, expected, next string) (bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	id, err := parseUserID(userID)
+	if tenantID == "" || err != nil {
+		return false, nil
+	}
+	n, err := s.pg.Queries(ctx).UpdateAuthUserStatusIfInTenant(ctx, sqlcgen.UpdateAuthUserStatusIfInTenantParams{
+		ID:             id,
+		TenantID:       tenantID,
+		ExpectedStatus: strings.TrimSpace(expected),
+		NextStatus:     strings.TrimSpace(next),
+	})
+	if err != nil {
+		return false, fmt.Errorf("conditional account status update in tenant: %w", err)
+	}
+	return n == 1, nil
 }
 
 // --- mapping helpers (sqlc row -> domain) ---

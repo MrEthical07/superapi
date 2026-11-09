@@ -39,10 +39,13 @@ WEBAUTHN_RP_DISPLAY_NAME="Example"
 WEBAUTHN_RP_ORIGINS=https://app.example.com
 ```
 
+WebAuthn needs **Redis 6.2 or later**: goAuth reads the ceremony session with
+`GETDEL`. The template's `docker-compose.yml` ships Redis 8.
+
 `WEBAUTHN_RP_ID` must be a bare domain: no scheme, port, path or IP address
 (the single-label name `localhost` is the one exception). Config lint rejects
 anything else at startup with the variable's name in the error, mirroring what
-goAuth v0.7.0 enforces at `Build()`. **For local development use
+goAuth v0.8.2 enforces at `Build()`. **For local development use
 `WEBAUTHN_RP_ID=localhost` and `WEBAUTHN_RP_ORIGINS=http://localhost:3000`**,
 never `127.0.0.1` or a container IP.
 
