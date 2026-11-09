@@ -226,6 +226,12 @@ func TestMapGoAuthV08Sentinels(t *testing.T) {
 			credStatus: http.StatusForbidden, credMsg: msgRejected, credCode: apperr.CodeForbidden,
 		},
 		{
+			// AUTH_REFRESH_RECHECK_USER: a store outage at refresh is a 503, not a 401.
+			name: "system unavailable (refresh recheck during a store outage)", err: goauth.ErrSystemUnavailable,
+			flowStatus: http.StatusServiceUnavailable, flowMsg: "authentication unavailable", flowCode: apperr.CodeDependencyFailure,
+			credStatus: http.StatusServiceUnavailable, credMsg: "authentication unavailable", credCode: apperr.CodeDependencyFailure,
+		},
+		{
 			name: "totp not configured (regenerate backup codes)", err: goauth.ErrTOTPNotConfigured,
 			flowStatus: http.StatusConflict, flowMsg: msgNoTOTP, flowCode: apperr.CodeConflict,
 			credStatus: http.StatusForbidden, credMsg: msgRejected, credCode: apperr.CodeForbidden,

@@ -173,6 +173,17 @@ func ProjectGoAuthConfig(mode Mode, features Features, mutators ...ConfigMutator
 	}
 
 	// ------------------------------------------------------------
+	// Opt-in hardening (goAuth v0.8)
+	// ------------------------------------------------------------
+	//
+	// A per-client-IP login failure budget (AUTH_LOGIN_IP_LIMITER_*) and a user
+	// re-read on every refresh (AUTH_REFRESH_RECHECK_USER). Both are off by
+	// default; see docs/auth-goauth.md for what each costs.
+	if err := applyOptInSecurity(&cfg); err != nil {
+		return goauth.Config{}, err
+	}
+
+	// ------------------------------------------------------------
 	// Ed25519 Key Rotation (goAuth v0.4.0)
 	// ------------------------------------------------------------
 	//
