@@ -2,6 +2,183 @@
 
 All notable changes to this template are documented in this file.
 
+## v0.12.0 (2026-11-09)
+
+A minor release. It moves to goAuth v0.8.2, adopts the compare-and-swap provider
+capabilities that close the remaining race windows in rehash-on-login,
+email-verification activation and automatic lockout, adds two opt-in security
+flags (a per-client-IP login budget and a user recheck on refresh), corrects one
+error mapping, and logs goAuth's lint findings at the level of their severity.
+
+**Behavior:** the default configuration keeps its HTTP surface and its schema.
+What a clone will see comes from goAuth v0.8 and is listed under "Behavior
+changes for clones". **No migration is needed:** no schema changed and the new
+queries use existing columns (`password_hash`, `status`, `account_version`,
+`updated_at`, and `tenant_id` for the tenancy variants).
+
+### Dependencies
+
+- goAuth v0.7.0 to v0.8.2. goAuth v0.8.0 is retracted (MFA-login TOTP guessing
+  was not limited per account), so the upgrade goes straight to v0.8.2. goAuth
+  reports no incompatible API change since v0.7.0 and the build, vet and the
+  existing tests needed no change. goAuth's own dependencies are not pinned.
+- Go toolchain 1.27.1 to 1.27.3 (`go.mod` `toolchain` line, the CI `setup-go`
+  pins, the Dockerfile builder image and the bug-report example). `govulncheck`
+  reported ten standard-library findings on 1.27.1 (fixed in 1.27.2 and 1.27.3).
+- `golang.org/x/net` v0.59.0 to v0.60.0 (indirect, through the OpenTelemetry gRPC
+  exporter): four findings that the code calls (GO-2026-6603, -6611, -6612,
+  -6617). `govulncheck` now reports no affected code.
+
+### Added
+
+- **Compare-and-swap provider capabilities** (goAuth audit findings R2-07, R2-13,
+  R2-16). `StoreUserProvider` implements `goauth.PasswordHashCASUpdater` and
+  `goauth.AccountStatusCASUpdater`, detected by goAuth at `Build`. Two new sqlc
+  queries in `db/queries/auth_users.sql`, both `:execrows` (one affected row
+  means applied):
+  - `CompareAndSwapAuthUserPasswordHash`:
+    `UPDATE users SET password_hash = $new, updated_at = NOW() WHERE id = $id AND password_hash = $expected`;
+  - `UpdateAuthUserStatusIf`:
+    `UPDATE users SET status = $next, account_version = account_version + 1, updated_at = NOW() WHERE id = $id AND status = $expected`,
+    with exactly the side effects of `UpdateAuthUserStatus`.
+
+  A changed hash or status, an unknown user and a malformed id are all
+  `(false, nil)`; other errors pass through; the scope argument goAuth passes is
+  ignored by the core provider. Effects: a password change that lands between a
+  login's read and its rehash write is no longer overwritten; an email
+  verification in flight cannot re-activate an account an administrator
+  disabled; a disable cannot be overwritten with `locked` by automatic lockout.
+  The repository interface gained `CompareAndSwapPasswordHash` and
+  `UpdateStatusIf` (and the `authtest` repository implements them).
+- **Tenancy variants** (`internal/tenancy`, `db/queries/tenancy.sql`): `Provider`
+  overrides both capabilities with tenant-scoped versions, backed by
+  `CompareAndSwapAuthUserPasswordHashInTenant` and
+  `UpdateAuthUserStatusIfInTenant` (`... AND tenant_id = $n`). A user of another
+  tenant, an empty tenant, a changed hash or a changed status writes nothing and
+  is `(false, nil)`. Both interfaces are asserted at compile time.
+- **`AUTH_LOGIN_IP_LIMITER_ENABLED`, `AUTH_LOGIN_IP_LIMITER_MAX_ATTEMPTS`,
+  `AUTH_LOGIN_IP_LIMITER_COOLDOWN`** (off by default; goAuth's defaults are 20
+  attempts per 15m): a failure budget per client IP, across accounts
+  (`Security.LoginIPLimiter`). The address is the one the trusted-proxy logic
+  resolved, so it is only as trustworthy as `HTTP_TRUSTED_PROXIES`, and users
+  behind one NAT share a budget.
+- **`AUTH_REFRESH_RECHECK_USER`** (off by default): every refresh re-reads the
+  user from Postgres (`Security.RecheckUserOnRefresh`). A disabled, locked or
+  deleted account, or a changed `account_version`, ends the session at its next
+  refresh; a Postgres outage makes refresh fail with 503 instead of succeeding;
+  one extra read per refresh. The template does not store goAuth's role or
+  permission versions, so editing `role` or `permissions` in SQL is not noticed;
+  bump `account_version` in the same statement or call
+  `Engine.InvalidateUserSessions`.
+- Invalid values for these variables fail startup with a message naming the
+  variable. `internal/tools/envcheck` knows the new strict readers, so
+  `superapi-verify` still requires every variable to be documented.
+
+### Changed
+
+- **Error mapping** (`internal/modules/auth/errors.go`):
+  `ErrBackupCodeRegenerationRequiresTOTP` answers 409 `backup codes must be
+  regenerated with a current TOTP code` (it was 409 `totp is not enabled for this
+  account`). The other goAuth v0.8 sentinels a template endpoint can return were
+  already right: `ErrTOTPRateLimited` and `ErrSessionLimitExceeded` are 429,
+  `ErrPasswordNotSet` is 403, a store outage at refresh is 503. The
+  session-profile, external sign-in and email-change sentinels cannot be returned
+  by any template route (see `docs/auth-goauth.md` for the ones a clone must map
+  when it wires those features).
+- **Lint logging** (`internal/core/auth/config.go`): goAuth lint findings are
+  logged by severity (`LintInfo` at info, `LintWarn` at warn, `LintHigh` at
+  error; startup still fails on high). goAuth v0.8.1 added two INFO notes that
+  fire on every default config (`login_ip_limiter_disabled`,
+  `refresh_user_recheck_off`), which would otherwise have been warnings. A default
+  config still logs one warning, `audit_disabled`, because the template wires no
+  audit sink (audit events must never reach users or admins); a test pins it as
+  the only known default warning. The log attribute that carried the finding text
+  was named `msg`, which duplicated slog's own key in JSON output; it is now
+  `detail`.
+- Tenancy: with `Provider` offering the swap, goAuth upgrades the hash on login
+  through `CompareAndSwapPasswordHash` instead of `UpdatePasswordHashInTenant`
+  (see below).
+
+### Behavior changes for clones
+
+Old (goAuth v0.7.0) to new (v0.8.2), with the default configuration unless
+stated. None of these needs a code change.
+
+**Single-tenant (tenancy off, the default):**
+
+- A correct password sent after `MaxLoginAttempts` (5) wrong ones: accepted ->
+  refused with 429 `authentication temporarily limited`, before the password is
+  evaluated, until the window passes.
+- MFA login: wrong TOTP codes were counted only inside the disposable challenge
+  -> they also count against the per-user TOTP budget (5 per minute) across
+  challenges; the fifth wrong code destroys the challenge and answers 429.
+- Login read the account once -> **one extra user read per login (by primary
+  key); authenticated requests and refresh are unchanged.** A login that raced a
+  password change, a disable or a logout-all is refused or retried instead of
+  storing a session.
+- Rehash-on-login ran before the login was known to succeed and could overwrite a
+  newer password -> it runs after the session is issued, through
+  `CompareAndSwapPasswordHash`, and skips a hash that changed.
+- Backup codes: `GenerateBackupCodes` worked for any user with no codes on file
+  -> it works without a TOTP code only in the 10 minutes after
+  `ConfirmTOTPSetup`, once. `POST /api/v1/auth/mfa/totp/confirm` does exactly that
+  and is unchanged; afterwards a new set comes only from
+  `POST /api/v1/auth/mfa/backup-codes/regenerate` with a current TOTP code. The
+  "requires TOTP" refusal is the new 409 above.
+- `DisableTOTP` left the user's backup codes on file -> goAuth also clears them
+  (`ReplaceBackupCodes` with no codes). The template's provider already deleted
+  them with the secret, so the visible result is unchanged; a test now covers the
+  empty replacement against Postgres.
+- A password-reset or email-verification request left earlier codes valid -> only
+  the newest request's code redeems.
+- `ChangePassword` left outstanding reset codes redeemable until `ResetTTL`
+  (only with `AUTH_PASSWORD_RESET_ENABLED`) -> it invalidates them.
+- Email verification could re-enable a blocked account -> it activates only a
+  pending one, through `UpdateAccountStatusIf(Pending, Active)`.
+- A malformed challenge ID, code or handle was looked up, rate limited and
+  audited as given -> refused with the existing invalid error and no Redis
+  command. Braced, `urn:uuid:` and unhyphenated UUID spellings (UUID strategies
+  only) are now refused.
+- A wrong password against an older-cost hash costs one extra verification at the
+  configured cost (only visible after you raise the Argon2 parameters).
+- Automatic lockout (only if you enable it): the lock is written only from
+  `Active`, through `UpdateAccountStatusIf(Active, Locked)`; the attempt that
+  reaches the threshold answers 401 `invalid credentials` instead of 403.
+- Startup logs: advisory lint notes are logged at info instead of warn.
+
+**With tenancy on (`TENANCY_ENABLED=true`), in addition to the above:**
+
+- Rehash-on-login wrote through `UpdatePasswordHashInTenant`
+  (`WHERE id = $1 AND tenant_id = $2`) -> it is a compare-and-swap,
+  `CompareAndSwapAuthUserPasswordHashInTenant`
+  (`WHERE id AND tenant_id AND password_hash = $expected`).
+  `TestPasswordWritesAreTenantScoped` no longer expects an unconditional write
+  for that flow. Change password and password-reset confirm still use
+  `UpdatePasswordHashInTenant`.
+- Email-verification activation and automatic lockout wrote the status by user id
+  -> `UpdateAuthUserStatusIfInTenant` (`WHERE id AND tenant_id AND status =
+  $expected`); a user of another tenant is never touched.
+- With `AUTH_LOGIN_IP_LIMITER_ENABLED`, the budget is per (tenant, address).
+
+### Documentation
+
+- Every goAuth pin and pinned docs link (README, AGENTS.md,
+  `docs/auth-goauth.md`, `docs/architecture.md`, `docs/overview.md`,
+  `docs/workflows.md`, `docs/enabling-webauthn.md`, `docs/multi-tenancy.md`) now
+  points at v0.8.2. README release metadata is v0.12.0.
+- `docs/auth-goauth.md`: new section 7, "goAuth v0.8.x" (what SuperAPI adopts,
+  the two flags and their costs, the endpoints that attach the client IP, the
+  default-config behavior changes, the backup-code rule, the extra user read per
+  login) and the features goAuth offers that the template deliberately does not
+  wire (session profiles, external sign-in, change email, the test clock), each
+  with how a clone would add it.
+- `docs/environment-variables.md`, `.env.example`: the four new variables.
+- `docs/auth-flows.md`: the new 409 and 429 cases and the backup-code rule.
+- `docs/enabling-webauthn.md`: WebAuthn needs Redis 6.2 or later (the template
+  ships Redis 8).
+- `docs/multi-tenancy.md`, `internal/tenancy/AGENTS.md`: the tenant-scoped
+  compare-and-swap writes.
+
 ## v0.11.2 (2026-10-05)
 
 A patch release. It moves to goAuth v0.7.0 and uses one of its new optional

@@ -7,8 +7,8 @@ a validated tenant, goAuth scopes every user lookup, session and
 reset/verification record to it, and tokens only work in the tenant that issued
 them.
 
-Requires goAuth **v0.7.0** (pinned in `go.mod`). goAuth's own contract is
-documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.7.0/docs/multi_tenancy.md).
+Requires goAuth **v0.8.2** (pinned in `go.mod`). goAuth's own contract is
+documented in its [multi_tenancy.md](https://github.com/MrEthical07/goAuth/blob/v0.8.2/docs/multi_tenancy.md).
 
 Where things live: everything tenancy owns is in `internal/tenancy/` or in a
 file whose name contains `tenancy` (migration `000002_tenancy`,
