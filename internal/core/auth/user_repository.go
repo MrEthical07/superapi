@@ -49,6 +49,16 @@ type UserRepository interface {
 	UpdatePasswordHash(ctx context.Context, userID, newHash string) error
 	Create(ctx context.Context, input CreateStoredUserInput) (StoredUser, error)
 	UpdateStatus(ctx context.Context, userID string, status string) (StoredUser, error)
+	// CompareAndSwapPasswordHash stores newHash only while the stored hash is
+	// exactly expectedOldHash, in one statement. applied reports whether a row
+	// changed; a changed hash, an unknown user and a malformed id are all
+	// (false, nil).
+	CompareAndSwapPasswordHash(ctx context.Context, userID, expectedOldHash, newHash string) (applied bool, err error)
+	// UpdateStatusIf moves the account from status expected to next only while
+	// it is still in expected, with the same side effects as UpdateStatus
+	// (account version advances). A differing status, an unknown user and a
+	// malformed id are all (false, nil).
+	UpdateStatusIf(ctx context.Context, userID, expected, next string) (applied bool, err error)
 }
 
 type sqlcUserRepository struct {
@@ -147,6 +157,38 @@ func (r *sqlcUserRepository) UpdateStatus(ctx context.Context, userID string, st
 		return StoredUser{}, fmt.Errorf("update account status: %w", err)
 	}
 	return mapUserRow(row), nil
+}
+
+func (r *sqlcUserRepository) CompareAndSwapPasswordHash(ctx context.Context, userID, expectedOldHash, newHash string) (bool, error) {
+	id, err := parseUserID(userID)
+	if err != nil {
+		return false, nil
+	}
+	n, err := r.pg.Queries(ctx).CompareAndSwapAuthUserPasswordHash(ctx, sqlcgen.CompareAndSwapAuthUserPasswordHashParams{
+		ID:           id,
+		ExpectedHash: expectedOldHash,
+		NewHash:      newHash,
+	})
+	if err != nil {
+		return false, fmt.Errorf("compare and swap password hash: %w", err)
+	}
+	return n == 1, nil
+}
+
+func (r *sqlcUserRepository) UpdateStatusIf(ctx context.Context, userID, expected, next string) (bool, error) {
+	id, err := parseUserID(userID)
+	if err != nil {
+		return false, nil
+	}
+	n, err := r.pg.Queries(ctx).UpdateAuthUserStatusIf(ctx, sqlcgen.UpdateAuthUserStatusIfParams{
+		ID:             id,
+		ExpectedStatus: strings.TrimSpace(expected),
+		NextStatus:     strings.TrimSpace(next),
+	})
+	if err != nil {
+		return false, fmt.Errorf("conditional account status update: %w", err)
+	}
+	return n == 1, nil
 }
 
 // --- mapping helpers ---

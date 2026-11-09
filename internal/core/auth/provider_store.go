@@ -34,7 +34,14 @@ type TxRunner interface {
 	WithTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
-var _ goauth.UserProvider = (*StoreUserProvider)(nil)
+var (
+	_ goauth.UserProvider = (*StoreUserProvider)(nil)
+	// goAuth detects these capabilities by type assertion at Build. They close
+	// the remaining race windows of rehash-on-login, email-verification
+	// activation and automatic lockout.
+	_ goauth.PasswordHashCASUpdater  = (*StoreUserProvider)(nil)
+	_ goauth.AccountStatusCASUpdater = (*StoreUserProvider)(nil)
+)
 
 const defaultLookupTimeout = 3 * time.Second
 
@@ -171,6 +178,43 @@ func (p *StoreUserProvider) UpdateAccountStatus(ctx context.Context, userID stri
 		return goauth.UserRecord{}, fmt.Errorf("update account status: %w", err)
 	}
 	return RecordFromStored(row), nil
+}
+
+// CompareAndSwapPasswordHash stores newHash only if the user's current hash is
+// still expectedOldHash (goauth.PasswordHashCASUpdater). A hash that changed,
+// or a user that does not exist, is (false, nil): the write is skipped, not
+// failed. This provider keys users by id alone, so the scope argument goAuth
+// passes is ignored.
+func (p *StoreUserProvider) CompareAndSwapPasswordHash(ctx context.Context, _, userID, expectedOldHash, newHash string) (bool, error) {
+	if p == nil || p.repo == nil {
+		return false, goauth.ErrUserNotFound
+	}
+	applied, err := p.repo.CompareAndSwapPasswordHash(ctx, userID, expectedOldHash, newHash)
+	if err != nil {
+		if errors.Is(err, ErrAuthUserNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("compare and swap password hash: %w", err)
+	}
+	return applied, nil
+}
+
+// UpdateAccountStatusIf moves the account from expected to next only if it is
+// still in expected (goauth.AccountStatusCASUpdater), advancing the account
+// version like UpdateAccountStatus. A status that differs, or a user that does
+// not exist, is (false, nil). The scope argument goAuth passes is ignored.
+func (p *StoreUserProvider) UpdateAccountStatusIf(ctx context.Context, _, userID string, expected, next goauth.AccountStatus) (bool, error) {
+	if p == nil || p.repo == nil {
+		return false, goauth.ErrUserNotFound
+	}
+	applied, err := p.repo.UpdateStatusIf(ctx, userID, AccountStatusText(expected), AccountStatusText(next))
+	if err != nil {
+		if errors.Is(err, ErrAuthUserNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("conditional account status update: %w", err)
+	}
+	return applied, nil
 }
 
 // --- TOTP and backup codes ---

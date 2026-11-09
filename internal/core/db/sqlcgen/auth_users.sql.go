@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const compareAndSwapAuthUserPasswordHash = `-- name: CompareAndSwapAuthUserPasswordHash :execrows
+UPDATE users SET password_hash = $1, updated_at = NOW()
+WHERE id = $2 AND password_hash = $3
+`
+
+type CompareAndSwapAuthUserPasswordHashParams struct {
+	NewHash      string      `json:"new_hash"`
+	ID           pgtype.UUID `json:"id"`
+	ExpectedHash string      `json:"expected_hash"`
+}
+
+// Compare-and-swap for goAuth's rehash-on-login (goauth.PasswordHashCASUpdater):
+// the hash is replaced only while it is still the one the login verified, so a
+// password change that landed in between is never overwritten. Same side
+// effects as UpdateAuthUserPasswordHash (hash and updated_at, nothing else).
+// The affected-row count is the answer: 1 applied, 0 hash changed or no user.
+func (q *Queries) CompareAndSwapAuthUserPasswordHash(ctx context.Context, arg CompareAndSwapAuthUserPasswordHashParams) (int64, error) {
+	result, err := q.db.Exec(ctx, compareAndSwapAuthUserPasswordHash, arg.NewHash, arg.ID, arg.ExpectedHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createAuthUser = `-- name: CreateAuthUser :one
 INSERT INTO users (email, password_hash, role, permissions, status)
 VALUES ($1, $2, $3, $4, $5)
@@ -147,4 +171,27 @@ func (q *Queries) UpdateAuthUserStatus(ctx context.Context, arg UpdateAuthUserSt
 		&i.TenantID,
 	)
 	return i, err
+}
+
+const updateAuthUserStatusIf = `-- name: UpdateAuthUserStatusIf :execrows
+UPDATE users SET status = $1, account_version = account_version + 1, updated_at = NOW()
+WHERE id = $2 AND status = $3
+`
+
+type UpdateAuthUserStatusIfParams struct {
+	NextStatus     string      `json:"next_status"`
+	ID             pgtype.UUID `json:"id"`
+	ExpectedStatus string      `json:"expected_status"`
+}
+
+// Compare-and-swap status transition (goauth.AccountStatusCASUpdater): applies
+// only from the expected status. Same side effects as UpdateAuthUserStatus
+// (status, account_version + 1, updated_at). 1 row applied, 0 status differed
+// or no user.
+func (q *Queries) UpdateAuthUserStatusIf(ctx context.Context, arg UpdateAuthUserStatusIfParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAuthUserStatusIf, arg.NextStatus, arg.ID, arg.ExpectedStatus)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

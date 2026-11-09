@@ -104,6 +104,31 @@ func (r *UserRepository) UpdateStatus(_ context.Context, userID string, status s
 	return u, nil
 }
 
+func (r *UserRepository) CompareAndSwapPasswordHash(_ context.Context, userID, expectedOldHash, newHash string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[userID]
+	if !ok || u.PasswordHash != expectedOldHash {
+		return false, nil
+	}
+	u.PasswordHash = newHash
+	r.users[userID] = u
+	return true, nil
+}
+
+func (r *UserRepository) UpdateStatusIf(_ context.Context, userID, expected, next string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	u, ok := r.users[userID]
+	if !ok || u.Status != expected {
+		return false, nil
+	}
+	u.Status = next
+	u.AccountVersion++
+	r.users[userID] = u
+	return true, nil
+}
+
 // MFARepository is an in-memory auth.MFARepository sharing user state with a
 // UserRepository (so totp_enabled and account_version stay consistent, as the
 // SQL statements keep them).
