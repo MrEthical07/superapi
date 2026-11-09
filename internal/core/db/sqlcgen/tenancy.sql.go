@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const compareAndSwapAuthUserPasswordHashInTenant = `-- name: CompareAndSwapAuthUserPasswordHashInTenant :execrows
+UPDATE users SET password_hash = $1, updated_at = NOW()
+WHERE id = $2 AND tenant_id = $3 AND password_hash = $4
+`
+
+type CompareAndSwapAuthUserPasswordHashInTenantParams struct {
+	NewHash      string      `json:"new_hash"`
+	ID           pgtype.UUID `json:"id"`
+	TenantID     string      `json:"tenant_id"`
+	ExpectedHash string      `json:"expected_hash"`
+}
+
+// Tenant-scoped compare-and-swap password write (goauth.PasswordHashCASUpdater).
+// Both the tenant and the expected hash are enforced in SQL: a user of another
+// tenant, or a hash that changed, matches no row and nothing is written.
+func (q *Queries) CompareAndSwapAuthUserPasswordHashInTenant(ctx context.Context, arg CompareAndSwapAuthUserPasswordHashInTenantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, compareAndSwapAuthUserPasswordHashInTenant,
+		arg.NewHash,
+		arg.ID,
+		arg.TenantID,
+		arg.ExpectedHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createAuthUserInTenant = `-- name: CreateAuthUserInTenant :one
 INSERT INTO users (email, password_hash, role, permissions, status, tenant_id)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -260,4 +288,33 @@ func (q *Queries) UpdateAuthUserPasswordHashInTenant(ctx context.Context, arg Up
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const updateAuthUserStatusIfInTenant = `-- name: UpdateAuthUserStatusIfInTenant :execrows
+UPDATE users SET status = $1, account_version = account_version + 1, updated_at = NOW()
+WHERE id = $2 AND tenant_id = $3 AND status = $4
+`
+
+type UpdateAuthUserStatusIfInTenantParams struct {
+	NextStatus     string      `json:"next_status"`
+	ID             pgtype.UUID `json:"id"`
+	TenantID       string      `json:"tenant_id"`
+	ExpectedStatus string      `json:"expected_status"`
+}
+
+// Tenant-scoped compare-and-swap status transition
+// (goauth.AccountStatusCASUpdater), with the side effects of
+// UpdateAuthUserStatus. A user of another tenant, or a status that differs,
+// matches no row.
+func (q *Queries) UpdateAuthUserStatusIfInTenant(ctx context.Context, arg UpdateAuthUserStatusIfInTenantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAuthUserStatusIfInTenant,
+		arg.NextStatus,
+		arg.ID,
+		arg.TenantID,
+		arg.ExpectedStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

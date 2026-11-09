@@ -21,9 +21,12 @@ import (
 //     returned goauth.UserRecord carries the stored tenant id and new users are
 //     created in the request tenant;
 //   - the tenant-scoped lookups goAuth uses in multi-tenant mode;
-//   - goauth.TenantAwarePasswordUpdater, so ChangePassword, password-reset
-//     confirm and rehash-on-login write the hash for the tenant goAuth resolved
-//     instead of by user id alone.
+//   - goauth.TenantAwarePasswordUpdater, so ChangePassword and password-reset
+//     confirm write the hash for the tenant goAuth resolved instead of by user
+//     id alone;
+//   - goauth.PasswordHashCASUpdater and goauth.AccountStatusCASUpdater, whose
+//     compare-and-swap writes (rehash-on-login, email-verification activation,
+//     automatic lockout) are scoped to that tenant too.
 //
 // Every other call keeps the core provider's behavior: since goAuth v0.6.2 the
 // engine resolves the user in the request tenant before any id-keyed provider
@@ -43,6 +46,11 @@ var (
 	// goAuth detects this one by type assertion too, and only consults it in
 	// multi-tenant mode.
 	_ goauth.TenantAwarePasswordUpdater = (*Provider)(nil)
+	// The core provider's compare-and-swap capabilities are id-keyed, so the
+	// wrapper overrides both with tenant-scoped ones (and keeps asserting
+	// them: dropping either would silently disable the race guard).
+	_ goauth.PasswordHashCASUpdater  = (*Provider)(nil)
+	_ goauth.AccountStatusCASUpdater = (*Provider)(nil)
 )
 
 const defaultLookupTimeout = 3 * time.Second
@@ -139,6 +147,26 @@ func (p *Provider) UpdatePasswordHashInTenant(ctx context.Context, tenantID, use
 		return mapNotFound(err, "update password hash in tenant")
 	}
 	return nil
+}
+
+// CompareAndSwapPasswordHash stores newHash for a user of tenantID only while
+// the stored hash is still expectedOldHash (goauth.PasswordHashCASUpdater). A
+// user of another tenant, an empty tenant or a changed hash writes nothing and
+// is (false, nil).
+func (p *Provider) CompareAndSwapPasswordHash(ctx context.Context, tenantID, userID, expectedOldHash, newHash string) (bool, error) {
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+	return p.store.CompareAndSwapPasswordHashInTenant(ctx, tenantID, userID, expectedOldHash, newHash)
+}
+
+// UpdateAccountStatusIf moves a user of tenantID from expected to next only
+// while it is still in expected (goauth.AccountStatusCASUpdater). A user of
+// another tenant, an empty tenant or a differing status writes nothing and is
+// (false, nil).
+func (p *Provider) UpdateAccountStatusIf(ctx context.Context, tenantID, userID string, expected, next goauth.AccountStatus) (bool, error) {
+	ctx, cancel := boundedContext(ctx)
+	defer cancel()
+	return p.store.UpdateStatusIfInTenant(ctx, tenantID, userID, auth.AccountStatusText(expected), auth.AccountStatusText(next))
 }
 
 // CreateUser inserts a new user into the tenant goAuth passes (the request

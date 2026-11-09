@@ -113,6 +113,20 @@ func (s *Store) UpdatePasswordHashInTenant(ctx context.Context, tenantID, userID
 	return s.users.UpdatePasswordHash(ctx, userID, newHash)
 }
 
+func (s *Store) CompareAndSwapPasswordHashInTenant(ctx context.Context, tenantID, userID, expectedOldHash, newHash string) (bool, error) {
+	if _, err := s.GetByIDInTenant(ctx, tenantID, userID); err != nil {
+		return false, nil
+	}
+	return s.users.CompareAndSwapPasswordHash(ctx, userID, expectedOldHash, newHash)
+}
+
+func (s *Store) UpdateStatusIfInTenant(ctx context.Context, tenantID, userID, expected, next string) (bool, error) {
+	if _, err := s.GetByIDInTenant(ctx, tenantID, userID); err != nil {
+		return false, nil
+	}
+	return s.users.UpdateStatusIf(ctx, userID, expected, next)
+}
+
 // Engine bundles what a multi-tenant test needs.
 type Engine struct {
 	*goauth.Engine
