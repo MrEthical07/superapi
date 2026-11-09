@@ -67,9 +67,12 @@ func mapFlowError(err error) error {
 		return apperr.WithCause(totpAlreadyEnabledErr(), err)
 	case errors.Is(err, goauth.ErrPasswordVerifyRateLimited):
 		return apperr.WithCause(apperr.New(apperr.CodeTooManyRequests, http.StatusTooManyRequests, "authentication temporarily limited"), err)
+	case errors.Is(err, goauth.ErrBackupCodeRegenerationRequiresTOTP):
+		// goAuth v0.8: backup codes are issued only right after TOTP setup;
+		// later they are replaced with a current TOTP code.
+		return apperr.WithCause(apperr.New(apperr.CodeConflict, http.StatusConflict, "backup codes must be regenerated with a current TOTP code"), err)
 	case errors.Is(err, goauth.ErrTOTPNotConfigured),
-		errors.Is(err, goauth.ErrBackupCodesNotConfigured),
-		errors.Is(err, goauth.ErrBackupCodeRegenerationRequiresTOTP):
+		errors.Is(err, goauth.ErrBackupCodesNotConfigured):
 		return apperr.WithCause(apperr.New(apperr.CodeConflict, http.StatusConflict, "totp is not enabled for this account"), err)
 	case errors.Is(err, goauth.ErrPasswordResetDisabled),
 		errors.Is(err, goauth.ErrEmailVerificationDisabled),

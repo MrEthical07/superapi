@@ -178,3 +178,83 @@ func TestTOTPAlreadyEnabledResponsesAreIdentical(t *testing.T) {
 		t.Fatalf("pre-check %d/%s/%q != mapped %d/%s/%q", pre.StatusCode, pre.Code, pre.Message, mapped.StatusCode, mapped.Code, mapped.Message)
 	}
 }
+
+// goAuth v0.8 sentinels that a SuperAPI endpoint can return, run through both
+// mappers. Credential endpoints (login, MFA confirm, refresh, password verify)
+// use mapAuthEndpointError; lifecycle endpoints (password change, TOTP, backup
+// codes) use mapFlowError. Sentinels for features SuperAPI does not wire
+// (session profiles, external sign-in, email change) are not listed: no route
+// can return them.
+func TestMapGoAuthV08Sentinels(t *testing.T) {
+	t.Parallel()
+
+	const (
+		msgLimited      = "authentication temporarily limited"
+		msgRejected     = "authentication state rejected"
+		msgNoTOTP       = "totp is not enabled for this account"
+		msgRegenNeedsTP = "backup codes must be regenerated with a current TOTP code"
+	)
+
+	tests := []struct {
+		name       string
+		err        error
+		flowStatus int
+		flowMsg    string
+		credStatus int
+		credMsg    string
+		flowCode   apperr.Code
+		credCode   apperr.Code
+	}{
+		{
+			name: "totp rate limited (mfa confirm, totp confirm/disable)", err: goauth.ErrTOTPRateLimited,
+			flowStatus: http.StatusTooManyRequests, flowMsg: msgLimited, flowCode: apperr.CodeTooManyRequests,
+			credStatus: http.StatusTooManyRequests, credMsg: msgLimited, credCode: apperr.CodeTooManyRequests,
+		},
+		{
+			name: "session limit exceeded (login, mfa confirm)", err: goauth.ErrSessionLimitExceeded,
+			flowStatus: http.StatusTooManyRequests, flowMsg: msgLimited, flowCode: apperr.CodeTooManyRequests,
+			credStatus: http.StatusTooManyRequests, credMsg: msgLimited, credCode: apperr.CodeTooManyRequests,
+		},
+		{
+			name: "password not set (change password, verify password)", err: goauth.ErrPasswordNotSet,
+			flowStatus: http.StatusForbidden, flowMsg: msgRejected, flowCode: apperr.CodeForbidden,
+			credStatus: http.StatusForbidden, credMsg: msgRejected, credCode: apperr.CodeForbidden,
+		},
+		{
+			name: "backup code regeneration requires totp", err: goauth.ErrBackupCodeRegenerationRequiresTOTP,
+			flowStatus: http.StatusConflict, flowMsg: msgRegenNeedsTP, flowCode: apperr.CodeConflict,
+			credStatus: http.StatusForbidden, credMsg: msgRejected, credCode: apperr.CodeForbidden,
+		},
+		{
+			name: "totp not configured (regenerate backup codes)", err: goauth.ErrTOTPNotConfigured,
+			flowStatus: http.StatusConflict, flowMsg: msgNoTOTP, flowCode: apperr.CodeConflict,
+			credStatus: http.StatusForbidden, credMsg: msgRejected, credCode: apperr.CodeForbidden,
+		},
+	}
+
+	check := func(t *testing.T, got error, wantStatus int, wantCode apperr.Code, wantMsg string) {
+		t.Helper()
+		appErr, ok := apperr.AsAppError(got)
+		if !ok {
+			t.Fatalf("expected AppError, got %T", got)
+		}
+		if appErr.StatusCode != wantStatus || appErr.Code != wantCode || appErr.Message != wantMsg {
+			t.Fatalf("got %d/%s/%q want %d/%s/%q", appErr.StatusCode, appErr.Code, appErr.Message, wantStatus, wantCode, wantMsg)
+		}
+		if appErr.Cause == nil {
+			t.Fatalf("expected the goAuth error kept as the cause")
+		}
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name+"/flow", func(t *testing.T) {
+			t.Parallel()
+			check(t, mapFlowError(tc.err), tc.flowStatus, tc.flowCode, tc.flowMsg)
+			check(t, mapFlowError(fmt.Errorf("wrapped: %w", tc.err)), tc.flowStatus, tc.flowCode, tc.flowMsg)
+		})
+		t.Run(tc.name+"/credential", func(t *testing.T) {
+			t.Parallel()
+			check(t, mapAuthEndpointError(tc.err, "invalid credentials"), tc.credStatus, tc.credCode, tc.credMsg)
+		})
+	}
+}
